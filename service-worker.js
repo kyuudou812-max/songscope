@@ -7,11 +7,11 @@ const SHELL = [
   './styles.css',
   './app.js',
   './audio-analysis-worker.js',
-  './lib/zip.js',
+  './zip.js',
   './manifest.json',
-  './icons/icon-180.png',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icon-180.png',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', e => {
