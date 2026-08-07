@@ -1,6 +1,6 @@
 /* SongScope service worker — アプリシェルのみキャッシュする。
  * 録音・解析結果は IndexedDB にあり、ここでは扱わない。外部通信も行わない。 */
-const CACHE = 'songscope-v0.1.0';
+const CACHE = 'songscope-v0.1.1';
 const SHELL = [
   './',
   './index.html',
