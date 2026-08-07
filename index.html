@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#F2F2F7">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="SongScope">
+<meta name="description" content="歌唱録音を観測データへ変換するローカル解析ツール">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+<title>SongScope</title>
+</head>
+<body>
+
+<!-- ============ ホーム ============ -->
+<section id="view-home" class="view is-active">
+  <header class="nav">
+    <div class="nav-side"></div>
+    <h1 class="nav-title">SongScope</h1>
+    <div class="nav-side right"><button id="btn-settings" class="nav-btn" aria-label="設定">設定</button></div>
+  </header>
+
+  <div class="scroll" id="home-scroll">
+    <p class="lead">録音を観測データに変換します。採点はしません。</p>
+
+    <div class="card note">
+      <p><b>音声は端末内で処理されます。</b>録音・解析結果を外部サーバーへ送信することはありません。</p>
+    </div>
+
+    <div class="card note warn" id="storage-note">
+      <p><b>この端末内のデータは長期保存を保証できません。</b>iOSは空き容量不足などで保存領域を削除する場合があります。大切な録音は「ボイスメモ」側に原本を残し、定期的にバックアップを書き出してください。</p>
+      <p class="mono small" id="storage-est"></p>
+      <div class="row gap">
+        <button id="btn-persist" class="mini">永続化を要求</button>
+        <button id="btn-backup-all" class="mini">全データをJSONで書き出す</button>
+      </div>
+    </div>
+
+    <button id="btn-add" class="primary big">＋ 録音を追加</button>
+    <input type="file" id="file-input" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf" hidden>
+
+    <div class="section-head">
+      <span>録音</span>
+      <button id="btn-compare-open" class="link">A/B比較</button>
+    </div>
+    <div id="recording-list" class="list"></div>
+    <p class="footnote">SongScope v<span class="app-ver"></span> ／ Version 0.1 は歌唱力を判定しません。</p>
+  </div>
+</section>
+
+<!-- ============ レビュー ============ -->
+<section id="view-review" class="view">
+  <header class="nav">
+    <div class="nav-side"><button id="btn-back-home" class="nav-btn back">戻る</button></div>
+    <h1 class="nav-title" id="rv-title">録音</h1>
+    <div class="nav-side right"><button id="btn-rec-edit" class="nav-btn">情報</button></div>
+  </header>
+
+  <div class="scroll" id="review-scroll">
+    <div id="rv-meta" class="chips"></div>
+
+    <div class="card note" id="rv-accomp-note">
+      <p>カラオケ伴奏を含む録音では、ピッチ・スペクトル系データに伴奏が混入する可能性があります。表示値は「録音全体の観測値」であり、本人の声だけを表すものではありません。</p>
+    </div>
+
+    <div class="card" id="rv-analysis-state" hidden>
+      <p id="rv-analysis-msg">解析中 0%</p>
+      <div class="bar"><div class="bar-fill" id="rv-progress"></div></div>
+      <button id="btn-reanalyze" class="mini" hidden>再解析する</button>
+    </div>
+
+    <div class="graphs" id="graph-stack">
+      <div class="graph-block">
+        <div class="graph-label">波形 <span class="sub">waveform</span></div>
+        <canvas id="cv-wave" class="graph"></canvas>
+      </div>
+      <div class="graph-block">
+        <div class="graph-label">音量エンベロープ <span class="sub">RMS / peak (dBFS)</span></div>
+        <canvas id="cv-loud" class="graph"></canvas>
+      </div>
+      <div class="graph-block">
+        <div class="graph-label">
+          推定F0 <span class="sub" id="pitch-unit-label">Hz</span>
+          <button id="btn-pitch-unit" class="mini right-top">MIDI表示</button>
+        </div>
+        <canvas id="cv-pitch" class="graph"></canvas>
+        <div class="slider-row">
+          <label for="conf-slider">confidence下限 <span id="conf-val" class="mono">0.55</span></label>
+          <input type="range" id="conf-slider" min="0" max="0.95" step="0.05" value="0.55">
+        </div>
+      </div>
+      <div class="graph-block">
+        <div class="graph-label">
+          スペクトログラム <span class="sub" id="spec-range-label">0–8 kHz</span>
+          <button id="btn-spec-range" class="mini right-top">0–4kHz</button>
+        </div>
+        <canvas id="cv-spec" class="graph"></canvas>
+      </div>
+      <div class="playhead" id="playhead"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-head tight"><span>A-Bループ</span><span class="mono small" id="ab-readout">A: — / B: —</span></div>
+      <div class="row gap wrap">
+        <button id="btn-set-a" class="mini">A地点</button>
+        <button id="btn-set-b" class="mini">B地点</button>
+        <button id="btn-loop-toggle" class="mini">ループ開始</button>
+        <button id="btn-ab-clear" class="mini">解除</button>
+        <button id="btn-ab-save" class="mini accent">区間として保存</button>
+      </div>
+      <div class="row gap wrap nudge">
+        <button class="mini" data-nudge="a,-0.1">A −0.1</button>
+        <button class="mini" data-nudge="a,0.1">A +0.1</button>
+        <button class="mini" data-nudge="b,-0.1">B −0.1</button>
+        <button class="mini" data-nudge="b,0.1">B +0.1</button>
+      </div>
+    </div>
+
+    <div class="section-head"><span>マーカー</span><span class="count" id="marker-count">0</span></div>
+    <div id="marker-list" class="list"></div>
+
+    <div class="section-head"><span>区間レビュー</span><span class="count" id="segment-count">0</span></div>
+    <div id="segment-list" class="list"></div>
+
+    <details class="card details" id="rv-summary-block">
+      <summary>詳細解析（サマリー）</summary>
+      <div id="rv-summary" class="mono small"></div>
+    </details>
+
+    <div class="card">
+      <label class="switch-row">
+        <span>元音声もZIPへ含める<span class="sub2">ファイルが大きくなります</span></span>
+        <input type="checkbox" id="chk-include-audio">
+      </label>
+      <button id="btn-export" class="primary big">ChatGPT用分析データを書き出す</button>
+      <button id="btn-delete-rec" class="danger mini wide">この録音を削除</button>
+    </div>
+    <div class="bottom-space"></div>
+  </div>
+
+  <!-- 固定トランスポート -->
+  <div class="transport">
+    <input type="range" id="seek" class="seek" min="0" max="1000" value="0" step="1">
+    <div class="time-row mono"><span id="t-cur">0:00.0</span><span id="t-tot">0:00.0</span></div>
+    <div class="row transport-btns">
+      <button id="btn-b10" class="tbtn">−10</button>
+      <button id="btn-b5" class="tbtn">−5</button>
+      <button id="btn-play" class="tbtn play">▶</button>
+      <button id="btn-f5" class="tbtn">+5</button>
+      <button id="btn-f10" class="tbtn">+10</button>
+    </div>
+    <div class="row speed-row" id="speed-row">
+      <button class="spd" data-spd="0.75">0.75×</button>
+      <button class="spd is-on" data-spd="1">1.0×</button>
+      <button class="spd" data-spd="1.25">1.25×</button>
+      <button class="spd" data-spd="1.5">1.5×</button>
+    </div>
+    <button id="btn-marker" class="marker-btn">ここにマーカー</button>
+  </div>
+</section>
+
+<!-- ============ 比較 ============ -->
+<section id="view-compare" class="view">
+  <header class="nav">
+    <div class="nav-side"><button id="btn-back-home2" class="nav-btn back">戻る</button></div>
+    <h1 class="nav-title">A/B比較</h1>
+    <div class="nav-side right"></div>
+  </header>
+  <div class="scroll">
+    <div class="card">
+      <label class="field"><span>Recording A</span><select id="sel-a"></select></label>
+      <label class="field"><span>Recording B</span><select id="sel-b"></select></label>
+    </div>
+    <div class="card note">
+      <p>録音距離・マイクゲイン・部屋が違うため、絶対音量の比較は意味を持ちません。既定では正規化して重ねています。開始位置のずれはオフセットで手動調整してください。</p>
+    </div>
+    <div class="card">
+      <div class="row gap">
+        <button id="btn-norm" class="mini is-on">Normalized</button>
+        <button id="btn-raw" class="mini">Raw</button>
+      </div>
+      <div class="graph-label">音量エンベロープ 重ね合わせ</div>
+      <canvas id="cv-cmp-loud" class="graph"></canvas>
+      <div class="graph-label">推定F0 重ね合わせ</div>
+      <canvas id="cv-cmp-pitch" class="graph"></canvas>
+      <div class="slider-row">
+        <label for="offset-slider">Bのオフセット <span id="offset-val" class="mono">+0.0 s</span></label>
+        <input type="range" id="offset-slider" min="-10" max="10" step="0.1" value="0">
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-head tight"><span>共有A-Bループ</span><span class="mono small" id="cmp-ab-readout">A: — / B: —</span></div>
+      <div class="row gap wrap">
+        <button id="cmp-set-a" class="mini">A地点</button>
+        <button id="cmp-set-b" class="mini">B地点</button>
+        <button id="cmp-loop" class="mini">ループ開始</button>
+        <button id="cmp-ab-clear" class="mini">解除</button>
+      </div>
+      <div class="time-row mono"><span id="cmp-time">0:00.0</span><span id="cmp-which">停止中</span></div>
+      <input type="range" id="cmp-seek" class="seek" min="0" max="1000" value="0" step="1">
+      <div class="row transport-btns">
+        <button id="cmp-play-a" class="tbtn wide2">Aを再生</button>
+        <button id="cmp-play-b" class="tbtn wide2">Bを再生</button>
+      </div>
+      <div class="row transport-btns">
+        <button id="cmp-swap" class="tbtn wide2 accent">A⇄B 切替（同じ時刻）</button>
+        <button id="cmp-stop" class="tbtn wide2">停止</button>
+      </div>
+    </div>
+    <div class="bottom-space"></div>
+  </div>
+</section>
+
+<!-- ============ シート類 ============ -->
+<div class="sheet-wrap" id="sheet-wrap" hidden>
+  <div class="sheet-bg" id="sheet-bg"></div>
+
+  <!-- マーカータグ選択 -->
+  <div class="sheet" id="sheet-tag" hidden>
+    <div class="sheet-head"><span id="tag-sheet-title">マーカーのタグ</span><button class="sheet-close" data-close>閉じる</button></div>
+    <p class="sheet-sub mono" id="tag-time">0:00.0</p>
+    <div class="tag-grid" id="tag-grid"></div>
+    <label class="field"><span>メモ（任意）</span><textarea id="tag-memo" rows="2" placeholder="気づいたことを一言"></textarea></label>
+    <button class="primary" id="tag-save">保存</button>
+  </div>
+
+  <!-- 録音情報（追加/編集） -->
+  <div class="sheet" id="sheet-rec" hidden>
+    <div class="sheet-head"><span id="rec-sheet-title">録音を追加</span><button class="sheet-close" data-close>閉じる</button></div>
+    <label class="field"><span>曲名 <b class="req">必須</b></span><input id="f-title" type="text" placeholder="眠り姫"></label>
+    <details class="details">
+      <summary>詳細を追加</summary>
+      <label class="field"><span>歌手名</span><input id="f-artist" type="text"></label>
+      <label class="field"><span>DAM点数</span><input id="f-score" type="text" inputmode="decimal" placeholder="91.384"></label>
+      <label class="field"><span>キー変更</span><input id="f-key" type="text" placeholder="Original / +2 など"></label>
+      <label class="field"><span>オクターブ</span><input id="f-octave" type="text" placeholder="0 / -1 など"></label>
+      <label class="field"><span>機種</span><input id="f-device" type="text" placeholder="LIVE DAM Ai など"></label>
+      <label class="field"><span>採点モード</span><input id="f-mode" type="text" placeholder="精密採点Ai など"></label>
+      <label class="field"><span>録音条件プリセット</span><input id="f-setup" type="text"></label>
+      <label class="field"><span>録音日時</span><input id="f-recat" type="datetime-local"></label>
+      <label class="field"><span>メモ</span><textarea id="f-memo" rows="3"></textarea></label>
+    </details>
+    <button class="primary" id="rec-save">保存</button>
+  </div>
+
+  <!-- 設定 -->
+  <div class="sheet" id="sheet-settings" hidden>
+    <div class="sheet-head"><span>解析設定</span><button class="sheet-close" data-close>閉じる</button></div>
+    <p class="sheet-sub">変更は次回の解析から反映されます。過去の解析結果には、作成時の設定値がそのまま保存されています。</p>
+    <label class="field"><span>frameSizeMs</span><input id="s-frame" type="number" min="10" max="100" step="5"></label>
+    <label class="field"><span>hopSizeMs</span><input id="s-hop" type="number" min="5" max="50" step="5"></label>
+    <label class="field"><span>解析サンプルレート (Hz)</span><input id="s-sr" type="number" min="8000" max="48000" step="1050"></label>
+    <label class="field"><span>F0下限 (Hz)</span><input id="s-f0min" type="number" min="40" max="200" step="5"></label>
+    <label class="field"><span>F0上限 (Hz)</span><input id="s-f0max" type="number" min="400" max="2000" step="50"></label>
+    <label class="field"><span>minimumConfidence</span><input id="s-conf" type="number" min="0" max="0.95" step="0.05"></label>
+    <label class="field"><span>録音条件プリセット（既定値）</span><input id="s-setup" type="text"></label>
+    <button class="primary" id="settings-save">保存</button>
+    <button class="mini" id="settings-reset">初期値に戻す</button>
+  </div>
+
+  <!-- 進捗 -->
+  <div class="sheet" id="sheet-busy" hidden>
+    <div class="sheet-head"><span id="busy-title">処理中</span></div>
+    <p id="busy-msg" class="sheet-sub">お待ちください…</p>
+    <div class="bar"><div class="bar-fill" id="busy-bar"></div></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="lib/zip.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
