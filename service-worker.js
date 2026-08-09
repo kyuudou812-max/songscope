@@ -1,15 +1,16 @@
-/* SongScope service worker — Phase D1-prep.
+/* SongScope service worker — Phase D1 Diagnostic.
  * 録音・解析結果は IndexedDB にあり、ここでは扱わない。外部通信も行わない。
  * 変更頻度の高いアプリ資産は network-first、アイコン等は cache-first。
  */
-const CACHE = 'songscope-v0.2.0-phaseD1prep-20260810-d1prep-01';
-const BUILD_ID = '20260810-d1prep-01';
+const CACHE = 'songscope-v0.2.0-phaseD1diag-20260810-d1diag-01';
+const BUILD_ID = '20260810-d1diag-01';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
   './app.js?v=' + BUILD_ID,
   './audio-analysis-worker.js?v=' + BUILD_ID,
+  './alignment-worker.js?v=' + BUILD_ID,
   './zip.js',
   './manifest.json',
   './icon-180.png',
@@ -31,7 +32,7 @@ self.addEventListener('activate', e => {
 function isMutableRequest(req, url) {
   if (req.mode === 'navigate') return true;
   const p = url.pathname;
-  return p.endsWith('/index.html') || p.endsWith('/app.js') || p.endsWith('/audio-analysis-worker.js') ||
+  return p.endsWith('/index.html') || p.endsWith('/app.js') || p.endsWith('/audio-analysis-worker.js') || p.endsWith('/alignment-worker.js') ||
     p.endsWith('/styles.css') || p.endsWith('/manifest.json') || p.endsWith('/service-worker.js');
 }
 

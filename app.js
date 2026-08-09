@@ -8,10 +8,12 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseD1prep';
-const SCHEMA_VERSION = '0.3.1';
-const BUILD_ID = '20260810-d1prep-01';
+const APP_VERSION = '0.2.0-phaseD1diag';
+const SCHEMA_VERSION = '0.4.0';
+const BUILD_ID = '20260810-d1diag-01';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
+const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
+const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v1';
 
 const TAGS = ['高音', '低音', 'リズム', '歌詞', '譜割り', '息', '力み', '音程',
   '語尾', '発音', '表現', '違和感', '良かった', '好き', 'その他'];
@@ -174,7 +176,7 @@ function setFlag(key, val) {
 
 /* ---------------- IndexedDB ---------------- */
 const DB_NAME = 'songscope';
-const DB_VER = 3;
+const DB_VER = 4;
 let dbp = null;
 
 function db() {
@@ -204,6 +206,14 @@ function db() {
       }
       if (!d.objectStoreNames.contains('segments')) {
         d.createObjectStore('segments', { keyPath: 'segmentId' }).createIndex('byRec', 'recordingId', { unique: false });
+      }
+      if (!d.objectStoreNames.contains('alignmentFeatures')) {
+        const af = d.createObjectStore('alignmentFeatures', { keyPath: 'featureKey' });
+        af.createIndex('byAudioSha256', 'audioSha256', { unique: false });
+      }
+      if (!d.objectStoreNames.contains('alignmentDiagnostics')) {
+        const ad = d.createObjectStore('alignmentDiagnostics', { keyPath: 'diagnosticId' });
+        ad.createIndex('byPairKey', 'pairKey', { unique: false });
       }
     };
     req.onsuccess = () => res(req.result);
@@ -772,6 +782,10 @@ async function startAnalysis(rec, fileMaybe) {
     await dbPut('recordings', rec);
 
     if (state.rec && state.rec.recordingId === rec.recordingId) {
+      // openRecording() may have loaded a different object instance than the rec
+      // passed to startAnalysis(). Refresh state.rec so export/UI uses the
+      // newly persisted latestAnalysisId and analysisCount immediately.
+      state.rec = rec;
       state.analysis = record;
       state.confMin = cfg.minimumConfidence;
       $('#conf-slider').value = String(cfg.minimumConfidence);
@@ -2032,11 +2046,16 @@ async function doExport() {
     $('#busy-msg').textContent = 'データファイルを作成しています…';
     await new Promise(r => setTimeout(r, 10));
 
-    files.push({ name: 'report.md', data: buildReportMd(an) });
-    files.push({ name: 'summary.json', data: JSON.stringify(buildSummaryJson(an), null, 2) });
+    // analysisHistory を先に取得し、export直前にもrecording側の最新情報を同期する。
+    // これにより、同一音源の再取込→即exportでも stale な latestAnalysisId / analysisCount を出さない。
     let analysisHistory = [];
     try { analysisHistory = (await dbByRec('analysisHistory', rec.recordingId)).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || ''))); }
     catch (e) { }
+    if (an && an.analysisId) rec.latestAnalysisId = an.analysisId;
+    if (analysisHistory.length) rec.analysisCount = analysisHistory.length;
+
+    files.push({ name: 'report.md', data: buildReportMd(an) });
+    files.push({ name: 'summary.json', data: JSON.stringify(buildSummaryJson(an), null, 2) });
     files.push({ name: 'analysis_history.json', data: JSON.stringify({
       schemaVersion: SCHEMA_VERSION,
       recordingId: rec.recordingId,
@@ -2100,7 +2119,8 @@ async function backupAll() {
         } : null
       });
     }
-    out.note = 'analysisHistoryは各解析runのcompact provenanceです。frames等のフレーム単位データは最新analysis以外バックアップに含めません。原本音声を保持していれば再解析できます。';
+    try { out.alignmentDiagnostics = await dbAll('alignmentDiagnostics'); } catch (e) { out.alignmentDiagnostics = []; }
+    out.note = 'analysisHistoryは各解析runのcompact provenanceです。D1 DiagnosticのalignmentDiagnosticsは候補証拠であり、自動適用済みalignmentではありません。frames等のフレーム単位データは最新analysis以外バックアップに含めません。原本音声を保持していれば再解析できます。';
     closeSheet();
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
     await saveBlob(blob, `songscope_backup_${new Date().toISOString().slice(0, 10)}.json`);
@@ -2123,7 +2143,9 @@ const cmp = {
   loop: { a: null, b: null, on: false }, // reference(A) time axis: start/end
   playing: null,               // 'a' | 'b' | null
   lastTime: 0,                 // reference(A) time
-  rafId: 0
+  rafId: 0,
+  alignmentBusy: false,
+  lastAlignmentDiagnostic: null
 };
 
 function cmpSideDuration(side) {
@@ -2150,6 +2172,9 @@ function cmpResetMapping() {
   cmp.loop = { a: null, b: null, on: false };
   cmp.lastTime = 0;
   cmp.playing = null;
+  cmp.lastAlignmentDiagnostic = null;
+  const ar = $('#cmp-align-result'); if (ar) ar.innerHTML = '<p class="small">まだ診断していません。</p>';
+  const ex = $('#btn-align-export'); if (ex) ex.hidden = true;
   const slider = $('#offset-slider');
   if (slider) slider.value = '0';
 }
@@ -2178,6 +2203,8 @@ function updateCmpIdentityUi() {
   for (const id of ids) { const e = $(id); if (e) e.disabled = !!check.blocked; }
   const off = $('#offset-slider');
   if (off) off.disabled = !!check.blocked;
+  const on = $('#offset-number'); if (on) on.disabled = !!check.blocked;
+  const dg = $('#btn-align-diagnose'); if (dg) dg.disabled = !!check.blocked || !check.autoAlignmentEligible || cmp.alignmentBusy;
   return check;
 }
 function updateCmpOffsetSliderRange() {
@@ -2191,6 +2218,8 @@ function updateCmpOffsetSliderRange() {
   slider.max = String(Math.ceil(max * 10) / 10);
   if (cmp.offset < min || cmp.offset > max) cmp.offset = clamp(cmp.offset, min, max);
   slider.value = String(cmp.offset);
+  const number = $('#offset-number');
+  if (number) { number.min = slider.min; number.max = slider.max; number.value = cmp.offset.toFixed(1); }
 }
 
 async function openCompare() {
@@ -2229,6 +2258,130 @@ async function loadCmpSide(side, id) {
   }
   cmp[side] = { rec, an, audio, url };
   drawCompare();
+}
+
+function alignmentFeatureKey(audioSha256) {
+  return audioSha256 ? `${audioSha256}:${ALIGN_FEATURE_VERSION}` : null;
+}
+function alignmentPairKey(hashA, hashB) {
+  if (!hashA || !hashB) return null;
+  const pair = [hashA, hashB].sort();
+  return `${pair[0]}:${pair[1]}:${ALIGN_FEATURE_VERSION}:${ALIGN_MATCH_VERSION}`;
+}
+function runAlignmentWorker(message, transfer, onProgress) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker('alignment-worker.js?v=' + encodeURIComponent(BUILD_ID)); }
+    catch (e) { reject(new Error('alignment workerを起動できません')); return; }
+    w.onmessage = ev => {
+      const m = ev.data || {};
+      if (m.type === 'progress') { if (onProgress) onProgress(m); }
+      else if (m.type === 'feature') { w.terminate(); resolve(m.feature); }
+      else if (m.type === 'done') { w.terminate(); resolve(m.result); }
+      else if (m.type === 'error') { w.terminate(); reject(new Error(m.message || 'alignment worker error')); }
+    };
+    w.onerror = () => { try { w.terminate(); } catch (e) { } reject(new Error('alignment処理中にエラーが発生しました')); };
+    w.postMessage(message, transfer || []);
+  });
+}
+async function getAlignmentFeature(side, progressLabel) {
+  const d = cmp[side];
+  if (!d || !d.rec) throw new Error('録音が選択されていません');
+  let hash = d.rec.audioSha256 || (d.an && d.an.audioSha256) || null;
+  const au = await dbGet('audio', d.rec.recordingId).catch(() => null);
+  if (!au || !au.blob) throw new Error((side === 'a' ? 'A' : 'B') + 'の原音が端末内にありません');
+  if (!hash) {
+    const hab = await au.blob.arrayBuffer();
+    hash = await sha256Hex(hab);
+    d.rec.audioSha256 = hash;
+    d.rec.audioHashAlgorithm = 'SHA-256';
+    await dbPut('recordings', d.rec).catch(() => { });
+  }
+  const key = alignmentFeatureKey(hash);
+  const cached = key ? await dbGet('alignmentFeatures', key).catch(() => null) : null;
+  if (cached && cached.featureAlgorithmVersion === ALIGN_FEATURE_VERSION && cached.chroma && cached.valid) return cached;
+
+  const ab = await au.blob.arrayBuffer();
+  const audioBuffer = await decodeAudio(ab);
+  const mono = downmixMono(audioBuffer);
+  const srcRate = audioBuffer.sampleRate;
+  const feature = await runAlignmentWorker({ type: 'extract', pcm: mono, sampleRate: srcRate, config: {} }, [mono.buffer], m => {
+    const pct = Math.max(1, Math.min(99, Number(m.pct || 0)));
+    const el = $('#cmp-align-result'); if (el) el.innerHTML = `<p class="small">${escapeHtml(progressLabel)} 特徴抽出中… ${pct}%</p>`;
+  });
+  feature.featureKey = key;
+  feature.audioSha256 = hash;
+  feature.recordingId = d.rec.recordingId;
+  feature.createdAt = nowIso();
+  await dbPut('alignmentFeatures', feature);
+  return feature;
+}
+function alignmentCandidateHtml(c) {
+  if (!c) return '';
+  const sign = c.offsetSec >= 0 ? '+' : '';
+  const rot = c.chromaRotationSemitones >= 0 ? '+' + c.chromaRotationSemitones : String(c.chromaRotationSemitones);
+  return `<div class="small mono">#${c.rank} offset ${sign}${c.offsetSec.toFixed(1)} s / chroma回転 ${rot} st / similarity ${c.meanSimilarity.toFixed(3)} / overlap ${c.overlapSec.toFixed(1)} s / target ${(c.targetCoverageRatio*100).toFixed(1)}%</div>`;
+}
+function renderAlignmentDiagnostic(diag) {
+  const el = $('#cmp-align-result'); if (!el) return;
+  const candidates = (diag && diag.candidates) || [];
+  if (!candidates.length) { el.innerHTML = '<p class="small">有効な候補を作れませんでした。診断は unresolved 相当です。</p>'; return; }
+  const rev = diag.reverseCheck;
+  const drift = diag.driftProbe;
+  let html = '<p><b>診断候補（自動適用しません）</b></p>' + candidates.map(alignmentCandidateHtml).join('');
+  if (rev) html += `<p class="small mono">逆向き検査: offset ${rev.bestOffsetSec >= 0 ? '+' : ''}${rev.bestOffsetSec.toFixed(1)} s / 往復残差 ${rev.inverseOffsetResidualSec === null ? '—' : rev.inverseOffsetResidualSec.toFixed(1)+' s'}</p>`;
+  if (drift && drift.segments && drift.segments.length) html += `<p class="small mono">drift probe: ${drift.segments.map(x => `${x.label} ${x.offsetSec >= 0 ? '+' : ''}${x.offsetSec.toFixed(1)}s`).join(' / ')} / range ${drift.offsetRangeSec === null ? '—' : drift.offsetRangeSec.toFixed(1)+'s'}</p>`;
+  html += '<p class="small">similarityは確率ではありません。候補間の差・重なり時間・往復整合性を含めて確認してください。</p>';
+  el.innerHTML = html;
+}
+async function diagnoseAlignment() {
+  if (cmp.alignmentBusy) return;
+  const check = cmpIdentityCheck();
+  if (!check.autoAlignmentEligible) { toast(check.message); return; }
+  if (!cmp.a || !cmp.b) { toast('AとBを選択してください'); return; }
+  cmp.alignmentBusy = true;
+  const btn = $('#btn-align-diagnose'); if (btn) btn.disabled = true;
+  const ex = $('#btn-align-export'); if (ex) ex.hidden = true;
+  try {
+    const fa = await getAlignmentFeature('a', 'A');
+    const fb = await getAlignmentFeature('b', 'B');
+    const el = $('#cmp-align-result'); if (el) el.innerHTML = '<p class="small">global offset候補を探索中…</p>';
+    const diagCore = await runAlignmentWorker({ type: 'match', reference: fa, target: fb, config: {} }, [], m => {
+      const pct = Math.max(1, Math.min(99, Number(m.pct || 0)));
+      const e = $('#cmp-align-result'); if (e) e.innerHTML = `<p class="small">global offset候補を探索中… ${pct}%</p>`;
+    });
+    const diag = Object.assign({}, diagCore, {
+      diagnosticId: uid('aldiag'),
+      pairKey: alignmentPairKey(fa.audioSha256, fb.audioSha256),
+      createdAt: nowIso(),
+      appVersion: APP_VERSION,
+      buildId: BUILD_ID,
+      reference: { recordingId: cmp.a.rec.recordingId, audioSha256: fa.audioSha256, title: cmp.a.rec.title || '' },
+      target: { recordingId: cmp.b.rec.recordingId, audioSha256: fb.audioSha256, title: cmp.b.rec.title || '' },
+      featureSummary: {
+        reference: { frameCount: fa.frameCount, hopSec: fa.hopSec, durationSec: fa.durationSec },
+        target: { frameCount: fb.frameCount, hopSec: fb.hopSec, durationSec: fb.durationSec }
+      }
+    });
+    cmp.lastAlignmentDiagnostic = diag;
+    await dbPut('alignmentDiagnostics', diag).catch(() => { });
+    renderAlignmentDiagnostic(diag);
+    if (ex) ex.hidden = false;
+    toast('位置合わせ診断が完了しました');
+  } catch (e) {
+    const el = $('#cmp-align-result'); if (el) el.innerHTML = `<p class="small">診断に失敗しました: ${escapeHtml((e && e.message) || String(e))}</p>`;
+    toast('位置合わせ診断に失敗しました');
+  } finally {
+    cmp.alignmentBusy = false;
+    updateCmpIdentityUi();
+  }
+}
+async function exportAlignmentDiagnostic() {
+  const d = cmp.lastAlignmentDiagnostic;
+  if (!d) { toast('先に位置合わせを診断してください'); return; }
+  const a = safeName((d.reference && d.reference.title) || 'A');
+  const b = safeName((d.target && d.target.title) || 'B');
+  await saveBlob(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }), `songscope_alignment_${a}_vs_${b}_${new Date().toISOString().replace(/[-:]/g,'').slice(0,15)}.json`);
 }
 
 function cmpDuration() {
@@ -2577,7 +2730,10 @@ function wireCompare() {
     $('#btn-raw').classList.add('is-on'); $('#btn-norm').classList.remove('is-on');
     drawCompare();
   });
-  $('#offset-slider').addEventListener('input', e => { cmp.offset = parseFloat(e.target.value); drawCompare(); });
+  $('#offset-slider').addEventListener('input', e => { cmp.offset = parseFloat(e.target.value); const n=$('#offset-number'); if(n)n.value=cmp.offset.toFixed(1); drawCompare(); });
+  $('#offset-number').addEventListener('change', e => { const sl=$('#offset-slider'); const v=clamp(parseFloat(e.target.value)||0,parseFloat(sl.min),parseFloat(sl.max)); cmp.offset=Math.round(v*10)/10; sl.value=String(cmp.offset); e.target.value=cmp.offset.toFixed(1); drawCompare(); });
+  $('#btn-align-diagnose').addEventListener('click', diagnoseAlignment);
+  $('#btn-align-export').addEventListener('click', exportAlignmentDiagnostic);
   $('#cmp-play-a').addEventListener('click', () => cmpPlay('a'));
   $('#cmp-play-b').addEventListener('click', () => cmpPlay('b'));
   $('#cmp-stop').addEventListener('click', cmpStop);

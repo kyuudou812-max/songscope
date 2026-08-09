@@ -19,7 +19,7 @@
   を追加します。
 - `yin_selection_divisor` は `1=変更なし`, `2=tau/2`, `3=tau/3` を表します。
 - `usable_vocal_f0_hz` は互換のため残していますが、本人声のみを保証する値ではありません。
-- Build ID: `20260810-d1prep-01`
+- Build ID: `20260810-d1prep-02`
 
 ---
 
@@ -288,6 +288,7 @@ jitter / shimmer / HNR / CPP / フォルマント / MFCC は実装していま�
 | `styles.css` | 見た目。ダークモードは自動で切り替わります |
 | `app.js` | UI・保存(IndexedDB)・グラフ描画・書き出し |
 | `audio-analysis-worker.js` | 音響解析の本体。別スレッドで動くので画面が固まりません |
+| `alignment-worker.js` | D1 Diagnostic用。chroma特徴抽出とglobal offset候補探索。歌唱観測workerとは分離 |
 | `zip.js` | ZIP生成（無圧縮）。自作・ローカル同梱・通信なし |
 | `manifest.json` | ホーム画面に追加したときの名前やアイコン |
 | `service-worker.js` | オフライン起動用のキャッシュ（アプリ本体のみ。録音は扱いません） |
@@ -370,3 +371,17 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - `songId` is persistent once assigned; editing title/artist does not silently change it.
 - `songIdentityKey` is the NFKC-normalized title/artist matching key and may change when metadata is corrected.
 - A new recording with the same `songIdentityKey` reuses the existing `songId` when available.
+
+### build 02 fix
+- 同一音源の再解析直後でも、画面・ZIPが最新の `latestAnalysisId` と `analysisCount` を参照するよう、解析完了時に `state.rec` を永続化済みrecordingへ同期します。
+- 音響解析アルゴリズム、identity判定、時間座標定義は変更していません。
+
+
+### D1 Diagnostic build 01
+- `alignment-worker.js` を新設。`audio-analysis-worker.js` は変更しません。
+- Aをreference、Bをtargetとし、時間規約は `A time = B time + offsetSec` です。
+- 混合カラオケ音声から STFT pitch-class chroma（log圧縮、L2正規化、時間平滑化）を作り、12通りのchroma回転とglobal offsetをcoarse→refineで探索します。
+- 出力は上位5候補、overlap/coverage、block similarity、逆向き検査、early/middle/late drift probe。similarityは確率ではありません。
+- 診断結果は自動でoffsetへ適用しません。比較画面の数値入力で人間が候補を手動確認できます。
+- `alignmentFeatures` は `audioSha256 + featureAlgorithmVersion` でIndexedDBにキャッシュします。
+- `alignmentDiagnostics` は診断履歴として保存し、単独JSONで書き出せます。これは正式alignmentではありません。
