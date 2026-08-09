@@ -1,4 +1,4 @@
-# SongScope v0.2 Phase D1
+# SongScope v0.2 Phase D2 Diagnostic
 
 ### D1 build 02 — IndexedDB upgrade待機の修正
 - Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
@@ -18,8 +18,19 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.5.0`
-- Build ID: `20260810-d1-02`
+- Schema Version: `0.6.0`
+- Build ID: `20260810-d2diag-01`
+
+## Phase D2 Diagnostic
+
+- D1のresolved mappingを使い、Recording A基準の10秒窓 / 5秒hopで同一曲位置の観測値を並べる診断段階です。
+- 書き出しは `comparison_summary.json` と `comparison_windows.csv` の2ファイルを含むZIPです。
+- 初期指標は `rms_relative_db` のp10/p50/p90、`f0_candidate_hz` のp10/p50/p90、F0 candidate量、ambiguity量です。
+- ambiguity flagを理由にF0候補を訂正・削除しません。`ambiguity=none`も正しさの保証として扱いません。
+- `rms_relative_db` は各録音内で正規化された観測値で、録音間の絶対音量差とは解釈しません。
+- D2 Diagnosticは改善/悪化を判定しません。観測・証拠量・ユーザー報告marker/segmentをreference時間へ揃えて保存します。
+- IndexedDB schemaはD1 build02と同じDB_VER=5のままです。D2 DiagnosticのためのDB upgradeは行いません。
+
 
 ---
 

@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase D1  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase D2 Diagnostic  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseD1';
-const SCHEMA_VERSION = '0.5.1';
-const BUILD_ID = '20260810-d1-02';
+const APP_VERSION = '0.2.0-phaseD2diag';
+const SCHEMA_VERSION = '0.6.0';
+const BUILD_ID = '20260810-d2diag-01';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -2593,6 +2593,317 @@ async function exportAlignmentDiagnostic() {
   await saveBlob(new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }), `songscope_alignment_${a}_vs_${b}_${new Date().toISOString().replace(/[-:]/g,'').slice(0,15)}.json`);
 }
 
+async function getResolvedAlignmentForCurrentPair() {
+  if (!cmp.a || !cmp.b || !cmp.a.rec || !cmp.b.rec) throw new Error('AとBを選択してください');
+  const aHash = cmp.a.rec.audioSha256 || (cmp.a.an && cmp.a.an.audioSha256) || null;
+  const bHash = cmp.b.rec.audioSha256 || (cmp.b.an && cmp.b.an.audioSha256) || null;
+  if (!aHash || !bHash) throw new Error('A/BのaudioSha256が不足しています');
+  const key = alignmentPairKey(aHash, bHash);
+  const result = await dbGet('alignmentResults', key).catch(() => null);
+  if (!result || result.status !== 'resolved' || !result.canonical) {
+    throw new Error('このA/Bには保存済みのresolved D1位置合わせがありません。先に「位置合わせを判定」を実行してください');
+  }
+  const c = result.canonical;
+  const canonicalOffset = Number(c.canonicalOffsetHighFromLowSec);
+  if (!isFinite(canonicalOffset)) throw new Error('保存済みD1のoffsetが不正です');
+  let offsetSec;
+  if (aHash === c.highAudioSha256 && bHash === c.lowAudioSha256) offsetSec = canonicalOffset;
+  else if (aHash === c.lowAudioSha256 && bHash === c.highAudioSha256) offsetSec = -canonicalOffset;
+  else throw new Error('保存済みD1の音声pairと現在のA/Bが一致しません');
+  return { result, offsetSec: +offsetSec.toFixed(3), aHash, bHash };
+}
+
+function finiteQuantile(values, p) {
+  const a = values.filter(v => isFinite(v)).sort((x, y) => x - y);
+  if (!a.length) return null;
+  if (a.length === 1) return +a[0].toFixed(6);
+  const pos = (a.length - 1) * p;
+  const lo = Math.floor(pos), hi = Math.ceil(pos), f = pos - lo;
+  const v = lo === hi ? a[lo] : a[lo] * (1 - f) + a[hi] * f;
+  return +v.toFixed(6);
+}
+function d2FrameHopSec(an) {
+  const configured = an && an.settings && Number(an.settings.hopSizeMs);
+  if (isFinite(configured) && configured > 0) return configured / 1000;
+  const t = an && an.frames && an.frames.timeSec;
+  if (t && t.length > 1) {
+    const diffs = [];
+    for (let i = 1; i < Math.min(t.length, 101); i++) {
+      const d = Number(t[i]) - Number(t[i - 1]);
+      if (isFinite(d) && d > 0) diffs.push(d);
+    }
+    const q = finiteQuantile(diffs, 0.5);
+    if (isFinite(q) && q > 0) return q;
+  }
+  return 0.02;
+}
+function d2AnalysisDurationSec(side) {
+  const d = cmp[side];
+  if (!d) return 0;
+  const recDur = d.rec && Number(d.rec.durationSec);
+  if (isFinite(recDur) && recDur > 0) return recDur;
+  const F = d.an && d.an.frames;
+  const hop = d2FrameHopSec(d.an);
+  if (F && F.timeSec && F.timeSec.length) return Math.max(0, Number(F.timeSec[F.timeSec.length - 1]) + hop);
+  return cmpSideDuration(side);
+}
+function d2SideWindowStats(side, referenceStartSec, referenceEndSec, offsetSec) {
+  const d = cmp[side];
+  if (!d || !d.an || !d.an.frames) return null;
+  const F = d.an.frames;
+  const hop = d2FrameHopSec(d.an);
+  const dur = d2AnalysisDurationSec(side);
+  const localStart = side === 'b' ? referenceStartSec - offsetSec : referenceStartSec;
+  const localEnd = side === 'b' ? referenceEndSec - offsetSec : referenceEndSec;
+  const clippedStart = Math.max(0, localStart);
+  const clippedEnd = Math.min(dur, localEnd);
+  const availableDurationSec = Math.max(0, clippedEnd - clippedStart);
+  const windowDurationSec = Math.max(0, referenceEndSec - referenceStartSec);
+  const rmsRel = [], f0Candidate = [], f0ConfCandidate = [];
+  let frameCount = 0, candidateFrameCount = 0, ambiguityFrameCount = 0, cautionFrameCount = 0, strongFrameCount = 0;
+  if (availableDurationSec > 0) {
+    const n = F.timeSec.length;
+    for (let i = 0; i < n; i++) {
+      const t = Number(F.timeSec[i]);
+      if (t < clippedStart) continue;
+      if (t >= clippedEnd) break;
+      frameCount++;
+      const r = Number(F.rmsRelDb && F.rmsRelDb[i]);
+      if (isFinite(r)) rmsRel.push(r);
+      const hz = Number(F.f0CandidateHz && F.f0CandidateHz[i]);
+      if (isFinite(hz)) {
+        candidateFrameCount++;
+        f0Candidate.push(hz);
+        const conf = Number(F.f0Conf && F.f0Conf[i]);
+        if (isFinite(conf)) f0ConfCandidate.push(conf);
+        const amb = Number(F.f0AmbiguityLevel && F.f0AmbiguityLevel[i]) || 0;
+        if (amb > 0) ambiguityFrameCount++;
+        if (amb === 1) cautionFrameCount++;
+        if (amb >= 2) strongFrameCount++;
+      }
+    }
+  }
+  const r = (v, d = 6) => isFinite(v) ? +Number(v).toFixed(d) : null;
+  return {
+    localStartSec: r(localStart, 3),
+    localEndSec: r(localEnd, 3),
+    availableDurationSec: r(availableDurationSec, 3),
+    coverageRatio: windowDurationSec > 0 ? r(availableDurationSec / windowDurationSec, 6) : null,
+    frameHopSec: r(hop, 6),
+    frameCount,
+    f0CandidateEvidence: {
+      candidateFrameCount,
+      candidateDurationSec: r(candidateFrameCount * hop, 3),
+      candidateRatioAmongAvailableFrames: frameCount ? r(candidateFrameCount / frameCount, 6) : null,
+      ambiguityFrameCount,
+      ambiguityDurationSec: r(ambiguityFrameCount * hop, 3),
+      ambiguityRatioAmongCandidates: candidateFrameCount ? r(ambiguityFrameCount / candidateFrameCount, 6) : null,
+      cautionFrameCount,
+      strongFrameCount,
+      strongAmbiguityRatioAmongCandidates: candidateFrameCount ? r(strongFrameCount / candidateFrameCount, 6) : null
+    },
+    observations: {
+      rmsRelativeDb: {
+        p10: finiteQuantile(rmsRel, 0.10),
+        p50: finiteQuantile(rmsRel, 0.50),
+        p90: finiteQuantile(rmsRel, 0.90)
+      },
+      f0CandidateHz: {
+        p10: finiteQuantile(f0Candidate, 0.10),
+        p50: finiteQuantile(f0Candidate, 0.50),
+        p90: finiteQuantile(f0Candidate, 0.90),
+        confidenceP50: finiteQuantile(f0ConfCandidate, 0.50)
+      }
+    }
+  };
+}
+function d2RecordingDescriptor(side) {
+  const d = cmp[side] || {}, rec = d.rec || {}, an = d.an || {};
+  return {
+    role: side === 'a' ? 'reference_A' : 'target_B',
+    recordingId: rec.recordingId || null,
+    audioSha256: rec.audioSha256 || an.audioSha256 || null,
+    songId: rec.songId || null,
+    songIdentityKey: rec.songIdentityKey || null,
+    title: rec.title || '',
+    artist: rec.artist || '',
+    recordedAt: rec.recordedAt || rec.createdAt || null,
+    durationSec: d2AnalysisDurationSec(side),
+    analysisId: an.analysisId || rec.latestAnalysisId || null,
+    analysisSchemaVersion: an.schemaVersion || null,
+    analysisAppVersion: an.appVersion || null,
+    analysisBuildId: an.buildId || null,
+    userMetadata: {
+      damScore: rec.damScore || null,
+      keyChange: rec.keyChange || null,
+      octave: rec.octave || null,
+      device: rec.device || null,
+      scoringMode: rec.scoringMode || null,
+      recordingSetupPreset: rec.recordingSetupPreset || null,
+      source: 'recording_metadata'
+    }
+  };
+}
+function d2MapMarkers(rows, side, offsetSec) {
+  return (rows || []).map(m => ({
+    markerId: m.markerId || null,
+    localTimeSec: isFinite(Number(m.timeSec)) ? +Number(m.timeSec).toFixed(3) : null,
+    referenceTimeSec: isFinite(Number(m.timeSec)) ? +(side === 'b' ? Number(m.timeSec) + offsetSec : Number(m.timeSec)).toFixed(3) : null,
+    tag: m.tag || '', memo: m.memo || '', createdAt: m.createdAt || null,
+    evidenceType: 'user_reported_marker'
+  }));
+}
+function d2MapUserSegments(rows, side, offsetSec) {
+  return (rows || []).map(x => ({
+    segmentId: x.segmentId || null,
+    localStartSec: isFinite(Number(x.startSec)) ? +Number(x.startSec).toFixed(3) : null,
+    localEndSec: isFinite(Number(x.endSec)) ? +Number(x.endSec).toFixed(3) : null,
+    referenceStartSec: isFinite(Number(x.startSec)) ? +(side === 'b' ? Number(x.startSec) + offsetSec : Number(x.startSec)).toFixed(3) : null,
+    referenceEndSec: isFinite(Number(x.endSec)) ? +(side === 'b' ? Number(x.endSec) + offsetSec : Number(x.endSec)).toFixed(3) : null,
+    tag: x.tag || '', memo: x.memo || '', createdAt: x.createdAt || null,
+    evidenceType: 'user_reported_segment'
+  }));
+}
+function d2WindowsCsv(pkg) {
+  const head = [
+    'window_index','reference_start_sec','reference_end_sec','pair_available_duration_sec','pair_coverage_ratio',
+    'a_local_start_sec','a_local_end_sec','a_available_duration_sec','a_coverage_ratio','a_frame_count','a_f0_candidate_frames','a_f0_candidate_ratio','a_f0_ambiguity_frames','a_f0_ambiguity_ratio','a_f0_strong_ambiguity_ratio','a_rms_rel_p10','a_rms_rel_p50','a_rms_rel_p90','a_f0_candidate_p10_hz','a_f0_candidate_p50_hz','a_f0_candidate_p90_hz','a_f0_confidence_p50',
+    'b_local_start_sec','b_local_end_sec','b_available_duration_sec','b_coverage_ratio','b_frame_count','b_f0_candidate_frames','b_f0_candidate_ratio','b_f0_ambiguity_frames','b_f0_ambiguity_ratio','b_f0_strong_ambiguity_ratio','b_rms_rel_p10','b_rms_rel_p50','b_rms_rel_p90','b_f0_candidate_p10_hz','b_f0_candidate_p50_hz','b_f0_candidate_p90_hz','b_f0_confidence_p50'
+  ];
+  const rows = [head.join(',')];
+  const val = v => (v === null || v === undefined || !isFinite(v)) ? '' : String(v);
+  for (const w of pkg.windows || []) {
+    const a=w.a, b=w.b, ae=a.f0CandidateEvidence, be=b.f0CandidateEvidence, ao=a.observations, bo=b.observations;
+    rows.push([
+      w.windowIndex,w.referenceStartSec,w.referenceEndSec,w.pairAvailableDurationSec,w.pairCoverageRatio,
+      a.localStartSec,a.localEndSec,a.availableDurationSec,a.coverageRatio,a.frameCount,ae.candidateFrameCount,ae.candidateRatioAmongAvailableFrames,ae.ambiguityFrameCount,ae.ambiguityRatioAmongCandidates,ae.strongAmbiguityRatioAmongCandidates,ao.rmsRelativeDb.p10,ao.rmsRelativeDb.p50,ao.rmsRelativeDb.p90,ao.f0CandidateHz.p10,ao.f0CandidateHz.p50,ao.f0CandidateHz.p90,ao.f0CandidateHz.confidenceP50,
+      b.localStartSec,b.localEndSec,b.availableDurationSec,b.coverageRatio,b.frameCount,be.candidateFrameCount,be.candidateRatioAmongAvailableFrames,be.ambiguityFrameCount,be.ambiguityRatioAmongCandidates,be.strongAmbiguityRatioAmongCandidates,bo.rmsRelativeDb.p10,bo.rmsRelativeDb.p50,bo.rmsRelativeDb.p90,bo.f0CandidateHz.p10,bo.f0CandidateHz.p50,bo.f0CandidateHz.p90,bo.f0CandidateHz.confidenceP50
+    ].map(val).join(','));
+  }
+  return rows.join('\n') + '\n';
+}
+async function buildD2DiagnosticPackage() {
+  if (!cmp.a || !cmp.b || !cmp.a.an || !cmp.b.an) throw new Error('A/B両方の解析結果が必要です');
+  const check = cmpIdentityCheck();
+  if (check.blocked) throw new Error(check.message);
+  const resolved = await getResolvedAlignmentForCurrentPair();
+  const offsetSec = resolved.offsetSec;
+  const windowSec = 10, hopSec = 5, referenceAnchorSec = 0;
+  const durA = d2AnalysisDurationSec('a'), durB = d2AnalysisDurationSec('b');
+  if (!(durA > 0) || !(durB > 0)) throw new Error('録音時間を取得できません');
+  const overlapStartSec = Math.max(0, offsetSec);
+  const overlapEndSec = Math.min(durA, durB + offsetSec);
+  const overlapDurationSec = Math.max(0, overlapEndSec - overlapStartSec);
+  const windows = [];
+  let idx = 0;
+  for (let start = referenceAnchorSec; start + windowSec <= durA + 1e-6; start += hopSec) {
+    const end = start + windowSec;
+    const a = d2SideWindowStats('a', start, end, offsetSec);
+    const b = d2SideWindowStats('b', start, end, offsetSec);
+    const pairStart = Math.max(start, 0, offsetSec);
+    const pairEnd = Math.min(end, durA, durB + offsetSec);
+    const pairAvailable = Math.max(0, pairEnd - pairStart);
+    windows.push({
+      windowIndex: idx++,
+      referenceStartSec: +start.toFixed(3),
+      referenceEndSec: +end.toFixed(3),
+      pairAvailableDurationSec: +pairAvailable.toFixed(3),
+      pairCoverageRatio: +(pairAvailable / windowSec).toFixed(6),
+      a, b
+    });
+  }
+  const markersA = await dbByRec('markers', cmp.a.rec.recordingId).catch(() => []);
+  const markersB = await dbByRec('markers', cmp.b.rec.recordingId).catch(() => []);
+  const segmentsA = await dbByRec('segments', cmp.a.rec.recordingId).catch(() => []);
+  const segmentsB = await dbByRec('segments', cmp.b.rec.recordingId).catch(() => []);
+  const fullPair = windows.filter(w => w.pairCoverageRatio >= 0.999).length;
+  const partialPair = windows.filter(w => w.pairCoverageRatio > 0 && w.pairCoverageRatio < 0.999).length;
+  const zeroPair = windows.filter(w => w.pairCoverageRatio === 0).length;
+  const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
+  return {
+    schemaVersion: 'songscope-d2diag-0.1.0',
+    packageType: 'pairwise_observation_comparison',
+    status: 'diagnostic_only',
+    generatedAt: nowIso(),
+    appVersion: APP_VERSION,
+    buildId: BUILD_ID,
+    comparisonPrinciples: [
+      'This package reports aligned observations and evidence quantity; it does not label improvement.',
+      'F0 candidate values are not corrected or deleted because of ambiguity flags; ambiguity is reported separately as evidence.',
+      'rms_relative_db is normalized within each recording and must not be interpreted as absolute loudness difference.',
+      'Missing or weak evidence remains missing/weak rather than being imputed.'
+    ],
+    alignment: {
+      status: resolved.result.status,
+      pairKey: resolved.result.pairKey,
+      alignmentId: resolved.result.alignmentId || null,
+      sourceDiagnosticId: resolved.result.sourceDiagnosticId || null,
+      mappingConvention: 'reference_A_time_sec = target_B_time_sec + offset_sec',
+      offsetSec,
+      canonical: resolved.result.canonical,
+      latestDecision: resolved.result.latestDecision || null,
+      algorithm: resolved.result.algorithm || null
+    },
+    referenceAxis: {
+      type: 'recording_A_time',
+      recordingId: cmp.a.rec.recordingId,
+      windowSec,
+      hopSec,
+      anchorSec: referenceAnchorSec,
+      intervalConvention: '[start,end)'
+    },
+    recordingA: d2RecordingDescriptor('a'),
+    recordingB: d2RecordingDescriptor('b'),
+    overlap: {
+      referenceStartSec: +overlapStartSec.toFixed(3),
+      referenceEndSec: +overlapEndSec.toFixed(3),
+      durationSec: +overlapDurationSec.toFixed(3),
+      referenceCoverageRatio: +(overlapDurationSec / durA).toFixed(6),
+      targetCoverageRatio: +(overlapDurationSec / durB).toFixed(6)
+    },
+    evidenceSummary: {
+      windowCount: windows.length,
+      fullPairCoverageWindowCount: fullPair,
+      partialPairCoverageWindowCount: partialPair,
+      zeroPairCoverageWindowCount: zeroPair,
+      windowsWithF0CandidateEvidenceBoth: candidateBoth
+    },
+    userReportedEvidence: {
+      markersA: d2MapMarkers(markersA, 'a', offsetSec),
+      markersB: d2MapMarkers(markersB, 'b', offsetSec),
+      segmentsA: d2MapUserSegments(segmentsA, 'a', offsetSec),
+      segmentsB: d2MapUserSegments(segmentsB, 'b', offsetSec)
+    },
+    windows
+  };
+}
+async function exportD2DiagnosticPackage() {
+  const btn = $('#btn-d2-export');
+  if (btn) btn.disabled = true;
+  try {
+    const note = $('#cmp-d2-result');
+    if (note) note.innerHTML = '<p class="small">resolved D1を読み込み、10秒窓 / 5秒hopで同一区間の観測証拠を集計しています…</p>';
+    const pkg = await buildD2DiagnosticPackage();
+    const files = [
+      { name: 'comparison_summary.json', data: JSON.stringify(pkg, null, 2) },
+      { name: 'comparison_windows.csv', data: d2WindowsCsv(pkg) }
+    ];
+    const blob = SongScopeZip.createZip(files);
+    const stamp = new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
+    const name = `songscope_compare_${safeName(pkg.recordingA.title)}_vs_${safeName(pkg.recordingB.title)}_${stamp}.zip`;
+    const how = await saveBlob(blob, name);
+    if (note) note.innerHTML = `<p><b>D2 Diagnosticを書き出しました</b></p><p class="small mono">offset ${pkg.alignment.offsetSec >= 0 ? '+' : ''}${pkg.alignment.offsetSec.toFixed(1)} s / overlap ${pkg.overlap.durationSec.toFixed(1)} s / windows ${pkg.evidenceSummary.windowCount} / full pair ${pkg.evidenceSummary.fullPairCoverageWindowCount}</p><p class="small">まだ改善判定はしません。F0 ambiguityを含む候補値は訂正せず、証拠量と別に保持しています。</p>`;
+    if (how !== 'cancelled') toast(`${name}を書き出しました`);
+  } catch (e) {
+    console.error(e);
+    const note = $('#cmp-d2-result');
+    if (note) note.innerHTML = `<p class="small">D2生成に失敗しました: ${escapeHtml((e && e.message) || String(e))}</p>`;
+    toast('D2比較パッケージを作成できませんでした');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function cmpDuration() {
   // Shared comparison axis is Recording A (reference) time. B-only regions outside A are not comparison time.
   const da = cmpSideDuration('a');
@@ -2945,6 +3256,7 @@ function wireCompare() {
   $('#btn-align-diagnose').addEventListener('click', diagnoseAlignment);
   $('#btn-align-export').addEventListener('click', exportAlignmentDiagnostic);
   $('#btn-align-apply').addEventListener('click', applyResolvedAlignment);
+  $('#btn-d2-export').addEventListener('click', exportD2DiagnosticPackage);
   $('#cmp-play-a').addEventListener('click', () => cmpPlay('a'));
   $('#cmp-play-b').addEventListener('click', () => cmpPlay('b'));
   $('#cmp-stop').addEventListener('click', cmpStop);

@@ -212,6 +212,14 @@
       <div id="cmp-align-result" class="note"><p class="small">まだ判定していません。</p></div>
     </div>
     <div class="card">
+      <div class="section-head tight"><span>D2 同一区間比較</span><span class="mono small">Diagnostic</span></div>
+      <p class="small">保存済みのresolved D1を使い、A基準時間を10秒窓・5秒hopに分けて、A/Bそれぞれのrms_relative_db、F0 candidate、ambiguity、証拠量を同じ曲位置で並べます。改善・悪化の判定はまだ行いません。</p>
+      <div class="row gap wrap">
+        <button id="btn-d2-export" class="mini accent">D2比較パッケージを書き出す</button>
+      </div>
+      <div id="cmp-d2-result" class="note"><p class="small">D1がresolvedになったA/Bで使用できます。</p></div>
+    </div>
+    <div class="card">
       <div class="section-head tight"><span>共有ループ（A基準時間）</span><span class="mono small" id="cmp-ab-readout">開始: — / 終了: —</span></div>
       <div class="row gap wrap">
         <button id="cmp-set-a" class="mini">開始地点</button>
@@ -292,6 +300,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="zip.js"></script>
-<script src="app.js?v=20260810-d1-02"></script>
+<script src="app.js?v=20260810-d2diag-01"></script>
 </body>
 </html>
