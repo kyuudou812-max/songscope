@@ -1,4 +1,7 @@
-# SongScope v0.1
+# SongScope v0.2 Phase A-1
+
+> **Phase A-1 test build**: v0.1の既存出力を維持したまま、`frames.csv` に `raw_f0_hz`, `raw_f0_midi`, `filtered_f0_hz`, `usable_vocal_f0_hz`, `f0_status` を追加しています。`usable_vocal_f0_hz` は暫定フィルタ（confidence 0.70 / voiced probability 0.45 / 孤立外れ値 700 cent）による比較利用候補であり、正しい音程や本人声のみを保証する値ではありません。
+
 
 カラオケで録音した自分の歌を、**あとから人間とChatGPTが客観的に比較・検証できるデータ**に変換するための、iPhone向けWebアプリ（PWA）です。
 

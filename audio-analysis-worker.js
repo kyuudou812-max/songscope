@@ -1,4 +1,4 @@
-/* SongScope — audio analysis worker (v0.1)
+/* SongScope — audio analysis worker (v0.2 Phase A-1)
  * 入力: モノラルPCM (Float32Array) + 元サンプルレート + 解析設定
  * 出力: フレーム特徴量 / 波形ピーク / スペクトログラム / 検出区間 / サマリー
  *
@@ -11,7 +11,7 @@
 
 const ENGINE = {
   analysisEngineName: 'SongScope Analysis Engine',
-  analysisEngineVersion: '0.1.0',
+  analysisEngineVersion: '0.2.0-phaseA1',
   algorithmNames: {
     resampling: 'linear-interpolation-with-boxcar-antialias',
     windowing: 'hann',
@@ -25,7 +25,7 @@ const ENGINE = {
     resampling: '1.0.0',
     windowing: '1.0.0',
     spectrum: '1.0.0',
-    f0: '1.0.0',
+    f0: '1.1.0-phaseA1',
     voicedProbability: '1.0.0',
     loudness: '1.0.0',
     activeSegments: '1.0.0'
@@ -239,9 +239,16 @@ function analyze(pcmIn, srcRate, cfg) {
     rmsRelDb: new Float32Array(nFrames),
     peakDb: new Float32Array(nFrames),
     crest: new Float32Array(nFrames),
+    // v0.1互換F0（minimumConfidence通過後）。既存UI/出力を壊さないため残す。
     f0Hz: new Float32Array(nFrames),
     f0Midi: new Float32Array(nFrames),
     f0Conf: new Float32Array(nFrames),
+    // Phase A-1: YINの生観測と、比較利用候補を別層で保持する。
+    rawF0Hz: new Float32Array(nFrames),
+    rawF0Midi: new Float32Array(nFrames),
+    filteredF0Hz: new Float32Array(nFrames),
+    usableVocalF0Hz: new Float32Array(nFrames),
+    f0Status: new Uint8Array(nFrames),
     voicedProb: new Float32Array(nFrames),
     centroid: new Float32Array(nFrames),
     bandwidth: new Float32Array(nFrames),
@@ -251,6 +258,11 @@ function analyze(pcmIn, srcRate, cfg) {
     rmsDelta: new Float32Array(nFrames),
     f0Delta: new Float32Array(nFrames)
   };
+  // Float32Array は初期値0なので、「未観測」を0Hzと誤認しないよう NaN で初期化する。
+  F.rawF0Hz.fill(NaN);
+  F.rawF0Midi.fill(NaN);
+  F.filteredF0Hz.fill(NaN);
+  F.usableVocalF0Hz.fill(NaN);
 
   const specMaxHz = Math.min(cfg.spectrogramMaxHz, sr / 2);
   const specBinCount = Math.max(1, Math.floor(specMaxHz / binHz));
@@ -322,14 +334,20 @@ function analyze(pcmIn, srcRate, cfg) {
 
     // --- F0 ---
     const y = yin(x, off, tauMin);
-    if (isFinite(y.f0) && y.f0 >= cfg.f0MinHz && y.f0 <= cfg.f0MaxHz && y.conf >= cfg.minimumConfidence) {
+    const rawF0Valid = isFinite(y.f0) && y.f0 >= cfg.f0MinHz && y.f0 <= cfg.f0MaxHz;
+    if (rawF0Valid) {
+      F.rawF0Hz[n] = y.f0;
+      F.rawF0Midi[n] = hzToMidi(y.f0);
+    }
+    // v0.1互換値: minimumConfidence を通過した値だけを残す。
+    if (rawF0Valid && y.conf >= cfg.minimumConfidence) {
       F.f0Hz[n] = y.f0;
       F.f0Midi[n] = hzToMidi(y.f0);
     } else {
       F.f0Hz[n] = NaN;
       F.f0Midi[n] = NaN;
     }
-    F.f0Conf[n] = y.conf;
+    F.f0Conf[n] = isFinite(y.conf) ? y.conf : 0;
 
     if (n % 64 === 0) {
       const pct = 2 + Math.round(88 * n / nFrames);
@@ -352,6 +370,48 @@ function analyze(pcmIn, srcRate, cfg) {
     F.voicedProb[n] = F.f0Conf[n] * gate;
     F.rmsDelta[n] = n === 0 ? 0 : F.rmsDb[n] - F.rmsDb[n - 1];
     F.f0Delta[n] = (n === 0 || !isFinite(F.f0Hz[n]) || !isFinite(F.f0Hz[n - 1])) ? NaN : F.f0Hz[n] - F.f0Hz[n - 1];
+  }
+
+  // --- Phase A-1: raw -> filtered -> usable vocal candidate ---
+  // f0Status: 0=no_f0, 1=low_confidence, 2=low_voiced_probability,
+  //           3=isolated_outlier, 4=usable
+  const usableMinConfidence = isFinite(cfg.usableF0MinConfidence) ? cfg.usableF0MinConfidence : 0.70;
+  const usableMinVoicedProbability = isFinite(cfg.usableF0MinVoicedProbability) ? cfg.usableF0MinVoicedProbability : 0.45;
+  const outlierThresholdCent = isFinite(cfg.f0IsolatedOutlierThresholdCent) ? cfg.f0IsolatedOutlierThresholdCent : 700;
+  const outlierRadius = Math.max(1, Math.round(isFinite(cfg.f0IsolatedOutlierWindowFrames) ? cfg.f0IsolatedOutlierWindowFrames : 2));
+  const centDistance = (a, b) => (a > 0 && b > 0) ? Math.abs(1200 * Math.log2(a / b)) : Infinity;
+  const medianSmall = arr => {
+    if (!arr.length) return NaN;
+    const b = arr.slice().sort((x, y) => x - y), m = b.length >> 1;
+    return b.length & 1 ? b[m] : (b[m - 1] + b[m]) / 2;
+  };
+
+  for (let n = 0; n < nFrames; n++) {
+    const hz = F.rawF0Hz[n];
+    if (!isFinite(hz)) { F.f0Status[n] = 0; continue; }
+
+    // filtered は raw を基本に、周辺から孤立した極端な飛び値だけ除く。
+    let isolatedOutlier = false;
+    const neigh = [];
+    for (let j = Math.max(0, n - outlierRadius); j <= Math.min(nFrames - 1, n + outlierRadius); j++) {
+      if (j === n) continue;
+      const v = F.rawF0Hz[j];
+      if (isFinite(v) && F.f0Conf[j] >= usableMinConfidence) neigh.push(v);
+    }
+    if (neigh.length >= 2) {
+      const med = medianSmall(neigh);
+      // 周辺値同士がある程度まとまっている場合だけ、中央の孤立点を除外する。
+      const neighCent = neigh.map(v => centDistance(v, med));
+      const neighPlausible = Math.max.apply(null, neighCent) <= 350;
+      if (neighPlausible && centDistance(hz, med) >= outlierThresholdCent) isolatedOutlier = true;
+    }
+
+    if (!isolatedOutlier) F.filteredF0Hz[n] = hz;
+    if (F.f0Conf[n] < usableMinConfidence) { F.f0Status[n] = 1; continue; }
+    if (F.voicedProb[n] < usableMinVoicedProbability) { F.f0Status[n] = 2; continue; }
+    if (isolatedOutlier) { F.f0Status[n] = 3; continue; }
+    F.usableVocalF0Hz[n] = hz;
+    F.f0Status[n] = 4;
   }
 
   // --- 活動区間（伴奏を含むため「本人の発声」とは断定しない） ---

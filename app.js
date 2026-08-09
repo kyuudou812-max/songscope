@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.1  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase A-1  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,8 +8,8 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.1.0';
-const SCHEMA_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0-phaseA1';
+const SCHEMA_VERSION = '0.2.0';
 
 const TAGS = ['高音', '低音', 'リズム', '歌詞', '譜割り', '息', '力み', '音程',
   '語尾', '発音', '表現', '違和感', '良かった', '好き', 'その他'];
@@ -23,6 +23,11 @@ const DEFAULT_SETTINGS = {
   f0MinHz: 65,
   f0MaxHz: 1200,
   minimumConfidence: 0.55,
+  // Phase A-1: 既存の表示/互換閾値とは分離した比較利用候補用の暫定閾値。
+  usableF0MinConfidence: 0.70,
+  usableF0MinVoicedProbability: 0.45,
+  f0IsolatedOutlierWindowFrames: 2,
+  f0IsolatedOutlierThresholdCent: 700,
   yinThreshold: 0.15,
   loudnessReference: 'p95_of_frame_rms_db',
   spectrogramMaxHz: 8000,
@@ -648,7 +653,7 @@ function renderSummary() {
     ['engine', e.analysisEngineName + ' v' + e.analysisEngineVersion],
     ['f0 algorithm', e.algorithmNames.f0 + ' v' + e.algorithmVersions.f0],
     ['minimumConfidence', c.minimumConfidence],
-    ['experimental features', 'not implemented (v0.1)'],
+    ['experimental features', 'not implemented (v0.2 Phase A-1)'],
     ['analyzed at', fmtDate(an.createdAt)]
   ];
   box.innerHTML = rows.map(r => `<div>${escapeHtml(r[0])}: <b>${escapeHtml(String(r[1]))}</b></div>`).join('');
@@ -1437,11 +1442,23 @@ function csvEscape(v) {
   const s = String(v);
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
+function f0StatusLabel(code) {
+  switch (code) {
+    case 0: return 'no_f0';
+    case 1: return 'low_confidence';
+    case 2: return 'low_voiced_probability';
+    case 3: return 'isolated_outlier';
+    case 4: return 'usable';
+    default: return '';
+  }
+}
 function framesCsv(an) {
   const F = an.frames, n = F.timeSec.length;
+  // 既存16列は順序・意味を維持し、Phase A-1列を末尾に追加する。
   const head = ['time_sec', 'rms_db', 'rms_relative_db', 'peak_db', 'crest_factor', 'f0_hz', 'f0_midi',
     'f0_confidence', 'voiced_probability', 'spectral_centroid_hz', 'spectral_bandwidth_hz',
-    'spectral_rolloff_hz', 'spectral_flux', 'spectral_flatness', 'rms_delta', 'f0_delta'];
+    'spectral_rolloff_hz', 'spectral_flux', 'spectral_flatness', 'rms_delta', 'f0_delta',
+    'raw_f0_hz', 'raw_f0_midi', 'filtered_f0_hz', 'usable_vocal_f0_hz', 'f0_status'];
   const rows = new Array(n + 1);
   rows[0] = head.join(',');
   for (let i = 0; i < n; i++) {
@@ -1449,7 +1466,10 @@ function framesCsv(an) {
       F.timeSec[i].toFixed(3), num(F.rmsDb[i], 2), num(F.rmsRelDb[i], 2), num(F.peakDb[i], 2), num(F.crest[i], 3),
       num(F.f0Hz[i], 2), num(F.f0Midi[i], 3), num(F.f0Conf[i], 3), num(F.voicedProb[i], 3),
       num(F.centroid[i], 1), num(F.bandwidth[i], 1), num(F.rolloff[i], 1), num(F.flux[i], 5), num(F.flatness[i], 5),
-      num(F.rmsDelta[i], 3), num(F.f0Delta[i], 3)
+      num(F.rmsDelta[i], 3), num(F.f0Delta[i], 3),
+      num(F.rawF0Hz && F.rawF0Hz[i], 2), num(F.rawF0Midi && F.rawF0Midi[i], 3),
+      num(F.filteredF0Hz && F.filteredF0Hz[i], 2), num(F.usableVocalF0Hz && F.usableVocalF0Hz[i], 2),
+      f0StatusLabel(F.f0Status ? F.f0Status[i] : null)
     ].join(',');
   }
   return rows.join('\n') + '\n';
@@ -1581,7 +1601,7 @@ function buildReportMd(an) {
     L.push('Engine: ' + an.engine.analysisEngineName + ' v' + an.engine.analysisEngineVersion);
     L.push('F0 algorithm: ' + an.engine.algorithmNames.f0 + ' v' + an.engine.algorithmVersions.f0);
     L.push('minimumConfidence: ' + an.settings.minimumConfidence);
-    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.1.');
+    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.2 Phase A-1.');
   } else {
     L.push('Analysis not available for this recording (decode or analysis failed).');
     L.push('User markers and segments below are still valid observations.');
