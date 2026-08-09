@@ -18,11 +18,16 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.6.1`
-- Build ID: `20260810-d2diag-02`
+- Schema Version: `0.6.2`
+- Build ID: `20260810-d2diag-03`
 
 ## Phase D2 Diagnostic
 
+### D2 Diagnostic build 03 — Float32 frame-boundary fix
+- build 02で共通alignment区間そのものは正しくなったが、実機出力では6窓でA/BのframeCountが1 frame（0.02秒）ずれるケースが残った。
+- 原因は解析frame時刻がメモリ上ではFloat32で保持され、長い録音では境界時刻に数e-5秒程度の丸め誤差が出るのに、build 02の境界toleranceが1e-7秒と小さすぎたこと。
+- `[start,end)` の意味は維持したまま、toleranceをframe hopに対して十分小さい0.1 ms以上へ拡大し、同じ共通区間ではA/Bのframe数が安定して一致するよう修正。
+- D1 alignment、F0/RMS解析、window幅10秒/hop5秒、IndexedDB schemaは変更していない。
 
 ### D2 Diagnostic build 02 — common-overlap windowing fix
 - 部分coverage窓でA側を10秒、B側を3.6秒など異なる時間範囲で集計していたため、pairwise comparisonとして不正確だった。build 02では各窓の**共通alignment区間だけ**をA/B両方に使う。

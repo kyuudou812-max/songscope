@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-phaseD2diag';
-const SCHEMA_VERSION = '0.6.1';
-const BUILD_ID = '20260810-d2diag-02';
+const SCHEMA_VERSION = '0.6.2';
+const BUILD_ID = '20260810-d2diag-03';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -2666,7 +2666,10 @@ function d2SideWindowStats(side, requestedReferenceStartSec, requestedReferenceE
   let frameCount = 0, candidateFrameCount = 0, ambiguityFrameCount = 0, cautionFrameCount = 0, strongFrameCount = 0;
   // time_sec is a floating-point frame grid. Use a tiny tolerance so an intended
   // [start,end) boundary does not randomly become 499/501 frames after offset mapping.
-  const timeEpsSec = 1e-7;
+  // Frame times are stored in Float32 in memory; at ~260 s their rounding error can be
+  // several 1e-5 s, so 1e-7 s was too small. Keep the tolerance tiny relative to the
+  // 20 ms frame hop while safely covering Float32 quantization.
+  const timeEpsSec = Math.max(1e-4, hop * 0.001);
   if (availableDurationSec > 0) {
     const n = F.timeSec.length;
     for (let i = 0; i < n; i++) {
@@ -2835,7 +2838,7 @@ async function buildD2DiagnosticPackage() {
   const zeroPair = windows.filter(w => w.pairCoverageRatio === 0).length;
   const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
   return {
-    schemaVersion: 'songscope-d2diag-0.1.1',
+    schemaVersion: 'songscope-d2diag-0.1.2',
     packageType: 'pairwise_observation_comparison',
     status: 'diagnostic_only',
     generatedAt: nowIso(),
