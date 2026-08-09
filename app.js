@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-phaseD1diag';
-const SCHEMA_VERSION = '0.4.0';
-const BUILD_ID = '20260810-d1diag-01';
+const SCHEMA_VERSION = '0.4.1';
+const BUILD_ID = '20260810-d1diag-02';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v1';
@@ -1849,6 +1849,7 @@ function buildSummaryJson(an) {
       songIdentityKey: rec.songIdentityKey || null,
       songIdentityVersion: rec.songIdentityVersion || null,
       songIdentityBasis: rec.songIdentityBasis || null,
+      songGroupingHistory: Array.isArray(rec.songGroupingHistory) ? rec.songGroupingHistory : [],
       arrangementId: rec.arrangementId || null,
       title: rec.title || null,
       artist: rec.artist || null,
@@ -1897,6 +1898,7 @@ function buildSummaryJson(an) {
     identityPolicy: {
       recordingIdentity: 'Same raw-audio SHA-256 reuses the same recordingId. Different analysis runs use different analysisId values.',
       songIdentity: 'songId is a persistent grouping ID once assigned. songIdentityKey is derived from NFKC-normalized title + artist (title only when artist is blank) and may change when metadata is edited. Neither asserts arrangement identity.',
+      manualSongGrouping: 'A user-confirmed song-group merge may reassign songId without changing title, audio identity, or analysis history. Provenance is kept in songGroupingHistory.',
       songIdentityVersion: SONG_IDENTITY_VERSION
     },
     markers: state.markers.map(m => ({
@@ -1939,6 +1941,10 @@ function buildReportMd(an) {
   L.push(`SongId: ${rec.songId || ''}`);
   L.push(`SongIdentityKey: ${rec.songIdentityKey || ''}`);
   L.push(`SongIdentity: ${rec.songIdentityBasis || ''} / ${rec.songIdentityVersion || ''}`);
+  if (Array.isArray(rec.songGroupingHistory) && rec.songGroupingHistory.length) {
+    const g = rec.songGroupingHistory[rec.songGroupingHistory.length - 1];
+    L.push(`SongGrouping: manual merge ${g.fromSongId || ''} -> ${g.toSongId || ''} (${g.mergedAt || ''})`);
+  }
   L.push(`AudioSHA256: ${(an && an.audioSha256) || rec.audioSha256 || ''}`);
   L.push(`LatestAnalysisId: ${rec.latestAnalysisId || (an && an.analysisId) || ''}`);
   L.push(`AnalysisCount: ${Number(rec.analysisCount || (an ? 1 : 0))}`);
@@ -2195,6 +2201,65 @@ function cmpIdentityCheck() {
   }
   return { status: 'metadata_mismatch', blocked: false, autoAlignmentEligible: false, message: 'songIdが異なります。自動alignment対象外で、現在は手動比較のみです。' };
 }
+async function mergeCmpSongGroupBIntoA() {
+  const a = cmp.a && cmp.a.rec, b = cmp.b && cmp.b.rec;
+  if (!a || !b) { toast('AとBを選択してください'); return; }
+  if (a.recordingId === b.recordingId || (a.audioSha256 && b.audioSha256 && a.audioSha256 === b.audioSha256)) {
+    toast('同じ録音は曲グループ統合の対象にしません'); return;
+  }
+  if (!a.songId || !b.songId) { toast('songIdが不足しています'); return; }
+  if (a.songId === b.songId) { toast('すでに同じ曲グループです'); updateCmpIdentityUi(); return; }
+
+  const fromSongId = b.songId;
+  const toSongId = a.songId;
+  let group = await findRecordingsBySongId(fromSongId).catch(() => []);
+  if (!group.length) group = [b];
+  const count = group.length;
+  const msg = `B側「${b.title || '(無題)'}」の曲グループ（${count}録音）を、A側「${a.title || '(無題)'}」と同じ曲としてまとめます。\n\n曲名・音声・recordingId・解析履歴は変更しません。songIdだけをA側へ統合します。よろしいですか？`;
+  if (!confirm(msg)) return;
+
+  const btn = $('#btn-song-merge-b-to-a');
+  if (btn) btn.disabled = true;
+  const mergedAt = nowIso();
+  try {
+    for (const rec of group) {
+      if (!rec || rec.songId !== fromSongId) continue;
+      const history = Array.isArray(rec.songGroupingHistory) ? rec.songGroupingHistory.slice() : [];
+      history.push({
+        method: 'manual_compare_group_merge_v1',
+        mergedAt,
+        fromSongId,
+        toSongId,
+        referenceRecordingId: a.recordingId || null,
+        initiatedFromRecordingId: b.recordingId || null,
+        appVersion: APP_VERSION,
+        buildId: BUILD_ID
+      });
+      rec.songGroupingHistory = history;
+      rec.songId = toSongId;
+      rec.updatedAt = mergedAt;
+      await dbPut('recordings', rec);
+    }
+
+    await loadRecordings();
+    const freshA = await dbGet('recordings', a.recordingId).catch(() => a);
+    const freshB = await dbGet('recordings', b.recordingId).catch(() => b);
+    if (cmp.a) cmp.a.rec = freshA || a;
+    if (cmp.b) cmp.b.rec = freshB || b;
+    if (state.rec) {
+      const freshState = await dbGet('recordings', state.rec.recordingId).catch(() => null);
+      if (freshState) state.rec = freshState;
+    }
+    updateCmpIdentityUi();
+    drawCompare();
+    toast(`${count}録音をA側の曲グループへまとめました`);
+  } catch (e) {
+    console.error(e);
+    toast('曲グループの統合に失敗しました');
+    updateCmpIdentityUi();
+  }
+}
+
 function updateCmpIdentityUi() {
   const check = cmpIdentityCheck();
   const el = $('#cmp-identity-status');
@@ -2205,6 +2270,15 @@ function updateCmpIdentityUi() {
   if (off) off.disabled = !!check.blocked;
   const on = $('#offset-number'); if (on) on.disabled = !!check.blocked;
   const dg = $('#btn-align-diagnose'); if (dg) dg.disabled = !!check.blocked || !check.autoAlignmentEligible || cmp.alignmentBusy;
+  const merge = $('#btn-song-merge-b-to-a');
+  if (merge) {
+    const a = cmp.a && cmp.a.rec, b = cmp.b && cmp.b.rec;
+    const canMerge = !!a && !!b && !check.blocked && !!a.songId && !!b.songId && a.songId !== b.songId;
+    merge.hidden = !canMerge;
+    merge.disabled = !canMerge || cmp.alignmentBusy;
+  }
+  const mergeNote = $('#cmp-song-merge-note');
+  if (mergeNote) mergeNote.hidden = !(merge && !merge.hidden);
   return check;
 }
 function updateCmpOffsetSliderRange() {
@@ -2732,6 +2806,7 @@ function wireCompare() {
   });
   $('#offset-slider').addEventListener('input', e => { cmp.offset = parseFloat(e.target.value); const n=$('#offset-number'); if(n)n.value=cmp.offset.toFixed(1); drawCompare(); });
   $('#offset-number').addEventListener('change', e => { const sl=$('#offset-slider'); const v=clamp(parseFloat(e.target.value)||0,parseFloat(sl.min),parseFloat(sl.max)); cmp.offset=Math.round(v*10)/10; sl.value=String(cmp.offset); e.target.value=cmp.offset.toFixed(1); drawCompare(); });
+  $('#btn-song-merge-b-to-a').addEventListener('click', mergeCmpSongGroupBIntoA);
   $('#btn-align-diagnose').addEventListener('click', diagnoseAlignment);
   $('#btn-align-export').addEventListener('click', exportAlignmentDiagnostic);
   $('#cmp-play-a').addEventListener('click', () => cmpPlay('a'));

@@ -1,9 +1,6 @@
-# SongScope v0.2 Phase D1-prep
+# SongScope v0.2 Phase D1 Diagnostic
 
-
-> **Phase D1-prep build**: B-liteのidentity/解析ロジックは維持したまま、A/B比較の時間規約を `A(reference) time = B(target) time + offset` に統一しました。同一`recordingId`または同一raw音声SHA-256は別歌唱比較としてブロックします。比較画面のループ端点はRecording A/Bと混同しないよう「開始/終了」と表記します。自動alignment自体はまだ実装していません。
-
-
+> **Phase D1 Diagnostic build 02**: D1のchroma-based global offset診断はそのままに、実運用で判明したsongId誤分割を明示的に修正できる「BをAと同じ曲にまとめる」を追加しました。自動で曲名を推測・修正せず、ユーザー確認時だけB側の曲グループをA側songIdへ統合します。曲名・音声・recordingId・analysisId・解析履歴は変更しません。統合履歴は`recording.songGroupingHistory`へ保存します。
 
 カラオケで録音した自分の歌を、**あとから人間とChatGPTが客観的に比較・検証できるデータ**に変換するための、iPhone向けWebアプリ（PWA）です。
 
@@ -12,14 +9,11 @@
 
 - 音声はすべて**あなたのiPhoneの中だけ**で処理されます。外部サーバーへの送信は一切ありません。
 - ログイン不要・サーバー不要・課金なし。
-
-- Phase A-2 Diagnostic の `frames.csv` では、従来21列の後ろに
-  `yin_initial_f0_hz`, `yin_selected_f0_hz`, `yin_selection_divisor`,
-  `yin_initial_cmnd`, `yin_selected_cmnd`, `yin_candidate_source`
-  を追加します。
-- `yin_selection_divisor` は `1=変更なし`, `2=tau/2`, `3=tau/3` を表します。
-- `usable_vocal_f0_hz` は互換のため残していますが、本人声のみを保証する値ではありません。
-- Build ID: `20260810-d1prep-02`
+- Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
+- D1 Diagnosticは同じ`songId`・別raw音声のA/Bについてchromaからglobal offset候補を出します。候補は自動適用しません。
+- `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
+- Schema Version: `0.4.1`
+- Build ID: `20260810-d1diag-02`
 
 ---
 
@@ -61,6 +55,7 @@ songscope/
 ├─ styles.css
 ├─ app.js
 ├─ audio-analysis-worker.js
+├─ alignment-worker.js
 ├─ manifest.json
 ├─ service-worker.js
 ├─ README.md
