@@ -1,12 +1,12 @@
-/* SongScope alignment worker — D1 Diagnostic
- * Diagnostic-only music alignment. Does not modify playback offset automatically.
+/* SongScope alignment worker — D1 formal
+ * Music alignment with conservative resolved / ambiguous / unresolved decision evidence.
  * Input feature: STFT pitch-class chroma from mixed karaoke audio.
  * Mapping convention used by matcher: reference(A) time = target(B) time + offsetSec.
  */
 'use strict';
 
 const FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
-const MATCH_VERSION = 'global-offset-coarse-refine-v1';
+const MATCH_VERSION = 'global-offset-coarse-refine-v2';
 const CFG_DEFAULT = {
   analysisSampleRate: 11025,
   fftSize: 4096,
@@ -17,7 +17,14 @@ const CFG_DEFAULT = {
   coarseStride: 5,
   refineRadiusSec: 1.2,
   driftRadiusSec: 2.0,
-  blockSec: 5.0
+  blockSec: 5.0,
+  independentClusterRadiusSec: 12.0,
+  decisionMinMeanSimilarity: 0.80,
+  decisionMinBlockP10: 0.70,
+  decisionMinShorterCoverageRatio: 0.60,
+  decisionMaxInverseResidualSec: 0.80,
+  decisionMaxDriftRangeSec: 1.00,
+  decisionMinIndependentMargin: 0.03
 };
 
 function FFT(n) {
@@ -124,13 +131,78 @@ function evalOffset(A,B,d,rot,blockSec){
   return {d,offsetSec:d*A.hopSec,rotation:signedRotation(rot),meanSimilarity:mean,rankingScore,overlapSec,targetCoverageRatio:targetCoverage,referenceCoverageRatio:refCoverage,shorterCoverageRatio:shorterCoverage,supportFrameCount:n,overlapFrameCount:overlap,blockSimilarityMedian:blockMedian,blockSimilarityP10:blockP10,bStart:b0,bEnd:b1};
 }
 function minOverlapSecFor(A,B){ return Math.min(30,Math.max(8,Math.min(A.durationSec,B.durationSec)*0.25)); }
-function topUnique(items,k){
+function topUnique(items,k,minSepSec=1.5){
   const s=items.filter(Boolean).sort((a,b)=>b.rankingScore-a.rankingScore), out=[];
   for(const c of s){
-    if(out.some(x=>x.rotation===c.rotation && Math.abs(x.offsetSec-c.offsetSec)<1.5))continue;
+    if(out.some(x=>x.rotation===c.rotation && Math.abs(x.offsetSec-c.offsetSec)<minSepSec))continue;
     out.push(c); if(out.length>=k)break;
   }
   return out;
+}
+function clusterCandidates(items, radiusSec){
+  const sorted=items.filter(Boolean).slice().sort((a,b)=>b.rankingScore-a.rankingScore);
+  const clusters=[];
+  for(const c of sorted){
+    let hit=null;
+    for(const cl of clusters){
+      if(cl.rotation===c.rotation && Math.abs(c.offsetSec-cl.representative.offsetSec)<=radiusSec){ hit=cl; break; }
+    }
+    if(!hit){ hit={rotation:c.rotation,representative:c,members:[]}; clusters.push(hit); }
+    hit.members.push(c);
+  }
+  for(const cl of clusters){
+    const offs=cl.members.map(x=>x.offsetSec);
+    cl.minOffsetSec=Math.min(...offs); cl.maxOffsetSec=Math.max(...offs);
+    cl.memberCount=cl.members.length;
+  }
+  return clusters.sort((a,b)=>b.representative.rankingScore-a.representative.rankingScore);
+}
+function rotationResidual(a,b){
+  if(a===null||a===undefined||b===null||b===undefined)return null;
+  let r=((a+b)%12+12)%12; if(r>6)r-=12; return r;
+}
+function decisionFor(A,B,best,bestRev,drift,decisionCandidates,cfg){
+  if(!best){ return {status:'unresolved',selectedRank:null,selectedOffsetSec:null,selectedChromaRotationSemitones:null,reasons:['no_candidate'],checks:{}}; }
+  const clusters=clusterCandidates(decisionCandidates,cfg.independentClusterRadiusSec);
+  const bestCluster=clusters[0]||null, competitor=clusters[1]||null;
+  const independentMargin=competitor?bestCluster.representative.rankingScore-competitor.representative.rankingScore:null;
+  const inverseResidual=(bestRev?best.offsetSec+bestRev.offsetSec:null);
+  const rotResidual=bestRev?rotationResidual(best.rotation,bestRev.rotation):null;
+  const checks={
+    similarity:best.meanSimilarity>=cfg.decisionMinMeanSimilarity,
+    blockP10:best.blockSimilarityP10!==null&&best.blockSimilarityP10>=cfg.decisionMinBlockP10,
+    shorterCoverage:best.shorterCoverageRatio>=cfg.decisionMinShorterCoverageRatio,
+    bidirectionalOffset:inverseResidual!==null&&Math.abs(inverseResidual)<=cfg.decisionMaxInverseResidualSec,
+    bidirectionalRotation:rotResidual!==null&&rotResidual===0,
+    drift:drift.offsetRangeSec!==null&&drift.offsetRangeSec<=cfg.decisionMaxDriftRangeSec,
+    independentSeparation:!competitor||independentMargin>=cfg.decisionMinIndependentMargin
+  };
+  const coreKeys=['similarity','blockP10','shorterCoverage','bidirectionalOffset','bidirectionalRotation','drift'];
+  const corePass=coreKeys.every(k=>checks[k]);
+  let status='unresolved', reasons=[];
+  if(corePass && checks.independentSeparation) status='resolved';
+  else if(corePass && !checks.independentSeparation){ status='ambiguous'; reasons.push('independent_candidate_competition'); }
+  else { for(const k of coreKeys) if(!checks[k]) reasons.push('check_failed:'+k); }
+  return {
+    status,selectedRank:1,selectedOffsetSec:+best.offsetSec.toFixed(3),selectedChromaRotationSemitones:best.rotation,
+    reasons,checks,
+    evidence:{
+      independentClusterRadiusSec:cfg.independentClusterRadiusSec,
+      clusterCount:clusters.length,
+      bestClusterPeakScore:+bestCluster.representative.rankingScore.toFixed(6),
+      secondIndependentClusterPeakScore:competitor?+competitor.representative.rankingScore.toFixed(6):null,
+      independentScoreMargin:independentMargin===null?null:+independentMargin.toFixed(6),
+      inverseOffsetResidualSec:inverseResidual===null?null:+inverseResidual.toFixed(3),
+      inverseRotationResidualSemitones:rotResidual,
+      driftRangeSec:drift.offsetRangeSec===null?null:+drift.offsetRangeSec.toFixed(3)
+    },
+    thresholds:{
+      minMeanSimilarity:cfg.decisionMinMeanSimilarity,minBlockP10:cfg.decisionMinBlockP10,
+      minShorterCoverageRatio:cfg.decisionMinShorterCoverageRatio,maxInverseResidualSec:cfg.decisionMaxInverseResidualSec,
+      maxDriftRangeSec:cfg.decisionMaxDriftRangeSec,minIndependentMargin:cfg.decisionMinIndependentMargin
+    },
+    candidateClusters:clusters.slice(0,8).map((cl,i)=>({rank:i+1,chromaRotationSemitones:cl.rotation,representativeOffsetSec:+cl.representative.offsetSec.toFixed(3),peakRankingScore:+cl.representative.rankingScore.toFixed(6),memberCount:cl.memberCount,minOffsetSec:+cl.minOffsetSec.toFixed(3),maxOffsetSec:+cl.maxOffsetSec.toFixed(3)}))
+  };
 }
 function matchDirection(A0,B0,cfgIn,progressBase=0,progressSpan=100){
   const cfg=Object.assign({},CFG_DEFAULT,cfgIn||{}), stride=cfg.coarseStride;
@@ -144,7 +216,7 @@ function matchDirection(A0,B0,cfgIn,progressBase=0,progressSpan=100){
     }
     self.postMessage({type:'progress',stage:'match',pct:Math.round(progressBase+progressSpan*0.45*done/Math.max(1,total))});
   }
-  const coarseTop=topUnique(coarse,30), refined=[]; const rad=Math.max(1,Math.round(cfg.refineRadiusSec/A0.hopSec));
+  const coarseTop=topUnique(coarse,36,1.5), refined=[]; const rad=Math.max(1,Math.round(cfg.refineRadiusSec/A0.hopSec));
   for(let ci=0;ci<coarseTop.length;ci++){
     const c=coarseTop[ci], center=Math.round(c.offsetSec/A0.hopSec), r=((c.rotation%12)+12)%12;
     for(let d=center-rad;d<=center+rad;d++){
@@ -152,8 +224,9 @@ function matchDirection(A0,B0,cfgIn,progressBase=0,progressSpan=100){
     }
     self.postMessage({type:'progress',stage:'match',pct:Math.round(progressBase+progressSpan*(0.45+0.45*(ci+1)/Math.max(1,coarseTop.length)))});
   }
-  const top=topUnique(refined,5);
-  return {top,minOverlapSec:minSec};
+  const ranked=topUnique(refined,36,0.8);
+  const top=topUnique(refined,5,1.5);
+  return {top,ranked,minOverlapSec:minSec};
 }
 function driftProbe(A,B,best,cfgIn){
   if(!best)return {segments:[]}; const cfg=Object.assign({},CFG_DEFAULT,cfgIn||{}), rot=((best.rotation%12)+12)%12;
@@ -171,20 +244,23 @@ function driftProbe(A,B,best,cfgIn){
   }
   const offs=segs.map(x=>x.offsetSec); return {segments:segs,offsetRangeSec:offs.length?Math.max(...offs)-Math.min(...offs):null};
 }
-function diag(A,B,cfg){
+function diag(A,B,cfgIn){
+  const cfg=Object.assign({},CFG_DEFAULT,cfgIn||{});
   const fwd=matchDirection(A,B,cfg,5,42), best=fwd.top[0]||null, drift=driftProbe(A,B,best,cfg);
   const rev=matchDirection(B,A,cfg,52,42), bestRev=rev.top[0]||null;
   const inverseResidualSec=(best&&bestRev)?best.offsetSec+bestRev.offsetSec:null;
+  const decision=decisionFor(A,B,best,bestRev,drift,fwd.ranked,cfg);
   self.postMessage({type:'progress',stage:'match',pct:98});
   return {
     matchingAlgorithmVersion:MATCH_VERSION,
     featureAlgorithmVersion:FEATURE_VERSION,
     mappingConvention:'reference_time_sec = target_time_sec + offset_sec',
-    decision:{status:'diagnostic_only'},
+    decision,
     candidates:fwd.top.map((x,i)=>({rank:i+1,offsetSec:+x.offsetSec.toFixed(3),chromaRotationSemitones:x.rotation,meanSimilarity:+x.meanSimilarity.toFixed(6),rankingScore:+x.rankingScore.toFixed(6),overlapSec:+x.overlapSec.toFixed(3),targetCoverageRatio:+x.targetCoverageRatio.toFixed(6),referenceCoverageRatio:+x.referenceCoverageRatio.toFixed(6),shorterCoverageRatio:+x.shorterCoverageRatio.toFixed(6),supportFrameCount:x.supportFrameCount,overlapFrameCount:x.overlapFrameCount,blockSimilarityMedian:x.blockSimilarityMedian===null?null:+x.blockSimilarityMedian.toFixed(6),blockSimilarityP10:x.blockSimilarityP10===null?null:+x.blockSimilarityP10.toFixed(6)})),
+    candidateClusters:decision.candidateClusters||[],
     reverseCheck: bestRev?{bestOffsetSec:+bestRev.offsetSec.toFixed(3),chromaRotationSemitones:bestRev.rotation,meanSimilarity:+bestRev.meanSimilarity.toFixed(6),inverseOffsetResidualSec:inverseResidualSec===null?null:+inverseResidualSec.toFixed(3)}:null,
     driftProbe:{segments:drift.segments.map(x=>({label:x.label,offsetSec:+x.offsetSec.toFixed(3),meanSimilarity:+x.meanSimilarity.toFixed(6),supportFrameCount:x.supportFrameCount})),offsetRangeSec:drift.offsetRangeSec===null?null:+drift.offsetRangeSec.toFixed(3)},
-    settings:{...Object.assign({},CFG_DEFAULT,cfg||{}),minimumOverlapSec:+fwd.minOverlapSec.toFixed(3)}
+    settings:{...cfg,minimumOverlapSec:+fwd.minOverlapSec.toFixed(3)}
   };
 }
 

@@ -1,6 +1,6 @@
-# SongScope v0.2 Phase D1 Diagnostic
+# SongScope v0.2 Phase D1
 
-> **Phase D1 Diagnostic build 02**: D1のchroma-based global offset診断はそのままに、実運用で判明したsongId誤分割を明示的に修正できる「BをAと同じ曲にまとめる」を追加しました。自動で曲名を推測・修正せず、ユーザー確認時だけB側の曲グループをA側songIdへ統合します。曲名・音声・recordingId・analysisId・解析履歴は変更しません。統合履歴は`recording.songGroupingHistory`へ保存します。
+> **Phase D1 build 01**: 実録音のA/Bでglobal offsetが約4分間一貫し、人間の聴感でも序盤・中盤・終盤の対応を確認できたため、D1を正式化しました。近接offset候補を独立解と誤認しないcandidate clusteringを追加し、候補の質・証拠量・往復整合性・drift・独立候補clusterから `resolved / ambiguous / unresolved` を保守的に判定します。`resolved` のときだけ「この位置合わせを反映」を表示します。
 
 カラオケで録音した自分の歌を、**あとから人間とChatGPTが客観的に比較・検証できるデータ**に変換するための、iPhone向けWebアプリ（PWA）です。
 
@@ -10,10 +10,10 @@
 - 音声はすべて**あなたのiPhoneの中だけ**で処理されます。外部サーバーへの送信は一切ありません。
 - ログイン不要・サーバー不要・課金なし。
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
-- D1 Diagnosticは同じ`songId`・別raw音声のA/Bについてchromaからglobal offset候補を出します。候補は自動適用しません。
+- D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.4.1`
-- Build ID: `20260810-d1diag-02`
+- Schema Version: `0.5.0`
+- Build ID: `20260810-d1-01`
 
 ---
 
@@ -283,7 +283,7 @@ jitter / shimmer / HNR / CPP / フォルマント / MFCC は実装していま�
 | `styles.css` | 見た目。ダークモードは自動で切り替わります |
 | `app.js` | UI・保存(IndexedDB)・グラフ描画・書き出し |
 | `audio-analysis-worker.js` | 音響解析の本体。別スレッドで動くので画面が固まりません |
-| `alignment-worker.js` | D1 Diagnostic用。chroma特徴抽出とglobal offset候補探索。歌唱観測workerとは分離 |
+| `alignment-worker.js` | D1用。chroma特徴抽出、global offset探索、candidate clustering、保守的なresolved判定。歌唱観測workerとは分離 |
 | `zip.js` | ZIP生成（無圧縮）。自作・ローカル同梱・通信なし |
 | `manifest.json` | ホーム画面に追加したときの名前やアイコン |
 | `service-worker.js` | オフライン起動用のキャッシュ（アプリ本体のみ。録音は扱いません） |
@@ -380,3 +380,11 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - 診断結果は自動でoffsetへ適用しません。比較画面の数値入力で人間が候補を手動確認できます。
 - `alignmentFeatures` は `audioSha256 + featureAlgorithmVersion` でIndexedDBにキャッシュします。
 - `alignmentDiagnostics` は診断履歴として保存し、単独JSONで書き出せます。これは正式alignmentではありません。
+
+### D1 build 01 formalization
+- matching versionを `global-offset-coarse-refine-v2` に更新。chroma特徴量は `stft-chroma-log-l2-smooth-v1` のままです。
+- 近接したoffset候補は同じ局所解の肩としてcluster化し、離れた独立clusterだけを競合候補として扱います。
+- `resolved / ambiguous / unresolved` は、mean similarity、block P10、短い方のcoverage、A→B/B→Aのoffset/rotation整合性、early/middle/late drift、独立cluster間marginを別々のcheckとして保存してから判定します。similarityは確率に変換しません。
+- `resolved` のときだけ「この位置合わせを反映」を表示します。自動で勝手にoffsetを書き換えません。
+- `alignmentResults` にはpairごとの最新D1判定（resolved / ambiguous / unresolved）を保存し、resolved時だけcanonical mappingを持たせます。将来D2はresolved mappingだけを参照します。`alignmentDiagnostics` は各判定runの根拠として残します。
+- `audio-analysis-worker.js` は変更していません。

@@ -178,7 +178,7 @@
       <label class="field"><span>Recording B</span><select id="sel-b"></select></label>
     </div>
     <div class="card note">
-      <p>録音距離・マイクゲイン・部屋が違うため、絶対音量の比較は意味を持ちません。既定では正規化して重ねています。開始位置のずれはオフセットで手動調整してください。</p>
+      <p>録音距離・マイクゲイン・部屋が違うため、絶対音量の比較は意味を持ちません。既定では正規化して重ねています。開始位置のずれはD1自動位置合わせまたは手動オフセットで調整できます。</p>
       <p id="cmp-identity-status" class="small">AとBを選択してください。</p>
       <div class="row gap wrap">
         <button id="btn-song-merge-b-to-a" class="mini" hidden>BをAと同じ曲にまとめる</button>
@@ -202,13 +202,14 @@
       </div>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>D1 位置合わせ診断</span><span class="mono small">diagnostic only</span></div>
-      <p class="small">同じsongId・別音声のA/Bについて、chromaからglobal offset候補を探索します。候補は自動適用しません。</p>
+      <div class="section-head tight"><span>D1 自動位置合わせ</span><span class="mono small">global offset</span></div>
+      <p class="small">同じsongId・別音声のA/Bについて、chromaからglobal offsetを探索し、証拠量・往復整合性・drift・独立候補clusterから resolved / ambiguous / unresolved を保守的に判定します。</p>
       <div class="row gap wrap">
-        <button id="btn-align-diagnose" class="mini accent">位置合わせを診断</button>
-        <button id="btn-align-export" class="mini" hidden>診断JSONを書き出す</button>
+        <button id="btn-align-diagnose" class="mini accent">位置合わせを判定</button>
+        <button id="btn-align-apply" class="mini accent" hidden>この位置合わせを反映</button>
+        <button id="btn-align-export" class="mini" hidden>結果JSONを書き出す</button>
       </div>
-      <div id="cmp-align-result" class="note"><p class="small">まだ診断していません。</p></div>
+      <div id="cmp-align-result" class="note"><p class="small">まだ判定していません。</p></div>
     </div>
     <div class="card">
       <div class="section-head tight"><span>共有ループ（A基準時間）</span><span class="mono small" id="cmp-ab-readout">開始: — / 終了: —</span></div>
@@ -291,6 +292,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="zip.js"></script>
-<script src="app.js?v=20260810-d1diag-02"></script>
+<script src="app.js?v=20260810-d1-01"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase B-lite  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase D1  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,12 +8,12 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseD1diag';
-const SCHEMA_VERSION = '0.4.1';
-const BUILD_ID = '20260810-d1diag-02';
+const APP_VERSION = '0.2.0-phaseD1';
+const SCHEMA_VERSION = '0.5.0';
+const BUILD_ID = '20260810-d1-01';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
-const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v1';
+const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
 
 const TAGS = ['高音', '低音', 'リズム', '歌詞', '譜割り', '息', '力み', '音程',
   '語尾', '発音', '表現', '違和感', '良かった', '好き', 'その他'];
@@ -176,7 +176,7 @@ function setFlag(key, val) {
 
 /* ---------------- IndexedDB ---------------- */
 const DB_NAME = 'songscope';
-const DB_VER = 4;
+const DB_VER = 5;
 let dbp = null;
 
 function db() {
@@ -214,6 +214,11 @@ function db() {
       if (!d.objectStoreNames.contains('alignmentDiagnostics')) {
         const ad = d.createObjectStore('alignmentDiagnostics', { keyPath: 'diagnosticId' });
         ad.createIndex('byPairKey', 'pairKey', { unique: false });
+      }
+      if (!d.objectStoreNames.contains('alignmentResults')) {
+        const ar = d.createObjectStore('alignmentResults', { keyPath: 'pairKey' });
+        ar.createIndex('byStatus', 'status', { unique: false });
+        ar.createIndex('byUpdatedAt', 'updatedAt', { unique: false });
       }
     };
     req.onsuccess = () => res(req.result);
@@ -2126,7 +2131,8 @@ async function backupAll() {
       });
     }
     try { out.alignmentDiagnostics = await dbAll('alignmentDiagnostics'); } catch (e) { out.alignmentDiagnostics = []; }
-    out.note = 'analysisHistoryは各解析runのcompact provenanceです。D1 DiagnosticのalignmentDiagnosticsは候補証拠であり、自動適用済みalignmentではありません。frames等のフレーム単位データは最新analysis以外バックアップに含めません。原本音声を保持していれば再解析できます。';
+    try { out.alignmentResults = await dbAll('alignmentResults'); } catch (e) { out.alignmentResults = []; }
+    out.note = 'analysisHistoryは各解析runのcompact provenanceです。alignmentDiagnosticsは候補証拠、alignmentResultsはD1判定結果です。frames等のフレーム単位データは最新analysis以外バックアップに含めません。原本音声を保持していれば再解析できます。';
     closeSheet();
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
     await saveBlob(blob, `songscope_backup_${new Date().toISOString().slice(0, 10)}.json`);
@@ -2151,7 +2157,8 @@ const cmp = {
   lastTime: 0,                 // reference(A) time
   rafId: 0,
   alignmentBusy: false,
-  lastAlignmentDiagnostic: null
+  lastAlignmentDiagnostic: null,
+  lastAlignmentResult: null
 };
 
 function cmpSideDuration(side) {
@@ -2179,8 +2186,10 @@ function cmpResetMapping() {
   cmp.lastTime = 0;
   cmp.playing = null;
   cmp.lastAlignmentDiagnostic = null;
-  const ar = $('#cmp-align-result'); if (ar) ar.innerHTML = '<p class="small">まだ診断していません。</p>';
+  cmp.lastAlignmentResult = null;
+  const ar = $('#cmp-align-result'); if (ar) ar.innerHTML = '<p class="small">まだ判定していません。</p>';
   const ex = $('#btn-align-export'); if (ex) ex.hidden = true;
+  const ap = $('#btn-align-apply'); if (ap) ap.hidden = true;
   const slider = $('#offset-slider');
   if (slider) slider.value = '0';
 }
@@ -2396,17 +2405,87 @@ function alignmentCandidateHtml(c) {
   const rot = c.chromaRotationSemitones >= 0 ? '+' + c.chromaRotationSemitones : String(c.chromaRotationSemitones);
   return `<div class="small mono">#${c.rank} offset ${sign}${c.offsetSec.toFixed(1)} s / chroma回転 ${rot} st / similarity ${c.meanSimilarity.toFixed(3)} / overlap ${c.overlapSec.toFixed(1)} s / target ${(c.targetCoverageRatio*100).toFixed(1)}%</div>`;
 }
+function alignmentStatusLabel(status) {
+  if (status === 'resolved') return 'resolved（位置合わせ成立）';
+  if (status === 'ambiguous') return 'ambiguous（複数候補）';
+  return 'unresolved（十分に確定できない）';
+}
 function renderAlignmentDiagnostic(diag) {
   const el = $('#cmp-align-result'); if (!el) return;
   const candidates = (diag && diag.candidates) || [];
-  if (!candidates.length) { el.innerHTML = '<p class="small">有効な候補を作れませんでした。診断は unresolved 相当です。</p>'; return; }
+  const decision = (diag && diag.decision) || { status: 'unresolved' };
+  const apply = $('#btn-align-apply');
+  if (!candidates.length) {
+    el.innerHTML = '<p><b>unresolved</b></p><p class="small">有効な候補を作れませんでした。手動オフセットは引き続き利用できます。</p>';
+    if (apply) apply.hidden = true;
+    return;
+  }
   const rev = diag.reverseCheck;
   const drift = diag.driftProbe;
-  let html = '<p><b>診断候補（自動適用しません）</b></p>' + candidates.map(alignmentCandidateHtml).join('');
+  const selected = candidates[0];
+  let html = `<p><b>${escapeHtml(alignmentStatusLabel(decision.status))}</b></p>`;
+  if (decision.status === 'resolved' && selected) {
+    html += `<p class="small mono">採用候補: ${selected.offsetSec >= 0 ? '+' : ''}${selected.offsetSec.toFixed(1)} s / chroma回転 ${selected.chromaRotationSemitones >= 0 ? '+' : ''}${selected.chromaRotationSemitones} st</p>`;
+  }
+  html += '<p class="small"><b>上位候補</b></p>' + candidates.map(alignmentCandidateHtml).join('');
+  if (decision.candidateClusters && decision.candidateClusters.length) {
+    const cls = decision.candidateClusters.slice(0,4).map(c => `#${c.rank} ${c.representativeOffsetSec >= 0 ? '+' : ''}${c.representativeOffsetSec.toFixed(1)}s/${c.chromaRotationSemitones >= 0 ? '+' : ''}${c.chromaRotationSemitones}st peak ${c.peakRankingScore.toFixed(3)}`);
+    html += `<p class="small mono">独立候補cluster: ${cls.join(' / ')}</p>`;
+  }
   if (rev) html += `<p class="small mono">逆向き検査: offset ${rev.bestOffsetSec >= 0 ? '+' : ''}${rev.bestOffsetSec.toFixed(1)} s / 往復残差 ${rev.inverseOffsetResidualSec === null ? '—' : rev.inverseOffsetResidualSec.toFixed(1)+' s'}</p>`;
   if (drift && drift.segments && drift.segments.length) html += `<p class="small mono">drift probe: ${drift.segments.map(x => `${x.label} ${x.offsetSec >= 0 ? '+' : ''}${x.offsetSec.toFixed(1)}s`).join(' / ')} / range ${drift.offsetRangeSec === null ? '—' : drift.offsetRangeSec.toFixed(1)+'s'}</p>`;
-  html += '<p class="small">similarityは確率ではありません。候補間の差・重なり時間・往復整合性を含めて確認してください。</p>';
+  if (decision.reasons && decision.reasons.length) html += `<p class="small">判定理由: ${escapeHtml(decision.reasons.join(', '))}</p>`;
+  html += '<p class="small">similarityは確率ではありません。D1は候補の質・証拠量・往復整合性・drift・独立候補clusterをまとめて保守的に判定します。</p>';
   el.innerHTML = html;
+  if (apply) apply.hidden = decision.status !== 'resolved';
+}
+function buildCanonicalAlignmentResult(diag) {
+  if (!diag || !diag.decision) return null;
+  const best = diag.candidates && diag.candidates.length ? diag.candidates[0] : null;
+  const ah = diag.reference && diag.reference.audioSha256, bh = diag.target && diag.target.audioSha256;
+  if (!ah || !bh) return null;
+  const lowFirst = ah < bh;
+  const lowHash = lowFirst ? ah : bh, highHash = lowFirst ? bh : ah;
+  let canonical = null;
+  if (diag.decision.status === 'resolved' && best) {
+    // Current convention: A(reference) = B(target) + offset.
+    // Canonical convention: high_time = low_time + canonicalOffsetHighFromLowSec.
+    const canonicalOffset = lowFirst ? -best.offsetSec : best.offsetSec;
+    const canonicalSemitone = lowFirst ? -best.chromaRotationSemitones : best.chromaRotationSemitones;
+    canonical = {
+      lowAudioSha256: lowHash,
+      highAudioSha256: highHash,
+      mappingConvention: 'high_time_sec = low_time_sec + canonical_offset_high_from_low_sec',
+      canonicalOffsetHighFromLowSec: +canonicalOffset.toFixed(3),
+      canonicalChromaSemitoneHighRelativeToLow: canonicalSemitone
+    };
+  }
+  return {
+    pairKey: diag.pairKey,
+    alignmentId: uid('aln'),
+    status: diag.decision.status,
+    algorithm: { featureVersion: diag.featureAlgorithmVersion, matchingVersion: diag.matchingAlgorithmVersion },
+    canonical,
+    latestDecision: diag.decision,
+    sourceDiagnosticId: diag.diagnosticId,
+    reference: diag.reference,
+    target: diag.target,
+    updatedAt: nowIso(),
+    appVersion: APP_VERSION,
+    buildId: BUILD_ID
+  };
+}
+function applyResolvedAlignment() {
+  const d = cmp.lastAlignmentDiagnostic;
+  if (!d || !d.decision || d.decision.status !== 'resolved' || !d.candidates || !d.candidates.length) { toast('resolvedの位置合わせ結果がありません'); return; }
+  const best = d.candidates[0];
+  cmp.offset = Math.round(best.offsetSec * 10) / 10;
+  const sl = $('#offset-slider'), numel = $('#offset-number');
+  updateCmpOffsetSliderRange();
+  if (sl) sl.value = String(cmp.offset);
+  if (numel) numel.value = cmp.offset.toFixed(1);
+  drawCompare();
+  toast(`位置合わせ ${cmp.offset >= 0 ? '+' : ''}${cmp.offset.toFixed(1)}秒を反映しました`);
 }
 async function diagnoseAlignment() {
   if (cmp.alignmentBusy) return;
@@ -2416,13 +2495,14 @@ async function diagnoseAlignment() {
   cmp.alignmentBusy = true;
   const btn = $('#btn-align-diagnose'); if (btn) btn.disabled = true;
   const ex = $('#btn-align-export'); if (ex) ex.hidden = true;
+  const ap = $('#btn-align-apply'); if (ap) ap.hidden = true;
   try {
     const fa = await getAlignmentFeature('a', 'A');
     const fb = await getAlignmentFeature('b', 'B');
-    const el = $('#cmp-align-result'); if (el) el.innerHTML = '<p class="small">global offset候補を探索中…</p>';
+    const el = $('#cmp-align-result'); if (el) el.innerHTML = '<p class="small">global offsetを探索し、D1判定中…</p>';
     const diagCore = await runAlignmentWorker({ type: 'match', reference: fa, target: fb, config: {} }, [], m => {
       const pct = Math.max(1, Math.min(99, Number(m.pct || 0)));
-      const e = $('#cmp-align-result'); if (e) e.innerHTML = `<p class="small">global offset候補を探索中… ${pct}%</p>`;
+      const e = $('#cmp-align-result'); if (e) e.innerHTML = `<p class="small">global offsetを探索し、D1判定中… ${pct}%</p>`;
     });
     const diag = Object.assign({}, diagCore, {
       diagnosticId: uid('aldiag'),
@@ -2439,9 +2519,12 @@ async function diagnoseAlignment() {
     });
     cmp.lastAlignmentDiagnostic = diag;
     await dbPut('alignmentDiagnostics', diag).catch(() => { });
+    const result = buildCanonicalAlignmentResult(diag);
+    cmp.lastAlignmentResult = result;
+    if (result) await dbPut('alignmentResults', result).catch(() => { });
     renderAlignmentDiagnostic(diag);
     if (ex) ex.hidden = false;
-    toast('位置合わせ診断が完了しました');
+    toast(diag.decision && diag.decision.status === 'resolved' ? 'D1位置合わせが resolved になりました' : 'D1位置合わせの判定が完了しました');
   } catch (e) {
     const el = $('#cmp-align-result'); if (el) el.innerHTML = `<p class="small">診断に失敗しました: ${escapeHtml((e && e.message) || String(e))}</p>`;
     toast('位置合わせ診断に失敗しました');
@@ -2809,6 +2892,7 @@ function wireCompare() {
   $('#btn-song-merge-b-to-a').addEventListener('click', mergeCmpSongGroupBIntoA);
   $('#btn-align-diagnose').addEventListener('click', diagnoseAlignment);
   $('#btn-align-export').addEventListener('click', exportAlignmentDiagnostic);
+  $('#btn-align-apply').addEventListener('click', applyResolvedAlignment);
   $('#cmp-play-a').addEventListener('click', () => cmpPlay('a'));
   $('#cmp-play-b').addEventListener('click', () => cmpPlay('b'));
   $('#cmp-stop').addEventListener('click', cmpStop);
