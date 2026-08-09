@@ -1,4 +1,4 @@
-/* SongScope — audio analysis worker (v0.2 Phase A-2 Diagnostic)
+/* SongScope — audio analysis worker (v0.2 Phase A-3)
  * 入力: モノラルPCM (Float32Array) + 元サンプルレート + 解析設定
  * 出力: フレーム特徴量 / 波形ピーク / スペクトログラム / 検出区間 / サマリー
  *
@@ -11,12 +11,13 @@
 
 const ENGINE = {
   analysisEngineName: 'SongScope Analysis Engine',
-  analysisEngineVersion: '0.2.0-phaseA2diag',
+  analysisEngineVersion: '0.2.0-phaseA3',
   algorithmNames: {
     resampling: 'linear-interpolation-with-boxcar-antialias',
     windowing: 'hann',
     spectrum: 'radix2-fft',
     f0: 'YIN (fixed-window cross-correlation via FFT, CMND, absolute threshold, parabolic interpolation, sub-multiple octave check)',
+    f0Ambiguity: 'local integer-ratio candidate competition (2x/3x/4x), observation-only heuristic',
     voicedProbability: 'f0Confidence * levelGate(noiseFloor+12dB)',
     loudness: 'frame RMS / peak (dBFS), reference-normalized',
     activeSegments: 'RMS dual-threshold hysteresis relative to per-recording reference/noise-floor, with gap merging'
@@ -26,6 +27,7 @@ const ENGINE = {
     windowing: '1.0.0',
     spectrum: '1.0.0',
     f0: '1.1.0-phaseA1',
+    f0Ambiguity: '1.0.0-phaseA3',
     voicedProbability: '1.0.0',
     loudness: '1.0.0',
     activeSegments: '1.0.0'
@@ -291,6 +293,11 @@ function analyze(pcmIn, srcRate, cfg) {
     yinInitialCmnd: new Float32Array(nFrames),
     yinSelectedCmnd: new Float32Array(nFrames),
     yinCandidateSource: new Uint8Array(nFrames),
+    // Phase A-3: 本人声と断定しないF0候補と、その局所的な整数比曖昧性。
+    f0CandidateHz: new Float32Array(nFrames),
+    f0CandidateStatus: new Uint8Array(nFrames),
+    f0AmbiguityLevel: new Uint8Array(nFrames),
+    f0AmbiguityFlags: new Uint8Array(nFrames),
     voicedProb: new Float32Array(nFrames),
     centroid: new Float32Array(nFrames),
     bandwidth: new Float32Array(nFrames),
@@ -309,6 +316,7 @@ function analyze(pcmIn, srcRate, cfg) {
   F.yinSelectedF0Hz.fill(NaN);
   F.yinInitialCmnd.fill(NaN);
   F.yinSelectedCmnd.fill(NaN);
+  F.f0CandidateHz.fill(NaN);
 
   const specMaxHz = Math.min(cfg.spectrogramMaxHz, sr / 2);
   const specBinCount = Math.max(1, Math.floor(specMaxHz / binHz));
@@ -466,6 +474,58 @@ function analyze(pcmIn, srcRate, cfg) {
     F.f0Status[n] = 4;
   }
 
+  // --- Phase A-3: F0 candidate + ambiguity ---------------------------------
+  // 目的は『正しいF0を作る』ことではなく、比較に使えそうな候補と、
+  // 短時間に2x/3x/4xの候補が競合した事実を別々に記録すること。
+  // 既存の raw/filtered/usable_vocal/f0_status は後方互換のため一切変更しない。
+  // candidateStatus: 0=no_f0, 1=low_confidence, 2=candidate
+  // ambiguityFlags bit: 1=local_2x, 2=local_3x, 4=local_4x, 8=rapid_relation,
+  //                     16=legacy_isolated_disagreement
+  // ambiguityLevel: 0=none, 1=caution(local relation), 2=strong(rapid or legacy disagreement)
+  const ambiguityLocalSec = isFinite(cfg.f0AmbiguityLocalWindowSec) ? cfg.f0AmbiguityLocalWindowSec : 0.12;
+  const ambiguityRapidSec = isFinite(cfg.f0AmbiguityRapidWindowSec) ? cfg.f0AmbiguityRapidWindowSec : 0.04;
+  const ambiguityToleranceCent = isFinite(cfg.f0AmbiguityRatioToleranceCent) ? cfg.f0AmbiguityRatioToleranceCent : 50;
+  const localFrames = Math.max(1, Math.round(ambiguityLocalSec * 1000 / cfg.hopSizeMs));
+  const rapidFrames = Math.max(1, Math.round(ambiguityRapidSec * 1000 / cfg.hopSizeMs));
+  const candidateOk = new Uint8Array(nFrames);
+
+  for (let n = 0; n < nFrames; n++) {
+    const hz = F.rawF0Hz[n];
+    if (!isFinite(hz)) { F.f0CandidateStatus[n] = 0; continue; }
+    if (F.f0Conf[n] < usableMinConfidence) { F.f0CandidateStatus[n] = 1; continue; }
+    // voicedProb は confidence × 録音内レベルゲートであり、本人歌声の独立した確率ではない。
+    // Phase A-3では候補採用の必須条件にせず、証拠量としてサマリーへ別記する。
+    F.f0CandidateHz[n] = hz;
+    F.f0CandidateStatus[n] = 2;
+    candidateOk[n] = 1;
+  }
+
+  const relationBit = (a, b) => {
+    if (!(a > 0 && b > 0)) return 0;
+    const ratio = Math.max(a, b) / Math.min(a, b);
+    for (const pair of [[2, 1], [3, 2], [4, 4]]) {
+      const cents = Math.abs(1200 * Math.log2(ratio / pair[0]));
+      if (cents <= ambiguityToleranceCent) return pair[1];
+    }
+    return 0;
+  };
+
+  for (let n = 0; n < nFrames; n++) {
+    if (!candidateOk[n]) continue;
+    let mask = 0;
+    for (let j = Math.max(0, n - localFrames); j <= Math.min(nFrames - 1, n + localFrames); j++) {
+      if (j === n || !candidateOk[j]) continue;
+      const bit = relationBit(F.f0CandidateHz[n], F.f0CandidateHz[j]);
+      if (!bit) continue;
+      mask |= bit;
+      if (Math.abs(j - n) <= rapidFrames) mask |= 8;
+    }
+    if (F.f0Status[n] === 3) mask |= 16; // 旧フィルタが孤立点として除外した候補も消さずに記録
+    F.f0AmbiguityFlags[n] = mask;
+    if ((mask & 8) || (mask & 16)) F.f0AmbiguityLevel[n] = 2;
+    else if (mask & 7) F.f0AmbiguityLevel[n] = 1;
+  }
+
   // --- 活動区間（伴奏を含むため「本人の発声」とは断定しない） ---
   // カラオケ録音は伴奏が鳴り続けるためダイナミックレンジが狭い。
   // 絶対的な「無音」を基準にすると区間が1件も取れないので、その録音自身の
@@ -556,6 +616,57 @@ function analyze(pcmIn, srcRate, cfg) {
         else counts.noCandidate++;
       }
       return counts;
+    })(),
+    f0CandidateEvidence: (() => {
+      const vals = [];
+      let candidateFrameCount = 0, levelSupportedCandidateFrameCount = 0, cautionFrameCount = 0, strongFrameCount = 0;
+      let relation2xFrameCount = 0, relation3xFrameCount = 0, relation4xFrameCount = 0;
+      let rapidFrameCount = 0, legacyIsolatedDisagreementFrameCount = 0;
+      for (let n = 0; n < nFrames; n++) {
+        if (!isFinite(F.f0CandidateHz[n])) continue;
+        candidateFrameCount++;
+        if (F.voicedProb[n] >= usableMinVoicedProbability) levelSupportedCandidateFrameCount++;
+        vals.push(F.f0CandidateHz[n]);
+        if (F.f0AmbiguityLevel[n] === 1) cautionFrameCount++;
+        else if (F.f0AmbiguityLevel[n] === 2) strongFrameCount++;
+        const m = F.f0AmbiguityFlags[n];
+        if (m & 1) relation2xFrameCount++;
+        if (m & 2) relation3xFrameCount++;
+        if (m & 4) relation4xFrameCount++;
+        if (m & 8) rapidFrameCount++;
+        if (m & 16) legacyIsolatedDisagreementFrameCount++;
+      }
+      const anyFrameCount = cautionFrameCount + strongFrameCount;
+      return {
+        definition: 'raw YIN selected F0 passing confidence threshold only; no level-gate requirement and no isolated-outlier deletion',
+        totalFrameCount: nFrames,
+        rawF0FrameCount: (() => { let c = 0; for (let n = 0; n < nFrames; n++) if (isFinite(F.rawF0Hz[n])) c++; return c; })(),
+        candidateFrameCount,
+        candidateFrameRatio: +(candidateFrameCount / nFrames).toFixed(4),
+        levelSupportedCandidateFrameCount,
+        levelSupportedRatioOfCandidate: candidateFrameCount ? +(levelSupportedCandidateFrameCount / candidateFrameCount).toFixed(4) : null,
+        candidateDurationSec: +(candidateFrameCount * cfg.hopSizeMs / 1000).toFixed(3),
+        p05Hz: vals.length ? +percentile(vals, 0.05).toFixed(2) : null,
+        p50Hz: vals.length ? +median(vals).toFixed(2) : null,
+        p95Hz: vals.length ? +percentile(vals, 0.95).toFixed(2) : null,
+        ambiguity: {
+          heuristicVersion: ENGINE.algorithmVersions.f0Ambiguity,
+          localWindowSec: ambiguityLocalSec,
+          rapidWindowSec: ambiguityRapidSec,
+          ratioToleranceCent: ambiguityToleranceCent,
+          testedRatios: [2, 3, 4],
+          cautionFrameCount,
+          strongFrameCount,
+          anyFrameCount,
+          anyRatioOfCandidate: candidateFrameCount ? +(anyFrameCount / candidateFrameCount).toFixed(4) : null,
+          relation2xFrameCount,
+          relation3xFrameCount,
+          relation4xFrameCount,
+          rapidFrameCount,
+          legacyIsolatedDisagreementFrameCount,
+          interpretation: 'Ambiguity is a caution flag, not an error label or pitch correction. It does not identify the singer.'
+        }
+      };
     })(),
     detectedSegmentCount: detectedSegments.length,
     detectedSegmentTotalSec: +detectedSegments.reduce((a, s) => a + s.durationSec, 0).toFixed(3),

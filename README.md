@@ -1,6 +1,6 @@
-# SongScope v0.2 Phase A-2 Diagnostic
+# SongScope v0.2 Phase A-3
 
-> **Phase A-2 Diagnostic build**: Phase A-1のF0選択アルゴリズム（`f0AlgorithmVersion: 1.1.0-phaseA1`）は変更せず、YINが最初に選んだ候補と `tau/2`・`tau/3` チェック後の候補を記録します。さらに `analysisId`、元音声のSHA-256、`buildId` を出力し、「同じ音源を同じアルゴリズムで比較しているか」を検証可能にします。これはF0精度改善版ではなく、原因切り分け用の診断版です。
+> **Phase A-3 build**: Phase A-1のF0選択アルゴリズム（`f0AlgorithmVersion: 1.1.0-phaseA1`）は変更せず、F0を『本人声の確定値』にしないまま、比較候補 (`f0_candidate_hz`) と短時間の2x/3x/4x整数比競合 (`f0_ambiguity_*`) を分離して記録します。曖昧性は削除・補正ではなく注意情報です。A-2 Diagnosticで確定したYIN内部診断列、`analysisId`、音声SHA-256、`buildId` も維持します。
 
 
 カラオケで録音した自分の歌を、**あとから人間とChatGPTが客観的に比較・検証できるデータ**に変換するための、iPhone向けWebアプリ（PWA）です。
@@ -17,7 +17,7 @@
   を追加します。
 - `yin_selection_divisor` は `1=変更なし`, `2=tau/2`, `3=tau/3` を表します。
 - `usable_vocal_f0_hz` は互換のため残していますが、本人声のみを保証する値ではありません。
-- Build ID: `20260810-a2diag-02`
+- Build ID: `20260810-a3-01`
 
 ---
 
@@ -341,3 +341,13 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - 画面のバージョン表示に buildId を併記。
 - mutable app assets の network-first fetch ではブラウザ HTTP cache を使わない。
 - F0 アルゴリズム本体は A-1 から変更していない。
+
+
+### A-3: F0 candidate / ambiguity
+
+- `f0_candidate_hz` は、YINのraw候補のうち confidence >= 0.70 を満たした観測候補です。既存の `voiced_probability` は本人歌声の確率ではなく、F0 confidence と録音内レベルゲートを掛けた複合指標なので、A-3では候補採用の必須条件から外し、補助的な証拠量としてだけ残します。
+- 旧 `usable_vocal_f0_hz` は後方互換のため残しますが、本人声の確定F0とは解釈しません。A-3では孤立点を勝手に削除せず candidate として保持し、必要なら `legacy_isolated_disagreement` を付けます。
+- `f0_ambiguity_level` は `none / caution / strong`。`f0_ambiguity_flags` は局所2x/3x/4x関係、急速な切替、旧isolated判定との不一致を記録します。
+- 判定窓は local ±0.12 s、rapid ±0.04 s、整数比許容幅 ±50 cent。これは『誤り検出』ではなく、混合カラオケ音声で絶対F0を比較するときの注意フラグです。
+- `summary.json` に candidate の証拠量、p05/p50/p95、曖昧性件数と使用閾値を保存します。最大値・最小値を声域とは呼びません。
+- F0アルゴリズムそのものは `1.1.0-phaseA1` のままです。A-3で追加したのは `f0Ambiguity: 1.0.0-phaseA3` だけです。

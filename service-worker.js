@@ -1,9 +1,9 @@
-/* SongScope service worker — Phase A-2 Diagnostic.
+/* SongScope service worker — Phase A-3.
  * 録音・解析結果は IndexedDB にあり、ここでは扱わない。外部通信も行わない。
  * 変更頻度の高いアプリ資産は network-first、アイコン等は cache-first。
  */
-const CACHE = 'songscope-v0.2.0-phaseA2diag-20260810-a2diag-02';
-const BUILD_ID = '20260810-a2diag-02';
+const CACHE = 'songscope-v0.2.0-phaseA3-20260810-a3-01';
+const BUILD_ID = '20260810-a3-01';
 const SHELL = [
   './',
   './index.html',

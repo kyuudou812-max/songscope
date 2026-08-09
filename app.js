@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase A-2 Diagnostic  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase A-3  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseA2diag';
-const SCHEMA_VERSION = '0.2.1';
-const BUILD_ID = '20260810-a2diag-02';
+const APP_VERSION = '0.2.0-phaseA3';
+const SCHEMA_VERSION = '0.2.2';
+const BUILD_ID = '20260810-a3-01';
 
 const TAGS = ['高音', '低音', 'リズム', '歌詞', '譜割り', '息', '力み', '音程',
   '語尾', '発音', '表現', '違和感', '良かった', '好き', 'その他'];
@@ -29,6 +29,10 @@ const DEFAULT_SETTINGS = {
   usableF0MinVoicedProbability: 0.45,
   f0IsolatedOutlierWindowFrames: 2,
   f0IsolatedOutlierThresholdCent: 700,
+  // Phase A-3: F0を訂正せず、短時間に競合する整数比候補を『曖昧性』として記録する。
+  f0AmbiguityLocalWindowSec: 0.12,
+  f0AmbiguityRapidWindowSec: 0.04,
+  f0AmbiguityRatioToleranceCent: 50,
   yinThreshold: 0.15,
   loudnessReference: 'p95_of_frame_rms_db',
   spectrogramMaxHz: 8000,
@@ -664,9 +668,12 @@ function renderSummary() {
     ['analysis sampleRate', s.analysisSampleRate + ' Hz'],
     ['frame / hop', s.frameSizeMs + ' ms / ' + s.hopSizeMs + ' ms'],
     ['frames', s.frameCount],
-    ['median F0', s.medianF0Hz === null ? 'null' : s.medianF0Hz + ' Hz'],
-    ['F0 range', s.minF0Hz === null ? 'null' : s.minF0Hz + ' – ' + s.maxF0Hz + ' Hz'],
-    ['valid F0 ratio', s.validF0FrameRatio],
+    ['legacy median F0', s.medianF0Hz === null ? 'null' : s.medianF0Hz + ' Hz'],
+    ['legacy detected F0 range', s.minF0Hz === null ? 'null' : s.minF0Hz + ' – ' + s.maxF0Hz + ' Hz'],
+    ['legacy valid F0 ratio', s.validF0FrameRatio],
+    ['F0 candidate p05 / p50 / p95', s.f0CandidateEvidence && s.f0CandidateEvidence.p05Hz !== null ? s.f0CandidateEvidence.p05Hz + ' / ' + s.f0CandidateEvidence.p50Hz + ' / ' + s.f0CandidateEvidence.p95Hz + ' Hz' : 'null'],
+    ['F0 candidate ratio', s.f0CandidateEvidence ? s.f0CandidateEvidence.candidateFrameRatio : 'null'],
+    ['F0 ambiguity', s.f0CandidateEvidence ? ('strong ' + s.f0CandidateEvidence.ambiguity.strongFrameCount + ' / caution ' + s.f0CandidateEvidence.ambiguity.cautionFrameCount + ' / candidate ' + s.f0CandidateEvidence.candidateFrameCount) : 'null'],
     ['median RMS', s.medianRmsDb + ' dBFS'],
     ['RMS range', s.rmsRangeDb + ' dB'],
     ['peak', s.peakDb + ' dBFS'],
@@ -676,7 +683,7 @@ function renderSummary() {
     ['engine', e.analysisEngineName + ' v' + e.analysisEngineVersion],
     ['f0 algorithm', e.algorithmNames.f0 + ' v' + e.algorithmVersions.f0],
     ['minimumConfidence', c.minimumConfidence],
-    ['experimental features', 'not implemented (v0.2 Phase A-2 Diagnostic)'],
+    ['experimental features', 'not implemented (v0.2 Phase A-3)'],
     ['analyzed at', fmtDate(an.createdAt)]
   ];
   box.innerHTML = rows.map(r => `<div>${escapeHtml(r[0])}: <b>${escapeHtml(String(r[1]))}</b></div>`).join('');
@@ -1484,6 +1491,31 @@ function yinCandidateSourceLabel(code) {
     default: return '';
   }
 }
+function f0CandidateStatusLabel(code) {
+  switch (code) {
+    case 0: return 'no_f0';
+    case 1: return 'low_confidence';
+    case 2: return 'candidate';
+    default: return '';
+  }
+}
+function f0AmbiguityLevelLabel(code) {
+  switch (code) {
+    case 0: return 'none';
+    case 1: return 'caution';
+    case 2: return 'strong';
+    default: return '';
+  }
+}
+function f0AmbiguityFlagsLabel(mask) {
+  const a = [];
+  if (mask & 1) a.push('local_2x_relation');
+  if (mask & 2) a.push('local_3x_relation');
+  if (mask & 4) a.push('local_4x_relation');
+  if (mask & 8) a.push('rapid_relation');
+  if (mask & 16) a.push('legacy_isolated_disagreement');
+  return a.join('|');
+}
 function framesCsv(an) {
   const F = an.frames, n = F.timeSec.length;
   // 既存16列は順序・意味を維持し、Phase A-1列を末尾に追加する。
@@ -1492,7 +1524,8 @@ function framesCsv(an) {
     'spectral_rolloff_hz', 'spectral_flux', 'spectral_flatness', 'rms_delta', 'f0_delta',
     'raw_f0_hz', 'raw_f0_midi', 'filtered_f0_hz', 'usable_vocal_f0_hz', 'f0_status',
     'yin_initial_f0_hz', 'yin_selected_f0_hz', 'yin_selection_divisor',
-    'yin_initial_cmnd', 'yin_selected_cmnd', 'yin_candidate_source'];
+    'yin_initial_cmnd', 'yin_selected_cmnd', 'yin_candidate_source',
+    'f0_candidate_hz', 'f0_candidate_status', 'f0_ambiguity_level', 'f0_ambiguity_flags'];
   const rows = new Array(n + 1);
   rows[0] = head.join(',');
   for (let i = 0; i < n; i++) {
@@ -1509,7 +1542,11 @@ function framesCsv(an) {
       num(F.yinSelectionDivisor && F.yinSelectionDivisor[i], 0),
       num(F.yinInitialCmnd && F.yinInitialCmnd[i], 5),
       num(F.yinSelectedCmnd && F.yinSelectedCmnd[i], 5),
-      yinCandidateSourceLabel(F.yinCandidateSource ? F.yinCandidateSource[i] : null)
+      yinCandidateSourceLabel(F.yinCandidateSource ? F.yinCandidateSource[i] : null),
+      num(F.f0CandidateHz && F.f0CandidateHz[i], 2),
+      f0CandidateStatusLabel(F.f0CandidateStatus ? F.f0CandidateStatus[i] : null),
+      f0AmbiguityLevelLabel(F.f0AmbiguityLevel ? F.f0AmbiguityLevel[i] : null),
+      f0AmbiguityFlagsLabel(F.f0AmbiguityFlags ? F.f0AmbiguityFlags[i] : 0)
     ].join(',');
   }
   return rows.join('\n') + '\n';
@@ -1599,7 +1636,8 @@ function buildSummaryJson(an) {
       audioSha256: an.audioSha256 || rec.audioSha256 || null,
       audioHashAlgorithm: an.audioHashAlgorithm || rec.audioHashAlgorithm || 'SHA-256',
       audioHashError: an.audioHashError || null,
-      f0AlgorithmVersion: an.engine && an.engine.algorithmVersions ? an.engine.algorithmVersions.f0 : null
+      f0AlgorithmVersion: an.engine && an.engine.algorithmVersions ? an.engine.algorithmVersions.f0 : null,
+      f0AmbiguityAlgorithmVersion: an.engine && an.engine.algorithmVersions ? an.engine.algorithmVersions.f0Ambiguity : null
     } : null,
     markers: state.markers.map(m => ({
       markerId: m.markerId, timeSec: m.timeSec, tag: m.tag, memo: m.memo || '', createdAt: m.createdAt
@@ -1613,7 +1651,7 @@ function buildSummaryJson(an) {
     engine: an ? Object.assign({}, an.engine, { analysisSettings: an.settings, createdAt: an.createdAt }) : null,
     interpretationPolicy: {
       principle: 'Observations only. This file contains measurements, not judgements.',
-      doNot: ['歌唱力・上手さの判定', '測定値からの断定的な因果推論', '録音間の絶対dB比較'],
+      doNot: ['歌唱力・上手さの判定', '測定値からの断定的な因果推論', '録音間の絶対dB比較', 'f0_candidate_hz を本人声の確定F0・声域として扱うこと'],
       recommended: ['同一条件に近い録音同士の比較', '仮説 → 実験 → 検証のループ']
     }
   };
@@ -1643,9 +1681,16 @@ function buildReportMd(an) {
   L.push(ACCOMP_NOTE_EN, '');
   L.push('## Analysis', '');
   if (s) {
-    L.push(`Median F0: ${s.medianF0Hz === null ? 'null' : s.medianF0Hz + ' Hz'}`);
-    L.push(`F0 Range: ${s.minF0Hz === null ? 'null' : s.minF0Hz + ' – ' + s.maxF0Hz + ' Hz'}`);
-    L.push(`Valid F0 Ratio: ${s.validF0FrameRatio}`);
+    L.push(`Legacy median F0: ${s.medianF0Hz === null ? 'null' : s.medianF0Hz + ' Hz'}`);
+    L.push(`Legacy detected F0 range: ${s.minF0Hz === null ? 'null' : s.minF0Hz + ' – ' + s.maxF0Hz + ' Hz'} (do not interpret as vocal range)`);
+    L.push(`Legacy valid F0 ratio: ${s.validF0FrameRatio}`);
+    if (s.f0CandidateEvidence) {
+      const q = s.f0CandidateEvidence;
+      L.push(`F0 candidate robust distribution p05 / p50 / p95: ${q.p05Hz} / ${q.p50Hz} / ${q.p95Hz} Hz`);
+      L.push(`F0 candidate evidence: ${q.candidateFrameCount}/${q.totalFrameCount} frames (${q.candidateFrameRatio}), approx ${q.candidateDurationSec} s`);
+      L.push(`F0 ambiguity heuristic: strong=${q.ambiguity.strongFrameCount}, caution=${q.ambiguity.cautionFrameCount}, any=${q.ambiguity.anyFrameCount} (${q.ambiguity.anyRatioOfCandidate} of candidates)`);
+      L.push('F0 candidate note: candidate/ambiguity values are observations from mixed karaoke audio; they do not identify the singer and are not a confirmed vocal range.');
+    }
     L.push('');
     L.push(`Median RMS: ${s.medianRmsDb} dBFS`);
     L.push(`RMS Range: ${s.rmsRangeDb} dB`);
@@ -1668,8 +1713,9 @@ function buildReportMd(an) {
         ', divisor3=' + s.yinDiagnostics.divisor3 +
         ', noCandidate=' + s.yinDiagnostics.noCandidate);
     }
-    L.push('Phase A-2 Diagnostic adds YIN candidate-selection provenance only; the F0 selection algorithm remains v1.1.0-phaseA1.');
-    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.2 Phase A-2 Diagnostic.');
+    L.push('Phase A-3 keeps the F0 selection algorithm at v1.1.0-phaseA1 and adds a non-corrective ambiguity heuristic for local 2x/3x/4x candidate competition.');
+    if (an.engine.algorithmVersions.f0Ambiguity) L.push('F0 ambiguity heuristic: ' + an.engine.algorithmNames.f0Ambiguity + ' v' + an.engine.algorithmVersions.f0Ambiguity);
+    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.2 Phase A-3.');
   } else {
     L.push('Analysis not available for this recording (decode or analysis failed).');
     L.push('User markers and segments below are still valid observations.');
