@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase A-1  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase A-2 Diagnostic  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,8 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseA1';
-const SCHEMA_VERSION = '0.2.0';
+const APP_VERSION = '0.2.0-phaseA2diag';
+const SCHEMA_VERSION = '0.2.1';
+const BUILD_ID = '20260810-a2diag-02';
 
 const TAGS = ['高音', '低音', 'リズム', '歌詞', '譜割り', '息', '力み', '音程',
   '語尾', '発音', '表現', '違和感', '良かった', '好き', 'その他'];
@@ -74,6 +75,11 @@ function fmtBytes(n) {
   return n.toFixed(i ? 1 : 0) + ' ' + u[i];
 }
 function num(v, d = 2) { return (v === null || v === undefined || !isFinite(v)) ? '' : Number(v).toFixed(d); }
+async function sha256Hex(arrayBuffer) {
+  if (!self.crypto || !crypto.subtle) throw new Error('SHA-256 unavailable');
+  const digest = await crypto.subtle.digest('SHA-256', arrayBuffer);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
 function safeName(s) {
   return String(s || 'recording').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'recording';
 }
@@ -282,7 +288,7 @@ function renderHome() {
     el.addEventListener('click', () => openRecording(rec.recordingId));
     wrap.appendChild(el);
   }
-  $$('.app-ver').forEach(e => e.textContent = APP_VERSION);
+  $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
 }
 
 function escapeHtml(s) {
@@ -471,6 +477,17 @@ async function startAnalysis(rec, fileMaybe) {
       file = a.blob;
     }
     const ab = await file.arrayBuffer();
+    let audioSha256 = null;
+    let audioHashError = '';
+    try {
+      audioSha256 = await sha256Hex(ab);
+      rec.audioSha256 = audioSha256;
+      rec.audioHashAlgorithm = 'SHA-256';
+    } catch (hashErr) {
+      audioHashError = (hashErr && hashErr.message) || String(hashErr);
+      rec.audioSha256 = null;
+      rec.audioHashAlgorithm = 'SHA-256';
+    }
     let audioBuffer;
     try {
       audioBuffer = await decodeAudio(ab);
@@ -492,7 +509,13 @@ async function startAnalysis(rec, fileMaybe) {
 
     const record = {
       recordingId: rec.recordingId,
+      analysisId: uid('ana'),
       schemaVersion: SCHEMA_VERSION,
+      appVersion: APP_VERSION,
+      buildId: BUILD_ID,
+      audioSha256,
+      audioHashAlgorithm: 'SHA-256',
+      audioHashError: audioHashError || null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
       settings: cfg,
@@ -541,7 +564,7 @@ async function startAnalysis(rec, fileMaybe) {
 function runWorker(mono, srcRate, cfg, onProgress) {
   return new Promise((res, rej) => {
     let w;
-    try { w = new Worker('audio-analysis-worker.js'); }
+    try { w = new Worker('audio-analysis-worker.js?v=' + encodeURIComponent(BUILD_ID)); }
     catch (e) { rej(new Error('解析ワーカーを起動できません')); return; }
     state.worker = w;
     w.onmessage = ev => {
@@ -653,7 +676,7 @@ function renderSummary() {
     ['engine', e.analysisEngineName + ' v' + e.analysisEngineVersion],
     ['f0 algorithm', e.algorithmNames.f0 + ' v' + e.algorithmVersions.f0],
     ['minimumConfidence', c.minimumConfidence],
-    ['experimental features', 'not implemented (v0.2 Phase A-1)'],
+    ['experimental features', 'not implemented (v0.2 Phase A-2 Diagnostic)'],
     ['analyzed at', fmtDate(an.createdAt)]
   ];
   box.innerHTML = rows.map(r => `<div>${escapeHtml(r[0])}: <b>${escapeHtml(String(r[1]))}</b></div>`).join('');
@@ -1452,13 +1475,24 @@ function f0StatusLabel(code) {
     default: return '';
   }
 }
+function yinCandidateSourceLabel(code) {
+  switch (code) {
+    case 1: return 'threshold_first_min';
+    case 2: return 'global_cmnd_min';
+    case 3: return 'submultiple_2';
+    case 4: return 'submultiple_3';
+    default: return '';
+  }
+}
 function framesCsv(an) {
   const F = an.frames, n = F.timeSec.length;
   // 既存16列は順序・意味を維持し、Phase A-1列を末尾に追加する。
   const head = ['time_sec', 'rms_db', 'rms_relative_db', 'peak_db', 'crest_factor', 'f0_hz', 'f0_midi',
     'f0_confidence', 'voiced_probability', 'spectral_centroid_hz', 'spectral_bandwidth_hz',
     'spectral_rolloff_hz', 'spectral_flux', 'spectral_flatness', 'rms_delta', 'f0_delta',
-    'raw_f0_hz', 'raw_f0_midi', 'filtered_f0_hz', 'usable_vocal_f0_hz', 'f0_status'];
+    'raw_f0_hz', 'raw_f0_midi', 'filtered_f0_hz', 'usable_vocal_f0_hz', 'f0_status',
+    'yin_initial_f0_hz', 'yin_selected_f0_hz', 'yin_selection_divisor',
+    'yin_initial_cmnd', 'yin_selected_cmnd', 'yin_candidate_source'];
   const rows = new Array(n + 1);
   rows[0] = head.join(',');
   for (let i = 0; i < n; i++) {
@@ -1469,7 +1503,13 @@ function framesCsv(an) {
       num(F.rmsDelta[i], 3), num(F.f0Delta[i], 3),
       num(F.rawF0Hz && F.rawF0Hz[i], 2), num(F.rawF0Midi && F.rawF0Midi[i], 3),
       num(F.filteredF0Hz && F.filteredF0Hz[i], 2), num(F.usableVocalF0Hz && F.usableVocalF0Hz[i], 2),
-      f0StatusLabel(F.f0Status ? F.f0Status[i] : null)
+      f0StatusLabel(F.f0Status ? F.f0Status[i] : null),
+      num(F.yinInitialF0Hz && F.yinInitialF0Hz[i], 2),
+      num(F.yinSelectedF0Hz && F.yinSelectedF0Hz[i], 2),
+      num(F.yinSelectionDivisor && F.yinSelectionDivisor[i], 0),
+      num(F.yinInitialCmnd && F.yinInitialCmnd[i], 5),
+      num(F.yinSelectedCmnd && F.yinSelectedCmnd[i], 5),
+      yinCandidateSourceLabel(F.yinCandidateSource ? F.yinCandidateSource[i] : null)
     ].join(',');
   }
   return rows.join('\n') + '\n';
@@ -1512,7 +1552,7 @@ function buildSummaryJson(an) {
   const rec = state.rec;
   return {
     schemaVersion: SCHEMA_VERSION,
-    app: { name: 'SongScope', version: APP_VERSION },
+    app: { name: 'SongScope', version: APP_VERSION, buildId: BUILD_ID },
     exportedAt: nowIso(),
     recording: {
       recordingId: rec.recordingId,
@@ -1528,7 +1568,9 @@ function buildSummaryJson(an) {
       channels: rec.channels || null,
       fileName: rec.fileName || null,
       mimeType: rec.mimeType || null,
-      fileSize: rec.fileSize || null
+      fileSize: rec.fileSize || null,
+      audioSha256: (an && an.audioSha256) || rec.audioSha256 || null,
+      audioHashAlgorithm: (an && an.audioHashAlgorithm) || rec.audioHashAlgorithm || 'SHA-256'
     },
     metadata: {
       damScore: rec.damScore || null,
@@ -1544,7 +1586,21 @@ function buildSummaryJson(an) {
       note: ACCOMP_NOTE_EN,
       noteJa: 'カラオケ伴奏・部屋の反響・自動マイクゲインを含む可能性があります。ピッチ／スペクトル系の値は本人の声だけを表すものではありません。'
     },
-    analysis: an ? Object.assign({}, an.summary, { settings: an.settings, analyzedAt: an.createdAt }) : null,
+    analysis: an ? Object.assign({}, an.summary, {
+      settings: an.settings,
+      analyzedAt: an.createdAt,
+      analysisId: an.analysisId || null
+    }) : null,
+    analysisProvenance: an ? {
+      analysisId: an.analysisId || null,
+      appVersion: an.appVersion || APP_VERSION,
+      buildId: an.buildId || BUILD_ID,
+      schemaVersion: an.schemaVersion || SCHEMA_VERSION,
+      audioSha256: an.audioSha256 || rec.audioSha256 || null,
+      audioHashAlgorithm: an.audioHashAlgorithm || rec.audioHashAlgorithm || 'SHA-256',
+      audioHashError: an.audioHashError || null,
+      f0AlgorithmVersion: an.engine && an.engine.algorithmVersions ? an.engine.algorithmVersions.f0 : null
+    } : null,
     markers: state.markers.map(m => ({
       markerId: m.markerId, timeSec: m.timeSec, tag: m.tag, memo: m.memo || '', createdAt: m.createdAt
     })),
@@ -1581,6 +1637,7 @@ function buildReportMd(an) {
   L.push(`ScoringMode: ${rec.scoringMode || ''}`);
   L.push(`RecordingSetup: ${rec.recordingSetupPreset || ''}`);
   L.push(`RecordingId: ${rec.recordingId}`);
+  L.push(`AudioSHA256: ${(an && an.audioSha256) || rec.audioSha256 || ''}`);
   if (rec.memo) L.push('', `Memo: ${rec.memo}`);
   L.push('', '## Recording limitations', '');
   L.push(ACCOMP_NOTE_EN, '');
@@ -1598,10 +1655,21 @@ function buildReportMd(an) {
     L.push(`Detected segments: ${s.detectedSegmentCount} (total ${s.detectedSegmentTotalSec} s)`);
     L.push('');
     L.push('Frame settings: ' + s.frameSizeMs + ' ms frame / ' + s.hopSizeMs + ' ms hop @ ' + s.analysisSampleRate + ' Hz');
+    L.push('AnalysisId: ' + (an.analysisId || ''));
+    L.push('AppVersion: ' + (an.appVersion || APP_VERSION));
+    L.push('BuildId: ' + (an.buildId || BUILD_ID));
+    L.push('SchemaVersion: ' + (an.schemaVersion || SCHEMA_VERSION));
     L.push('Engine: ' + an.engine.analysisEngineName + ' v' + an.engine.analysisEngineVersion);
     L.push('F0 algorithm: ' + an.engine.algorithmNames.f0 + ' v' + an.engine.algorithmVersions.f0);
     L.push('minimumConfidence: ' + an.settings.minimumConfidence);
-    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.2 Phase A-1.');
+    if (s.yinDiagnostics) {
+      L.push('YIN selection counts: unchanged=' + s.yinDiagnostics.unchanged +
+        ', divisor2=' + s.yinDiagnostics.divisor2 +
+        ', divisor3=' + s.yinDiagnostics.divisor3 +
+        ', noCandidate=' + s.yinDiagnostics.noCandidate);
+    }
+    L.push('Phase A-2 Diagnostic adds YIN candidate-selection provenance only; the F0 selection algorithm remains v1.1.0-phaseA1.');
+    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.2 Phase A-2 Diagnostic.');
   } else {
     L.push('Analysis not available for this recording (decode or analysis failed).');
     L.push('User markers and segments below are still valid observations.');
@@ -1715,7 +1783,11 @@ async function backupAll() {
         recording: r,
         markers: mk,
         segments: sg,
-        analysisSummary: an ? { summary: an.summary, settings: an.settings, engine: an.engine, detectedSegments: an.detectedSegments, createdAt: an.createdAt } : null
+        analysisSummary: an ? {
+          analysisId: an.analysisId || null, appVersion: an.appVersion || null, buildId: an.buildId || null,
+          audioSha256: an.audioSha256 || null, summary: an.summary, settings: an.settings,
+          engine: an.engine, detectedSegments: an.detectedSegments, createdAt: an.createdAt
+        } : null
       });
     }
     out.note = 'frames等のフレーム単位データは含まれません。原本の音声から再解析すれば同じ設定で再現できます（engine.analysisSettingsを参照）。';
@@ -2149,11 +2221,11 @@ async function init() {
   loadSettings();
   state.confMin = settings.minimumConfidence;
   wireHome(); wireSheets(); wireReview(); wireCompare(); wireGlobal();
-  $$('.app-ver').forEach(e => e.textContent = APP_VERSION);
+  $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
   await loadRecordings();
   refreshStorageEstimate();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('service-worker.js').catch(() => { });
+    navigator.serviceWorker.register('service-worker.js?v=' + encodeURIComponent(BUILD_ID)).catch(() => { });
   }
 }
 document.addEventListener('DOMContentLoaded', init);

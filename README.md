@@ -1,6 +1,6 @@
-# SongScope v0.2 Phase A-1
+# SongScope v0.2 Phase A-2 Diagnostic
 
-> **Phase A-1 test build**: v0.1の既存出力を維持したまま、`frames.csv` に `raw_f0_hz`, `raw_f0_midi`, `filtered_f0_hz`, `usable_vocal_f0_hz`, `f0_status` を追加しています。`usable_vocal_f0_hz` は暫定フィルタ（confidence 0.70 / voiced probability 0.45 / 孤立外れ値 700 cent）による比較利用候補であり、正しい音程や本人声のみを保証する値ではありません。
+> **Phase A-2 Diagnostic build**: Phase A-1のF0選択アルゴリズム（`f0AlgorithmVersion: 1.1.0-phaseA1`）は変更せず、YINが最初に選んだ候補と `tau/2`・`tau/3` チェック後の候補を記録します。さらに `analysisId`、元音声のSHA-256、`buildId` を出力し、「同じ音源を同じアルゴリズムで比較しているか」を検証可能にします。これはF0精度改善版ではなく、原因切り分け用の診断版です。
 
 
 カラオケで録音した自分の歌を、**あとから人間とChatGPTが客観的に比較・検証できるデータ**に変換するための、iPhone向けWebアプリ（PWA）です。
@@ -10,6 +10,14 @@
 
 - 音声はすべて**あなたのiPhoneの中だけ**で処理されます。外部サーバーへの送信は一切ありません。
 - ログイン不要・サーバー不要・課金なし。
+
+- Phase A-2 Diagnostic の `frames.csv` では、従来21列の後ろに
+  `yin_initial_f0_hz`, `yin_selected_f0_hz`, `yin_selection_divisor`,
+  `yin_initial_cmnd`, `yin_selected_cmnd`, `yin_candidate_source`
+  を追加します。
+- `yin_selection_divisor` は `1=変更なし`, `2=tau/2`, `3=tau/3` を表します。
+- `usable_vocal_f0_hz` は互換のため残していますが、本人声のみを保証する値ではありません。
+- Build ID: `20260810-a2diag-02`
 
 ---
 
@@ -44,15 +52,13 @@ songscope/
 ├─ manifest.json
 ├─ service-worker.js
 ├─ README.md
-├─ lib/
-│   └─ zip.js
-└─ icons/
-    ├─ icon-180.png
-    ├─ icon-192.png
-    └─ icon-512.png
+├─ zip.js
+├─ icon-180.png
+├─ icon-192.png
+└─ icon-512.png
 ```
 
-**注意：** ファイル名・フォルダ名は変えないでください。`app.js` が `audio-analysis-worker.js` や `lib/zip.js` をこの名前で読み込みます。
+**注意：** 現在のGitHub Pages版はすべてルート直下に置く構成です。ファイル名は変えないでください。`app.js` は `audio-analysis-worker.js` を、`index.html` は `zip.js` と `app.js` をこの名前で読み込みます。
 
 > PCのブラウザで `index.html` をダブルクリックして開くだけでも動作しますが、**Web Worker と Service Worker が動かないため**、解析が始まらないことがあります。次の手順でHTTPS環境に置くのが確実です。
 
@@ -270,7 +276,7 @@ jitter / shimmer / HNR / CPP / フォルマント / MFCC は実装していま�
 | `styles.css` | 見た目。ダークモードは自動で切り替わります |
 | `app.js` | UI・保存(IndexedDB)・グラフ描画・書き出し |
 | `audio-analysis-worker.js` | 音響解析の本体。別スレッドで動くので画面が固まりません |
-| `lib/zip.js` | ZIP生成（無圧縮）。**外部ライブラリはこれ1つだけ**で、自作・ローカル同梱・通信なし |
+| `zip.js` | ZIP生成（無圧縮）。自作・ローカル同梱・通信なし |
 | `manifest.json` | ホーム画面に追加したときの名前やアイコン |
 | `service-worker.js` | オフライン起動用のキャッシュ（アプリ本体のみ。録音は扱いません） |
 
@@ -329,3 +335,9 @@ iOSがストレージを解放した可能性があります。原本の音声�
 ---
 
 SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
+
+
+### A-2 Diagnostic build 02
+- 画面のバージョン表示に buildId を併記。
+- mutable app assets の network-first fetch ではブラウザ HTTP cache を使わない。
+- F0 アルゴリズム本体は A-1 から変更していない。

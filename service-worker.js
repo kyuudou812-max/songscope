@@ -1,12 +1,15 @@
-/* SongScope service worker — アプリシェルのみキャッシュする。
- * 録音・解析結果は IndexedDB にあり、ここでは扱わない。外部通信も行わない。 */
-const CACHE = 'songscope-v0.2.0-phaseA1';
+/* SongScope service worker — Phase A-2 Diagnostic.
+ * 録音・解析結果は IndexedDB にあり、ここでは扱わない。外部通信も行わない。
+ * 変更頻度の高いアプリ資産は network-first、アイコン等は cache-first。
+ */
+const CACHE = 'songscope-v0.2.0-phaseA2diag-20260810-a2diag-02';
+const BUILD_ID = '20260810-a2diag-02';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
-  './app.js',
-  './audio-analysis-worker.js',
+  './app.js?v=' + BUILD_ID,
+  './audio-analysis-worker.js?v=' + BUILD_ID,
   './zip.js',
   './manifest.json',
   './icon-180.png',
@@ -25,18 +28,43 @@ self.addEventListener('activate', e => {
   );
 });
 
+function isMutableRequest(req, url) {
+  if (req.mode === 'navigate') return true;
+  const p = url.pathname;
+  return p.endsWith('/index.html') || p.endsWith('/app.js') || p.endsWith('/audio-analysis-worker.js') ||
+    p.endsWith('/styles.css') || p.endsWith('/manifest.json') || p.endsWith('/service-worker.js');
+}
+
+async function networkFirst(req) {
+  const cache = await caches.open(CACHE);
+  try {
+    const res = await fetch(req, { cache: 'no-store' });
+    if (res && res.status === 200 && res.type === 'basic') cache.put(req, res.clone()).catch(() => {});
+    return res;
+  } catch (err) {
+    const hit = await cache.match(req);
+    if (hit) return hit;
+    if (req.mode === 'navigate') {
+      const fallback = await cache.match('./index.html');
+      if (fallback) return fallback;
+    }
+    throw err;
+  }
+}
+
+async function cacheFirst(req) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(req);
+  if (hit) return hit;
+  const res = await fetch(req);
+  if (res && res.status === 200 && res.type === 'basic') cache.put(req, res.clone()).catch(() => {});
+  return res;
+}
+
 self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return; // 外部への通信は素通し（このアプリは外部を使わない）
-  e.respondWith(
-    caches.match(req).then(hit => hit || fetch(req).then(res => {
-      if (res && res.status === 200 && res.type === 'basic') {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
-      }
-      return res;
-    }).catch(() => caches.match('./index.html')))
-  );
+  if (url.origin !== location.origin) return;
+  e.respondWith(isMutableRequest(req, url) ? networkFirst(req) : cacheFirst(req));
 });

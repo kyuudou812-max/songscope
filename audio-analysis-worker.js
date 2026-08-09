@@ -1,4 +1,4 @@
-/* SongScope — audio analysis worker (v0.2 Phase A-1)
+/* SongScope — audio analysis worker (v0.2 Phase A-2 Diagnostic)
  * 入力: モノラルPCM (Float32Array) + 元サンプルレート + 解析設定
  * 出力: フレーム特徴量 / 波形ピーク / スペクトログラム / 検出区間 / サマリー
  *
@@ -11,7 +11,7 @@
 
 const ENGINE = {
   analysisEngineName: 'SongScope Analysis Engine',
-  analysisEngineVersion: '0.2.0-phaseA1',
+  analysisEngineVersion: '0.2.0-phaseA2diag',
   algorithmNames: {
     resampling: 'linear-interpolation-with-boxcar-antialias',
     windowing: 'hann',
@@ -130,7 +130,11 @@ function makeYin(winLen, tauMax, sr, threshold) {
 
   return function estimate(buf, offset, tauMin) {
     const total = Math.min(winLen + tauMax, buf.length - offset);
-    if (total < winLen + 4) return { f0: NaN, conf: 0 };
+    if (total < winLen + 4) return {
+      f0: NaN, conf: 0,
+      initialF0: NaN, selectedF0: NaN, selectionDivisor: 0,
+      initialCmnd: NaN, selectedCmnd: NaN, candidateSource: 0
+    };
     // 固定窓 a = x[0..winLen) と 参照 b = x[0..total) の相互相関を取る。
     // （全区間の自己相関を使うと窓長が tau によって変わり、F0 に系統誤差が出る）
     ar.fill(0); ai.fill(0); br.fill(0); bi.fill(0);
@@ -168,6 +172,7 @@ function makeYin(winLen, tauMax, sr, threshold) {
     }
     // 絶対閾値
     let tau = -1;
+    let candidateSource = 1; // 1=threshold_first_min, 2=global_cmnd_min, 3=submultiple_2, 4=submultiple_3
     for (let t = tauMin; t <= tauMax; t++) {
       if (cmnd[t] < threshold) {
         while (t + 1 <= tauMax && cmnd[t + 1] < cmnd[t]) t++;
@@ -175,12 +180,27 @@ function makeYin(winLen, tauMax, sr, threshold) {
       }
     }
     if (tau < 0) { // 閾値未満なし → 最小値を候補にするが信頼度は低く出る
+      candidateSource = 2;
       let best = tauMin, bv = cmnd[tauMin];
       for (let t = tauMin + 1; t <= tauMax; t++) if (cmnd[t] < bv) { bv = cmnd[t]; best = t; }
       tau = best;
     }
+
+    // Phase A-2 Diagnostic:
+    // 既存F0アルゴリズムの「最初のYIN候補」を保存するだけで、選択ロジック自体は変更しない。
+    const initialTau = tau;
+    const initialCmnd = cmnd[initialTau];
+    let initialBetter = initialTau;
+    if (initialTau > 0 && initialTau < tauMax) {
+      const iy0 = cmnd[initialTau - 1], iy1 = cmnd[initialTau], iy2 = cmnd[initialTau + 1];
+      const iden = 2 * (2 * iy1 - iy2 - iy0);
+      if (Math.abs(iden) > 1e-9) initialBetter = initialTau + (iy2 - iy0) / iden;
+    }
+    const initialF0 = sr / initialBetter;
+
     // オクターブ下取り対策: tau/2, tau/3 付近が同程度に良ければ短い周期を採る。
     // （伴奏の低域が混ざると 2T の谷が深くなり、半分の周波数を返しやすいため）
+    let selectionDivisor = 1;
     for (let k = 2; k <= 3; k++) {
       const cand = Math.round(tau / k);
       if (cand < tauMin) continue;
@@ -188,7 +208,12 @@ function makeYin(winLen, tauMax, sr, threshold) {
       for (let t = Math.max(tauMin, cand - 2); t <= Math.min(tauMax, cand + 2); t++) {
         if (cmnd[t] < bestV) { bestV = cmnd[t]; bestT = t; }
       }
-      if (bestT > 0 && bestV < Math.max(threshold, cmnd[tau] * 1.15) && bestV < 0.35) { tau = bestT; break; }
+      if (bestT > 0 && bestV < Math.max(threshold, cmnd[tau] * 1.15) && bestV < 0.35) {
+        tau = bestT;
+        selectionDivisor = k;
+        candidateSource = k === 2 ? 3 : 4;
+        break;
+      }
     }
     // 放物線補間
     let better = tau;
@@ -197,9 +222,19 @@ function makeYin(winLen, tauMax, sr, threshold) {
       const den = 2 * (2 * y1 - y2 - y0);
       if (Math.abs(den) > 1e-9) better = tau + (y2 - y0) / den;
     }
+    const selectedCmnd = cmnd[tau];
     const conf = Math.max(0, Math.min(1, 1 - cmnd[tau]));
     const f0 = sr / better;
-    return { f0: isFinite(f0) ? f0 : NaN, conf };
+    return {
+      f0: isFinite(f0) ? f0 : NaN,
+      conf,
+      initialF0: isFinite(initialF0) ? initialF0 : NaN,
+      selectedF0: isFinite(f0) ? f0 : NaN,
+      selectionDivisor,
+      initialCmnd: isFinite(initialCmnd) ? initialCmnd : NaN,
+      selectedCmnd: isFinite(selectedCmnd) ? selectedCmnd : NaN,
+      candidateSource
+    };
   };
 }
 
@@ -249,6 +284,13 @@ function analyze(pcmIn, srcRate, cfg) {
     filteredF0Hz: new Float32Array(nFrames),
     usableVocalF0Hz: new Float32Array(nFrames),
     f0Status: new Uint8Array(nFrames),
+    // Phase A-2 Diagnostic: YIN候補選択の前後を観測する。既存F0列の意味・計算は変えない。
+    yinInitialF0Hz: new Float32Array(nFrames),
+    yinSelectedF0Hz: new Float32Array(nFrames),
+    yinSelectionDivisor: new Uint8Array(nFrames),
+    yinInitialCmnd: new Float32Array(nFrames),
+    yinSelectedCmnd: new Float32Array(nFrames),
+    yinCandidateSource: new Uint8Array(nFrames),
     voicedProb: new Float32Array(nFrames),
     centroid: new Float32Array(nFrames),
     bandwidth: new Float32Array(nFrames),
@@ -263,6 +305,10 @@ function analyze(pcmIn, srcRate, cfg) {
   F.rawF0Midi.fill(NaN);
   F.filteredF0Hz.fill(NaN);
   F.usableVocalF0Hz.fill(NaN);
+  F.yinInitialF0Hz.fill(NaN);
+  F.yinSelectedF0Hz.fill(NaN);
+  F.yinInitialCmnd.fill(NaN);
+  F.yinSelectedCmnd.fill(NaN);
 
   const specMaxHz = Math.min(cfg.spectrogramMaxHz, sr / 2);
   const specBinCount = Math.max(1, Math.floor(specMaxHz / binHz));
@@ -334,6 +380,12 @@ function analyze(pcmIn, srcRate, cfg) {
 
     // --- F0 ---
     const y = yin(x, off, tauMin);
+    F.yinInitialF0Hz[n] = y.initialF0;
+    F.yinSelectedF0Hz[n] = y.selectedF0;
+    F.yinSelectionDivisor[n] = y.selectionDivisor || 0;
+    F.yinInitialCmnd[n] = y.initialCmnd;
+    F.yinSelectedCmnd[n] = y.selectedCmnd;
+    F.yinCandidateSource[n] = y.candidateSource || 0;
     const rawF0Valid = isFinite(y.f0) && y.f0 >= cfg.f0MinHz && y.f0 <= cfg.f0MaxHz;
     if (rawF0Valid) {
       F.rawF0Hz[n] = y.f0;
@@ -494,6 +546,17 @@ function analyze(pcmIn, srcRate, cfg) {
     peakDb: isFinite(peakMax) ? +peakMax.toFixed(2) : null,
     loudnessReferenceDb: +refDb.toFixed(2),
     noiseFloorEstimateDb: +noiseFloorDb.toFixed(2),
+    yinDiagnostics: (() => {
+      const counts = { noCandidate: 0, unchanged: 0, divisor2: 0, divisor3: 0 };
+      for (let n = 0; n < nFrames; n++) {
+        const d = F.yinSelectionDivisor[n];
+        if (d === 1) counts.unchanged++;
+        else if (d === 2) counts.divisor2++;
+        else if (d === 3) counts.divisor3++;
+        else counts.noCandidate++;
+      }
+      return counts;
+    })(),
     detectedSegmentCount: detectedSegments.length,
     detectedSegmentTotalSec: +detectedSegments.reduce((a, s) => a + s.durationSec, 0).toFixed(3),
     detectedSegmentOpenThresholdDb: +openDb.toFixed(2),
