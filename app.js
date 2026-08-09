@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase A-3  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase B-lite  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,10 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseA3';
-const SCHEMA_VERSION = '0.2.2';
-const BUILD_ID = '20260810-a3-01';
+const APP_VERSION = '0.2.0-phaseD1prep';
+const SCHEMA_VERSION = '0.3.1';
+const BUILD_ID = '20260810-d1prep-01';
+const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 
 const TAGS = ['高音', '低音', 'リズム', '歌詞', '譜割り', '息', '力み', '音程',
   '語尾', '発音', '表現', '違和感', '良かった', '好き', 'その他'];
@@ -84,6 +85,58 @@ async function sha256Hex(arrayBuffer) {
   const digest = await crypto.subtle.digest('SHA-256', arrayBuffer);
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
 }
+
+function normalizeSongIdentityText(value) {
+  return String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('ja-JP');
+}
+async function deriveSongIdentity(title, artist) {
+  const normalizedTitle = normalizeSongIdentityText(title);
+  const normalizedArtist = normalizeSongIdentityText(artist);
+  const basis = normalizedArtist ? 'normalized_title_artist' : 'normalized_title_only';
+  const key = SONG_IDENTITY_VERSION + '\n' + normalizedTitle + '\n' + normalizedArtist;
+  const bytes = new TextEncoder().encode(key);
+  const hash = await sha256Hex(bytes.buffer);
+  return {
+    // songIdentityKey は現在のメタデータから再計算できる「照合キー」。編集で変わり得る。
+    // songId は録音を束ねる永続IDなので、既存録音の編集時には再計算しない。
+    songIdentityKey: 'skey_' + hash.slice(0, 24),
+    defaultSongId: 'song_' + hash.slice(0, 24),
+    songIdentityVersion: SONG_IDENTITY_VERSION,
+    songIdentityBasis: basis,
+    normalizedTitle,
+    normalizedArtist
+  };
+}
+function applySongIdentityFields(rec, identity) {
+  if (!rec || !identity) return rec;
+  rec.songIdentityKey = identity.songIdentityKey || null;
+  rec.songIdentityVersion = identity.songIdentityVersion || null;
+  rec.songIdentityBasis = identity.songIdentityBasis || null;
+  rec.normalizedTitle = identity.normalizedTitle || '';
+  rec.normalizedArtist = identity.normalizedArtist || '';
+  return rec;
+}
+function recordingIdFromAudioHash(hash) {
+  return hash ? 'rec_' + String(hash).slice(0, 24) : uid('rec');
+}
+function compactAnalysisHistoryEntry(an) {
+  if (!an || !an.analysisId) return null;
+  return {
+    analysisId: an.analysisId,
+    recordingId: an.recordingId,
+    schemaVersion: an.schemaVersion || null,
+    appVersion: an.appVersion || null,
+    buildId: an.buildId || null,
+    audioSha256: an.audioSha256 || null,
+    audioHashAlgorithm: an.audioHashAlgorithm || 'SHA-256',
+    createdAt: an.createdAt || null,
+    updatedAt: an.updatedAt || null,
+    supersedesAnalysisId: an.supersedesAnalysisId || null,
+    settings: an.settings || null,
+    engine: an.engine || null,
+    summary: an.summary || null
+  };
+}
 function safeName(s) {
   return String(s || 'recording').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'recording';
 }
@@ -121,7 +174,7 @@ function setFlag(key, val) {
 
 /* ---------------- IndexedDB ---------------- */
 const DB_NAME = 'songscope';
-const DB_VER = 1;
+const DB_VER = 3;
 let dbp = null;
 
 function db() {
@@ -130,9 +183,22 @@ function db() {
     const req = indexedDB.open(DB_NAME, DB_VER);
     req.onupgradeneeded = () => {
       const d = req.result;
-      if (!d.objectStoreNames.contains('recordings')) d.createObjectStore('recordings', { keyPath: 'recordingId' });
+      const tx = req.transaction;
+      let recordings;
+      if (!d.objectStoreNames.contains('recordings')) {
+        recordings = d.createObjectStore('recordings', { keyPath: 'recordingId' });
+      } else recordings = tx.objectStore('recordings');
+      if (!recordings.indexNames.contains('byAudioSha256')) recordings.createIndex('byAudioSha256', 'audioSha256', { unique: false });
+      if (!recordings.indexNames.contains('bySongId')) recordings.createIndex('bySongId', 'songId', { unique: false });
+      if (!recordings.indexNames.contains('bySongIdentityKey')) recordings.createIndex('bySongIdentityKey', 'songIdentityKey', { unique: false });
+
       if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio', { keyPath: 'recordingId' });
-      if (!d.objectStoreNames.contains('analysis')) d.createObjectStore('analysis', { keyPath: 'recordingId' });
+      if (!d.objectStoreNames.contains('analysis')) d.createObjectStore('analysis', { keyPath: 'recordingId' }); // latest full analysis (compatibility)
+      if (!d.objectStoreNames.contains('analysisHistory')) {
+        const h = d.createObjectStore('analysisHistory', { keyPath: 'analysisId' });
+        h.createIndex('byRec', 'recordingId', { unique: false });
+        h.createIndex('byAudioSha256', 'audioSha256', { unique: false });
+      }
       if (!d.objectStoreNames.contains('markers')) {
         d.createObjectStore('markers', { keyPath: 'markerId' }).createIndex('byRec', 'recordingId', { unique: false });
       }
@@ -152,8 +218,6 @@ async function txDo(store, mode, fn) {
     const os = tx.objectStore(store);
     let out;
     try { out = fn(os); } catch (e) { rej(e); return; }
-    // IDBRequest が返ってきた場合は必ず .result を取り出す。
-    // （レコードが無いときの undefined を Request 本体と取り違えないこと）
     tx.oncomplete = () => res(out && typeof out === 'object' && 'readyState' in out ? out.result : out);
     tx.onerror = () => rej(tx.error);
     tx.onabort = () => rej(tx.error || new Error('transaction aborted'));
@@ -164,11 +228,82 @@ const dbGet = (store, key) => txDo(store, 'readonly', os => os.get(key));
 const dbDel = (store, key) => txDo(store, 'readwrite', os => os.delete(key));
 const dbAll = (store) => txDo(store, 'readonly', os => os.getAll());
 const dbByRec = (store, recId) => txDo(store, 'readonly', os => os.index('byRec').getAll(IDBKeyRange.only(recId)));
+const dbByIndex = (store, indexName, value) => txDo(store, 'readonly', os => os.index(indexName).getAll(IDBKeyRange.only(value)));
 
 async function dbDelByRec(store, recId) {
   const rows = await dbByRec(store, recId);
-  const key = store === 'markers' ? 'markerId' : 'segmentId';
+  const key = store === 'markers' ? 'markerId' : store === 'segments' ? 'segmentId' : 'analysisId';
   for (const r of rows) await dbDel(store, r[key]);
+}
+async function findRecordingsByAudioHash(hash) {
+  if (!hash) return [];
+  try { return await dbByIndex('recordings', 'byAudioSha256', hash); }
+  catch (e) {
+    const rows = await dbAll('recordings');
+    return rows.filter(r => r.audioSha256 === hash);
+  }
+}
+async function findRecordingsBySongId(songId) {
+  if (!songId) return [];
+  try { return await dbByIndex('recordings', 'bySongId', songId); }
+  catch (e) {
+    const rows = await dbAll('recordings');
+    return rows.filter(r => r.songId === songId);
+  }
+}
+async function findRecordingsBySongIdentityKey(songIdentityKey) {
+  if (!songIdentityKey) return [];
+  try { return await dbByIndex('recordings', 'bySongIdentityKey', songIdentityKey); }
+  catch (e) {
+    const rows = await dbAll('recordings');
+    return rows.filter(r => r.songIdentityKey === songIdentityKey);
+  }
+}
+async function migrateBliteIdentityData() {
+  const recs = await dbAll('recordings');
+  for (const rec of recs) {
+    let changed = false;
+    let an = null;
+    try { an = await dbGet('analysis', rec.recordingId); } catch (e) { }
+    if (!rec.audioSha256 && an && an.audioSha256) {
+      rec.audioSha256 = an.audioSha256;
+      rec.audioHashAlgorithm = an.audioHashAlgorithm || 'SHA-256';
+      changed = true;
+    }
+    if (rec.audioSha256 && !rec.recordingIdentityBasis) {
+      rec.recordingIdentityBasis = rec.recordingId === recordingIdFromAudioHash(rec.audioSha256)
+        ? 'audio_sha256_prefix_v1' : 'legacy_id_preserved_audio_sha256';
+      changed = true;
+    }
+    if (!rec.songIdentityKey || !rec.songIdentityVersion) {
+      try {
+        const identity = await deriveSongIdentity(rec.title, rec.artist);
+        applySongIdentityFields(rec, identity);
+        // 既存の songId は永続IDとして保存。未採番の旧データだけ初回採番する。
+        if (!rec.songId) rec.songId = identity.defaultSongId;
+        changed = true;
+      } catch (e) { }
+    } else if (!rec.songId) {
+      try {
+        const identity = await deriveSongIdentity(rec.title, rec.artist);
+        rec.songId = identity.defaultSongId;
+        changed = true;
+      } catch (e) { }
+    }
+    if (an && an.analysisId) {
+      const hist = compactAnalysisHistoryEntry(an);
+      if (hist) await dbPut('analysisHistory', hist).catch(() => { });
+      if (!rec.latestAnalysisId) { rec.latestAnalysisId = an.analysisId; changed = true; }
+    }
+    try {
+      const histRows = await dbByRec('analysisHistory', rec.recordingId);
+      if (rec.analysisCount !== histRows.length) { rec.analysisCount = histRows.length; changed = true; }
+    } catch (e) { }
+    if (changed) {
+      rec.updatedAt = rec.updatedAt || nowIso();
+      await dbPut('recordings', rec);
+    }
+  }
 }
 
 /* ---------------- ストレージ状況 ---------------- */
@@ -369,7 +504,12 @@ async function onRecSave() {
   if (!form) return;
 
   if (state.editingRec && state.rec) {
+    let identity = null;
+    try { identity = await deriveSongIdentity(form.title, form.artist); } catch (e) { }
     Object.assign(state.rec, form, { updatedAt: nowIso() });
+    if (identity) applySongIdentityFields(state.rec, identity);
+    // songId は永続ID。曲名/アーティストの表記修正では変更しない。
+    if (!state.rec.songId && identity) state.rec.songId = identity.defaultSongId;
     await dbPut('recordings', state.rec);
     closeSheet();
     renderReviewHeader();
@@ -383,13 +523,83 @@ async function onRecSave() {
   settings.recordingSetupPreset = form.recordingSetupPreset || settings.recordingSetupPreset;
   saveSettings();
 
+  closeSheet();
+  busy('識別中', '音声の同一性を確認しています…', 10);
+
+  let audioSha256 = null;
+  let audioHashError = '';
+  try {
+    const hashBuffer = await file.arrayBuffer();
+    audioSha256 = await sha256Hex(hashBuffer);
+  } catch (e) {
+    audioHashError = (e && e.message) || String(e);
+  }
+
+  let identity = null;
+  try { identity = await deriveSongIdentity(form.title, form.artist); } catch (e) { }
+
+  // 同じ原音が既にあれば、新しい「歌唱」として増やさず、その recordingId を再利用する。
+  // 過去版で重複が複数作られていた場合は、最終更新が新しいものを今後のcanonicalとして使う。
+  let matches = [];
+  if (audioSha256) matches = await findRecordingsByAudioHash(audioSha256).catch(() => []);
+  if (matches.length) {
+    matches.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+    const rec = matches[0];
+    // 同一音源の再解析では既存の記録日時や既入力メタデータを原則保持する。
+    rec.title = form.title || rec.title;
+    if (form.artist) rec.artist = form.artist;
+    for (const k of ['damScore', 'keyChange', 'octave', 'device', 'scoringMode', 'memo', 'recordingSetupPreset']) {
+      if (form[k]) rec[k] = form[k];
+    }
+    try { applySongIdentityFields(rec, await deriveSongIdentity(rec.title, rec.artist)); }
+    catch (e) { if (identity) applySongIdentityFields(rec, identity); }
+    // 同一録音の再解析では既存 songId を維持する。旧データで未採番なら初回だけ採番。
+    if (!rec.songId && identity) rec.songId = identity.defaultSongId;
+    rec.audioSha256 = audioSha256;
+    rec.audioHashAlgorithm = 'SHA-256';
+    rec.audioHashError = audioHashError || null;
+    rec.recordingIdentityBasis = rec.recordingIdentityBasis || (rec.recordingId === recordingIdFromAudioHash(audioSha256) ? 'audio_sha256_prefix_v1' : 'legacy_id_preserved_audio_sha256');
+    rec.fileName = rec.fileName || file.name;
+    rec.mimeType = rec.mimeType || file.type || '';
+    rec.fileSize = rec.fileSize || file.size;
+    rec.analysisStatus = 'pending';
+    rec.analysisError = '';
+    rec.updatedAt = nowIso();
+    try {
+      const existingAudio = await dbGet('audio', rec.recordingId);
+      if (!existingAudio || !existingAudio.blob) {
+        await dbPut('audio', { recordingId: rec.recordingId, blob: file, fileName: file.name, mimeType: file.type || '', savedAt: nowIso() });
+      }
+      await dbPut('recordings', rec);
+    } catch (e) {
+      closeSheet(); toast('既存録音の更新に失敗しました'); return;
+    }
+    closeSheet();
+    await loadRecordings();
+    await openRecording(rec.recordingId);
+    toast(matches.length > 1 ? `同じ音声を既存録音として再解析します（既存重複 ${matches.length}件）` : '同じ音声を既存録音として再解析します');
+    startAnalysis(rec, file);
+    return;
+  }
+
   const rec = Object.assign({
     schemaVersion: SCHEMA_VERSION,
-    recordingId: uid('rec'),
+    recordingId: recordingIdFromAudioHash(audioSha256),
     performanceId: '',
     sessionId: '',
     songId: '',
+    songIdentityKey: null,
     arrangementId: '',
+    songIdentityVersion: null,
+    songIdentityBasis: null,
+    normalizedTitle: null,
+    normalizedArtist: null,
+    audioSha256,
+    audioHashAlgorithm: 'SHA-256',
+    audioHashError: audioHashError || null,
+    recordingIdentityBasis: audioSha256 ? 'audio_sha256_prefix_v1' : 'random_id_hash_unavailable',
+    latestAnalysisId: null,
+    analysisCount: 0,
     fileName: file.name,
     mimeType: file.type || '',
     fileSize: file.size,
@@ -403,9 +613,22 @@ async function onRecSave() {
     createdAt: nowIso(),
     updatedAt: nowIso()
   }, form);
+  if (identity) {
+    applySongIdentityFields(rec, identity);
+    // 同じ正規化メタデータの既存録音があれば、その永続 songId を再利用する。
+    const sameSong = await findRecordingsBySongIdentityKey(identity.songIdentityKey).catch(() => []);
+    const existingSongId = sameSong.map(r => r.songId).find(Boolean);
+    rec.songId = existingSongId || identity.defaultSongId;
+  }
 
-  closeSheet();
-  busy('保存中', '端末内に録音を保存しています…', 20);
+  // 極端に稀なprefix衝突に備え、異なるhashで同じrecordingIdが既にあればランダムIDへ退避。
+  if (audioSha256) {
+    const collision = await dbGet('recordings', rec.recordingId).catch(() => null);
+    if (collision && collision.audioSha256 && collision.audioSha256 !== audioSha256) rec.recordingId = uid('rec');
+  }
+
+  $('#busy-bar').style.width = '30%';
+  $('#busy-msg').textContent = '端末内に録音を保存しています…';
   try {
     await dbPut('audio', { recordingId: rec.recordingId, blob: file, fileName: file.name, mimeType: file.type || '', savedAt: nowIso() });
     await dbPut('recordings', rec);
@@ -481,16 +704,20 @@ async function startAnalysis(rec, fileMaybe) {
       file = a.blob;
     }
     const ab = await file.arrayBuffer();
-    let audioSha256 = null;
-    let audioHashError = '';
-    try {
-      audioSha256 = await sha256Hex(ab);
-      rec.audioSha256 = audioSha256;
-      rec.audioHashAlgorithm = 'SHA-256';
-    } catch (hashErr) {
-      audioHashError = (hashErr && hashErr.message) || String(hashErr);
-      rec.audioSha256 = null;
-      rec.audioHashAlgorithm = 'SHA-256';
+    let audioSha256 = rec.audioSha256 || null;
+    let audioHashError = rec.audioHashError || '';
+    if (!audioSha256) {
+      try {
+        audioSha256 = await sha256Hex(ab);
+        rec.audioSha256 = audioSha256;
+        rec.audioHashAlgorithm = 'SHA-256';
+        rec.audioHashError = null;
+      } catch (hashErr) {
+        audioHashError = (hashErr && hashErr.message) || String(hashErr);
+        rec.audioSha256 = null;
+        rec.audioHashAlgorithm = 'SHA-256';
+        rec.audioHashError = audioHashError;
+      }
     }
     let audioBuffer;
     try {
@@ -514,6 +741,7 @@ async function startAnalysis(rec, fileMaybe) {
     const record = {
       recordingId: rec.recordingId,
       analysisId: uid('ana'),
+      supersedesAnalysisId: rec.latestAnalysisId || null,
       schemaVersion: SCHEMA_VERSION,
       appVersion: APP_VERSION,
       buildId: BUILD_ID,
@@ -530,7 +758,14 @@ async function startAnalysis(rec, fileMaybe) {
       spectrogram: result.spectrogram,
       detectedSegments: result.detectedSegments
     };
+    // Full analysis は従来互換の analysis store に最新1件を保持し、
+    // compact provenance は analysisHistory に全run残す。
+    const histEntry = compactAnalysisHistoryEntry(record);
+    if (histEntry) await dbPut('analysisHistory', histEntry);
     await dbPut('analysis', record);
+    rec.latestAnalysisId = record.analysisId;
+    try { rec.analysisCount = (await dbByRec('analysisHistory', rec.recordingId)).length; }
+    catch (e) { rec.analysisCount = Math.max(1, Number(rec.analysisCount || 0) + 1); }
     rec.analysisStatus = 'done';
     rec.analysisError = '';
     rec.updatedAt = nowIso();
@@ -1593,9 +1828,13 @@ function buildSummaryJson(an) {
     exportedAt: nowIso(),
     recording: {
       recordingId: rec.recordingId,
+      recordingIdentityBasis: rec.recordingIdentityBasis || null,
       performanceId: rec.performanceId || null,
       sessionId: rec.sessionId || null,
       songId: rec.songId || null,
+      songIdentityKey: rec.songIdentityKey || null,
+      songIdentityVersion: rec.songIdentityVersion || null,
+      songIdentityBasis: rec.songIdentityBasis || null,
       arrangementId: rec.arrangementId || null,
       title: rec.title || null,
       artist: rec.artist || null,
@@ -1607,7 +1846,9 @@ function buildSummaryJson(an) {
       mimeType: rec.mimeType || null,
       fileSize: rec.fileSize || null,
       audioSha256: (an && an.audioSha256) || rec.audioSha256 || null,
-      audioHashAlgorithm: (an && an.audioHashAlgorithm) || rec.audioHashAlgorithm || 'SHA-256'
+      audioHashAlgorithm: (an && an.audioHashAlgorithm) || rec.audioHashAlgorithm || 'SHA-256',
+      latestAnalysisId: rec.latestAnalysisId || (an && an.analysisId) || null,
+      analysisCount: Number(rec.analysisCount || (an ? 1 : 0))
     },
     metadata: {
       damScore: rec.damScore || null,
@@ -1639,6 +1880,11 @@ function buildSummaryJson(an) {
       f0AlgorithmVersion: an.engine && an.engine.algorithmVersions ? an.engine.algorithmVersions.f0 : null,
       f0AmbiguityAlgorithmVersion: an.engine && an.engine.algorithmVersions ? an.engine.algorithmVersions.f0Ambiguity : null
     } : null,
+    identityPolicy: {
+      recordingIdentity: 'Same raw-audio SHA-256 reuses the same recordingId. Different analysis runs use different analysisId values.',
+      songIdentity: 'songId is a persistent grouping ID once assigned. songIdentityKey is derived from NFKC-normalized title + artist (title only when artist is blank) and may change when metadata is edited. Neither asserts arrangement identity.',
+      songIdentityVersion: SONG_IDENTITY_VERSION
+    },
     markers: state.markers.map(m => ({
       markerId: m.markerId, timeSec: m.timeSec, tag: m.tag, memo: m.memo || '', createdAt: m.createdAt
     })),
@@ -1675,7 +1921,13 @@ function buildReportMd(an) {
   L.push(`ScoringMode: ${rec.scoringMode || ''}`);
   L.push(`RecordingSetup: ${rec.recordingSetupPreset || ''}`);
   L.push(`RecordingId: ${rec.recordingId}`);
+  L.push(`RecordingIdentity: ${rec.recordingIdentityBasis || ''}`);
+  L.push(`SongId: ${rec.songId || ''}`);
+  L.push(`SongIdentityKey: ${rec.songIdentityKey || ''}`);
+  L.push(`SongIdentity: ${rec.songIdentityBasis || ''} / ${rec.songIdentityVersion || ''}`);
   L.push(`AudioSHA256: ${(an && an.audioSha256) || rec.audioSha256 || ''}`);
+  L.push(`LatestAnalysisId: ${rec.latestAnalysisId || (an && an.analysisId) || ''}`);
+  L.push(`AnalysisCount: ${Number(rec.analysisCount || (an ? 1 : 0))}`);
   if (rec.memo) L.push('', `Memo: ${rec.memo}`);
   L.push('', '## Recording limitations', '');
   L.push(ACCOMP_NOTE_EN, '');
@@ -1713,9 +1965,9 @@ function buildReportMd(an) {
         ', divisor3=' + s.yinDiagnostics.divisor3 +
         ', noCandidate=' + s.yinDiagnostics.noCandidate);
     }
-    L.push('Phase A-3 keeps the F0 selection algorithm at v1.1.0-phaseA1 and adds a non-corrective ambiguity heuristic for local 2x/3x/4x candidate competition.');
+    L.push('Phase B-lite keeps Phase A-3 audio measurements unchanged and adds stable recording/song identity plus compact analysis-run history. songId remains stable after assignment; songIdentityKey tracks editable normalized metadata.');
     if (an.engine.algorithmVersions.f0Ambiguity) L.push('F0 ambiguity heuristic: ' + an.engine.algorithmNames.f0Ambiguity + ' v' + an.engine.algorithmVersions.f0Ambiguity);
-    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.2 Phase A-3.');
+    L.push('Experimental features (jitter / shimmer / HNR / CPP / formants / MFCC): not implemented in v0.2 Phase B-lite.');
   } else {
     L.push('Analysis not available for this recording (decode or analysis failed).');
     L.push('User markers and segments below are still valid observations.');
@@ -1756,7 +2008,7 @@ function buildReportMd(an) {
     if (an.detectedSegments.length > 200) L.push(`| … | | | | | | (${an.detectedSegments.length} segments in detected_segments.csv) |`);
   } else L.push('(none)');
   L.push('', '## Files', '');
-  L.push('summary.json', 'frames.csv', 'markers.csv', 'user_segments.csv', 'detected_segments.csv', '');
+  L.push('summary.json', 'analysis_history.json', 'frames.csv', 'markers.csv', 'user_segments.csv', 'detected_segments.csv', '');
   L.push('waveform.png', 'loudness.png', 'pitch.png', 'spectrogram.png');
   L.push('', '## Important', '');
   L.push('This application does not diagnose singing ability.');
@@ -1782,6 +2034,16 @@ async function doExport() {
 
     files.push({ name: 'report.md', data: buildReportMd(an) });
     files.push({ name: 'summary.json', data: JSON.stringify(buildSummaryJson(an), null, 2) });
+    let analysisHistory = [];
+    try { analysisHistory = (await dbByRec('analysisHistory', rec.recordingId)).sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || ''))); }
+    catch (e) { }
+    files.push({ name: 'analysis_history.json', data: JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      recordingId: rec.recordingId,
+      audioSha256: rec.audioSha256 || (an && an.audioSha256) || null,
+      latestAnalysisId: rec.latestAnalysisId || (an && an.analysisId) || null,
+      analyses: analysisHistory
+    }, null, 2) });
     files.push({ name: 'markers.csv', data: markersCsv() });
     files.push({ name: 'user_segments.csv', data: userSegmentsCsv() });
     files.push({ name: 'detected_segments.csv', data: detectedSegmentsCsv(an) });
@@ -1825,10 +2087,12 @@ async function backupAll() {
       const mk = await dbByRec('markers', r.recordingId);
       const sg = await dbByRec('segments', r.recordingId);
       const an = await dbGet('analysis', r.recordingId);
+      const hist = await dbByRec('analysisHistory', r.recordingId).catch(() => []);
       out.recordings.push({
         recording: r,
         markers: mk,
         segments: sg,
+        analysisHistory: hist,
         analysisSummary: an ? {
           analysisId: an.analysisId || null, appVersion: an.appVersion || null, buildId: an.buildId || null,
           audioSha256: an.audioSha256 || null, summary: an.summary, settings: an.settings,
@@ -1836,7 +2100,7 @@ async function backupAll() {
         } : null
       });
     }
-    out.note = 'frames等のフレーム単位データは含まれません。原本の音声から再解析すれば同じ設定で再現できます（engine.analysisSettingsを参照）。';
+    out.note = 'analysisHistoryは各解析runのcompact provenanceです。frames等のフレーム単位データは最新analysis以外バックアップに含めません。原本音声を保持していれば再解析できます。';
     closeSheet();
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
     await saveBlob(blob, `songscope_backup_${new Date().toISOString().slice(0, 10)}.json`);
@@ -1852,15 +2116,87 @@ async function backupAll() {
  * ===================================================================== */
 const cmp = {
   a: null, b: null,           // {rec, an, audio, url}
-  offset: 0,                   // Bの時間オフセット（秒）
+  // D1-prep time convention (fixed): reference(A) time = target(B) time + offset.
+  // Therefore target(B) time = reference(A) time - offset.
+  offset: 0,
   normalized: true,
-  loop: { a: null, b: null, on: false },
+  loop: { a: null, b: null, on: false }, // reference(A) time axis: start/end
   playing: null,               // 'a' | 'b' | null
+  lastTime: 0,                 // reference(A) time
   rafId: 0
 };
 
+function cmpSideDuration(side) {
+  const d = cmp[side];
+  if (!d) return 0;
+  const recDur = d.rec && isFinite(d.rec.durationSec) ? Number(d.rec.durationSec) : 0;
+  const audioDur = d.audio && isFinite(d.audio.duration) ? Number(d.audio.duration) : 0;
+  return Math.max(0, recDur || audioDur || 0);
+}
+function cmpLocalToReference(side, localTimeSec) {
+  return side === 'b' ? localTimeSec + cmp.offset : localTimeSec;
+}
+function cmpReferenceToLocal(side, referenceTimeSec) {
+  return side === 'b' ? referenceTimeSec - cmp.offset : referenceTimeSec;
+}
+function cmpReferenceTimeAvailable(side, referenceTimeSec) {
+  const dur = cmpSideDuration(side);
+  if (!(dur > 0) || !isFinite(referenceTimeSec)) return false;
+  const local = cmpReferenceToLocal(side, referenceTimeSec);
+  return local >= 0 && local <= dur;
+}
+function cmpResetMapping() {
+  cmp.offset = 0;
+  cmp.loop = { a: null, b: null, on: false };
+  cmp.lastTime = 0;
+  cmp.playing = null;
+  const slider = $('#offset-slider');
+  if (slider) slider.value = '0';
+}
+function cmpIdentityCheck() {
+  const a = cmp.a && cmp.a.rec, b = cmp.b && cmp.b.rec;
+  if (!a || !b) return { status: 'select_both', blocked: false, autoAlignmentEligible: false, message: 'AとBを選択してください。' };
+  if (a.recordingId && b.recordingId && a.recordingId === b.recordingId) {
+    return { status: 'same_recording', blocked: true, autoAlignmentEligible: false, message: '同じrecordingIdです。これは別歌唱比較ではありません。' };
+  }
+  if (a.audioSha256 && b.audioSha256 && a.audioSha256 === b.audioSha256) {
+    return { status: 'same_source_audio', blocked: true, autoAlignmentEligible: false, message: 'recordingIdは異なりますがraw音声SHA-256が同一です。過去版由来の重複録音として扱い、別歌唱比較には使いません。' };
+  }
+  if (a.songId && b.songId && a.songId === b.songId) {
+    return { status: 'same_song_candidate', blocked: false, autoAlignmentEligible: true, message: '同じsongId・別音声です。D1の自動alignment候補にできます。' };
+  }
+  if (a.songIdentityKey && b.songIdentityKey && a.songIdentityKey === b.songIdentityKey) {
+    return { status: 'identity_uncertain', blocked: false, autoAlignmentEligible: false, message: '正規化メタデータは一致しますがsongIdが異なります。自動alignment前にidentity確認が必要です。' };
+  }
+  return { status: 'metadata_mismatch', blocked: false, autoAlignmentEligible: false, message: 'songIdが異なります。自動alignment対象外で、現在は手動比較のみです。' };
+}
+function updateCmpIdentityUi() {
+  const check = cmpIdentityCheck();
+  const el = $('#cmp-identity-status');
+  if (el) el.textContent = '比較対象: ' + check.message;
+  const ids = ['#cmp-play-a', '#cmp-play-b', '#cmp-swap', '#cmp-loop'];
+  for (const id of ids) { const e = $(id); if (e) e.disabled = !!check.blocked; }
+  const off = $('#offset-slider');
+  if (off) off.disabled = !!check.blocked;
+  return check;
+}
+function updateCmpOffsetSliderRange() {
+  const slider = $('#offset-slider');
+  if (!slider) return;
+  const da = cmpSideDuration('a'), db2 = cmpSideDuration('b');
+  // Any overlapping global offset must satisfy -durationB <= offset <= durationA.
+  const min = db2 > 0 ? -db2 : -10;
+  const max = da > 0 ? da : 10;
+  slider.min = String(Math.floor(min * 10) / 10);
+  slider.max = String(Math.ceil(max * 10) / 10);
+  if (cmp.offset < min || cmp.offset > max) cmp.offset = clamp(cmp.offset, min, max);
+  slider.value = String(cmp.offset);
+}
+
 async function openCompare() {
   stopPlayback();
+  cmpStop();
+  cmpResetMapping();
   showView('view-compare');
   const recs = state.recordings;
   if (recs.length < 2) toast('比較には録音が2件必要です');
@@ -1896,17 +2232,21 @@ async function loadCmpSide(side, id) {
 }
 
 function cmpDuration() {
-  const da = cmp.a && cmp.a.rec ? cmp.a.rec.durationSec || 0 : 0;
-  const db2 = cmp.b && cmp.b.rec ? (cmp.b.rec.durationSec || 0) - cmp.offset : 0;
-  return Math.max(1, da, db2);
+  // Shared comparison axis is Recording A (reference) time. B-only regions outside A are not comparison time.
+  const da = cmpSideDuration('a');
+  if (da > 0) return Math.max(1, da);
+  const db2 = cmpSideDuration('b');
+  return Math.max(1, db2 > 0 ? db2 + Math.max(0, cmp.offset) : 1);
 }
 
 function drawCompare() {
   if (!$('#view-compare').classList.contains('is-active')) return;
+  updateCmpOffsetSliderRange();
+  updateCmpIdentityUi();
   const dur = cmpDuration();
   drawCmpChart($('#cv-cmp-loud'), 'loud', dur);
   drawCmpChart($('#cv-cmp-pitch'), 'pitch', dur);
-  $('#cmp-ab-readout').textContent = `A: ${cmp.loop.a === null ? '—' : fmtClock(cmp.loop.a)} / B: ${cmp.loop.b === null ? '—' : fmtClock(cmp.loop.b)}`;
+  $('#cmp-ab-readout').textContent = `開始: ${cmp.loop.a === null ? '—' : fmtClock(cmp.loop.a)} / 終了: ${cmp.loop.b === null ? '—' : fmtClock(cmp.loop.b)}`;
   $('#cmp-loop').classList.toggle('is-on', cmp.loop.on);
   $('#cmp-loop').textContent = cmp.loop.on ? 'ループ停止' : 'ループ開始';
   $('#offset-val').textContent = (cmp.offset >= 0 ? '+' : '') + cmp.offset.toFixed(1) + ' s';
@@ -1972,18 +2312,25 @@ function drawCmpChart(cv, kind, dur) {
 }
 
 function cmpTime() {
-  if (cmp.playing === 'a' && cmp.a && cmp.a.audio) return cmp.a.audio.currentTime;
-  if (cmp.playing === 'b' && cmp.b && cmp.b.audio) return cmp.b.audio.currentTime - cmp.offset;
+  if (cmp.playing === 'a' && cmp.a && cmp.a.audio) return cmpLocalToReference('a', cmp.a.audio.currentTime);
+  if (cmp.playing === 'b' && cmp.b && cmp.b.audio) return cmpLocalToReference('b', cmp.b.audio.currentTime);
   return cmp.lastTime || 0;
 }
 function cmpPlay(side, atTime) {
+  const check = cmpIdentityCheck();
+  if (check.blocked) { toast(check.status === 'same_recording' ? '同じ録音は別歌唱比較できません' : '同一元音声は別歌唱比較できません'); return; }
   const d = cmp[side];
   if (!d || !d.audio) { toast((side === 'a' ? 'A' : 'B') + 'の音声がありません'); return; }
   const other = cmp[side === 'a' ? 'b' : 'a'];
   if (other && other.audio) { try { other.audio.pause(); } catch (e) { } }
-  const t = atTime === undefined ? cmpTime() : atTime;
-  const local = side === 'a' ? t : t + cmp.offset;
-  try { d.audio.currentTime = clamp(local, 0, Math.max(0, (d.audio.duration || 1e9) - 0.05)); } catch (e) { }
+  const t = atTime === undefined ? cmpTime() : atTime; // reference(A) time
+  const local = cmpReferenceToLocal(side, t);
+  const localDur = cmpSideDuration(side);
+  if (!(localDur > 0) || local < 0 || local > localDur) {
+    toast((side === 'a' ? 'A' : 'B') + 'にはこの基準時刻に対応する音声がありません');
+    return;
+  }
+  try { d.audio.currentTime = clamp(local, 0, Math.max(0, localDur - 0.05)); } catch (e) { }
   d.audio.play().then(() => {
     cmp.playing = side;
     $('#cmp-which').textContent = side === 'a' ? 'A を再生中' : 'B を再生中';
@@ -2008,8 +2355,16 @@ function cmpTick() {
     cmp.lastTime = t;
     if (cmp.loop.on && cmp.loop.a !== null && cmp.loop.b !== null && cmp.loop.b > cmp.loop.a) {
       if (t >= cmp.loop.b || t < cmp.loop.a - 0.5) {
-        const local = cmp.playing === 'a' ? cmp.loop.a : cmp.loop.a + cmp.offset;
-        try { d.audio.currentTime = Math.max(0, local); } catch (e) { }
+        const local = cmpReferenceToLocal(cmp.playing, cmp.loop.a);
+        const localDur = cmpSideDuration(cmp.playing);
+        if (!(localDur > 0) || local < 0 || local > localDur) {
+          try { d.audio.pause(); } catch (e) { }
+          cmp.playing = null;
+          $('#cmp-which').textContent = '停止中';
+          toast('ループ開始時刻が再生中の録音範囲外です');
+          return;
+        }
+        try { d.audio.currentTime = Math.min(Math.max(0, local), Math.max(0, localDur - 0.05)); } catch (e) { }
       }
     }
     $('#cmp-time').textContent = fmtTime(t);
@@ -2190,6 +2545,7 @@ function wireReview() {
     try {
       await dbDelByRec('markers', id);
       await dbDelByRec('segments', id);
+      await dbDelByRec('analysisHistory', id);
       await dbDel('analysis', id);
       await dbDel('audio', id);
       await dbDel('recordings', id);
@@ -2209,8 +2565,8 @@ function nudge(d) {
 
 function wireCompare() {
   $('#btn-back-home2').addEventListener('click', () => { cmpStop(); showView('view-home'); loadRecordings(); });
-  $('#sel-a').addEventListener('change', e => loadCmpSide('a', e.target.value));
-  $('#sel-b').addEventListener('change', e => loadCmpSide('b', e.target.value));
+  $('#sel-a').addEventListener('change', async e => { cmpStop(); cmpResetMapping(); await loadCmpSide('a', e.target.value); });
+  $('#sel-b').addEventListener('change', async e => { cmpStop(); cmpResetMapping(); await loadCmpSide('b', e.target.value); });
   $('#btn-norm').addEventListener('click', () => {
     cmp.normalized = true;
     $('#btn-norm').classList.add('is-on'); $('#btn-raw').classList.remove('is-on');
@@ -2268,6 +2624,7 @@ async function init() {
   state.confMin = settings.minimumConfidence;
   wireHome(); wireSheets(); wireReview(); wireCompare(); wireGlobal();
   $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
+  await migrateBliteIdentityData().catch(e => console.warn('B-lite migration skipped:', e));
   await loadRecordings();
   refreshStorageEstimate();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {

@@ -1,6 +1,8 @@
-# SongScope v0.2 Phase A-3
+# SongScope v0.2 Phase D1-prep
 
-> **Phase A-3 build**: Phase A-1のF0選択アルゴリズム（`f0AlgorithmVersion: 1.1.0-phaseA1`）は変更せず、F0を『本人声の確定値』にしないまま、比較候補 (`f0_candidate_hz`) と短時間の2x/3x/4x整数比競合 (`f0_ambiguity_*`) を分離して記録します。曖昧性は削除・補正ではなく注意情報です。A-2 Diagnosticで確定したYIN内部診断列、`analysisId`、音声SHA-256、`buildId` も維持します。
+
+> **Phase D1-prep build**: B-liteのidentity/解析ロジックは維持したまま、A/B比較の時間規約を `A(reference) time = B(target) time + offset` に統一しました。同一`recordingId`または同一raw音声SHA-256は別歌唱比較としてブロックします。比較画面のループ端点はRecording A/Bと混同しないよう「開始/終了」と表記します。自動alignment自体はまだ実装していません。
+
 
 
 カラオケで録音した自分の歌を、**あとから人間とChatGPTが客観的に比較・検証できるデータ**に変換するための、iPhone向けWebアプリ（PWA）です。
@@ -17,9 +19,19 @@
   を追加します。
 - `yin_selection_divisor` は `1=変更なし`, `2=tau/2`, `3=tau/3` を表します。
 - `usable_vocal_f0_hz` は互換のため残していますが、本人声のみを保証する値ではありません。
-- Build ID: `20260810-a3-01`
+- Build ID: `20260810-d1prep-01`
 
 ---
+
+## Phase B-lite identity rules（D1-prepでも維持）
+
+- `recordingId`: raw audio SHA-256が同じなら同じ録音。既存データに同じhashがあればそのIDを再利用します。
+- `analysisId`: 解析runごとに新規。最新のfull解析は従来の`analysis`に保持し、全runのcompact provenanceを`analysisHistory`に残します。
+- `songId`: 初回採番後は保持する永続グループID。曲名・アーティストの編集だけで変えません。
+- `songIdentityKey`: 曲名・アーティストのNFKC正規化値から決定する照合キー。アーティスト未入力時は曲名のみなので、同名異曲の誤グループ化余地を`songIdentityBasis`で明示します。
+- `arrangementId`: B-liteでは未確定のまま。キー違い・伴奏違いを同一アレンジと断定しません。
+- Phase A-3までのF0/RMS/スペクトル計算ロジックは変更しません。D1-prepでも`audio-analysis-worker.js`は変更しません。
+
 
 ## 目次
 
@@ -351,3 +363,10 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - 判定窓は local ±0.12 s、rapid ±0.04 s、整数比許容幅 ±50 cent。これは『誤り検出』ではなく、混合カラオケ音声で絶対F0を比較するときの注意フラグです。
 - `summary.json` に candidate の証拠量、p05/p50/p95、曖昧性件数と使用閾値を保存します。最大値・最小値を声域とは呼びません。
 - F0アルゴリズムそのものは `1.1.0-phaseA1` のままです。A-3で追加したのは `f0Ambiguity: 1.0.0-phaseA3` だけです。
+
+
+### B-lite build 02 identity rule
+
+- `songId` is persistent once assigned; editing title/artist does not silently change it.
+- `songIdentityKey` is the NFKC-normalized title/artist matching key and may change when metadata is corrected.
+- A new recording with the same `songIdentityKey` reuses the existing `songId` when available.

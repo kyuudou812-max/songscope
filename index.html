@@ -179,6 +179,8 @@
     </div>
     <div class="card note">
       <p>録音距離・マイクゲイン・部屋が違うため、絶対音量の比較は意味を持ちません。既定では正規化して重ねています。開始位置のずれはオフセットで手動調整してください。</p>
+      <p id="cmp-identity-status" class="small">AとBを選択してください。</p>
+      <p class="mono small">時間規約: A（reference）時間 = B（target）時間 + オフセット</p>
     </div>
     <div class="card">
       <div class="row gap">
@@ -190,15 +192,15 @@
       <div class="graph-label">推定F0 重ね合わせ</div>
       <canvas id="cv-cmp-pitch" class="graph"></canvas>
       <div class="slider-row">
-        <label for="offset-slider">Bのオフセット <span id="offset-val" class="mono">+0.0 s</span></label>
+        <label for="offset-slider">B→A 時間オフセット <span id="offset-val" class="mono">+0.0 s</span></label>
         <input type="range" id="offset-slider" min="-10" max="10" step="0.1" value="0">
       </div>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>共有A-Bループ</span><span class="mono small" id="cmp-ab-readout">A: — / B: —</span></div>
+      <div class="section-head tight"><span>共有ループ（A基準時間）</span><span class="mono small" id="cmp-ab-readout">開始: — / 終了: —</span></div>
       <div class="row gap wrap">
-        <button id="cmp-set-a" class="mini">A地点</button>
-        <button id="cmp-set-b" class="mini">B地点</button>
+        <button id="cmp-set-a" class="mini">開始地点</button>
+        <button id="cmp-set-b" class="mini">終了地点</button>
         <button id="cmp-loop" class="mini">ループ開始</button>
         <button id="cmp-ab-clear" class="mini">解除</button>
       </div>
@@ -209,7 +211,7 @@
         <button id="cmp-play-b" class="tbtn wide2">Bを再生</button>
       </div>
       <div class="row transport-btns">
-        <button id="cmp-swap" class="tbtn wide2 accent">A⇄B 切替（同じ時刻）</button>
+        <button id="cmp-swap" class="tbtn wide2 accent">A⇄B 切替（同じ基準時刻）</button>
         <button id="cmp-stop" class="tbtn wide2">停止</button>
       </div>
     </div>
@@ -275,6 +277,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="zip.js"></script>
-<script src="app.js?v=20260810-a3-01"></script>
+<script src="app.js?v=20260810-d1prep-01"></script>
 </body>
 </html>
