@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-phaseD1';
-const SCHEMA_VERSION = '0.5.0';
-const BUILD_ID = '20260810-d1-01';
+const SCHEMA_VERSION = '0.5.1';
+const BUILD_ID = '20260810-d1-02';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -179,10 +179,22 @@ const DB_NAME = 'songscope';
 const DB_VER = 5;
 let dbp = null;
 
+const DB_BLOCKED_CODE = 'SONGSCOPE_DB_UPGRADE_BLOCKED';
+function makeDbBlockedError() {
+  const e = new Error('SongScopeのデータベース更新が、別のSongScope画面によって待機中です。');
+  e.code = DB_BLOCKED_CODE;
+  return e;
+}
+function isDbBlockedError(e) { return !!(e && e.code === DB_BLOCKED_CODE); }
+function dbBlockedUserMessage() {
+  return 'SongScopeの別画面が開いたままの可能性があります。SafariのSongScopeタブとホーム画面版SongScopeをすべて閉じてから、もう一度開いてください。録音データは削除しないでください。';
+}
 function db() {
   if (dbp) return dbp;
   dbp = new Promise((res, rej) => {
     const req = indexedDB.open(DB_NAME, DB_VER);
+    let settled = false;
+    let blockedTimer = null;
     req.onupgradeneeded = () => {
       const d = req.result;
       const tx = req.transaction;
@@ -221,8 +233,37 @@ function db() {
         ar.createIndex('byUpdatedAt', 'updatedAt', { unique: false });
       }
     };
-    req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
+    req.onblocked = () => {
+      if (blockedTimer || settled) return;
+      console.warn('IndexedDB upgrade blocked by another SongScope context.');
+      blockedTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        dbp = null;
+        rej(makeDbBlockedError());
+      }, 1500);
+    };
+    req.onsuccess = () => {
+      if (blockedTimer) clearTimeout(blockedTimer);
+      const d = req.result;
+      d.onversionchange = () => {
+        try { d.close(); } catch (e) { }
+        dbp = null;
+        const msg = 'SongScopeが更新されました。処理中でなければ、この画面を開き直してください。';
+        try { toast(msg); } catch (e) { console.warn(msg); }
+      };
+      // blocked timeout後に古いopen要求が遅れて成功した場合は、接続を残さない。
+      if (settled) { try { d.close(); } catch (e) { } return; }
+      settled = true;
+      res(d);
+    };
+    req.onerror = () => {
+      if (blockedTimer) clearTimeout(blockedTimer);
+      if (settled) return;
+      settled = true;
+      dbp = null;
+      rej(req.error);
+    };
   });
   return dbp;
 }
@@ -540,6 +581,17 @@ async function onRecSave() {
 
   closeSheet();
   busy('識別中', '音声の同一性を確認しています…', 10);
+
+  // D1でDB schemaを更新するため、別タブ/旧PWAがDB接続を保持している場合は
+  // IndexedDB upgradeが無期限待機になり得る。hash処理前に明示的に検出して案内する。
+  try {
+    await db();
+  } catch (e) {
+    closeSheet();
+    if (isDbBlockedError(e)) { toast(dbBlockedUserMessage()); return; }
+    toast('端末内データベースを開けませんでした');
+    return;
+  }
 
   let audioSha256 = null;
   let audioHashError = '';

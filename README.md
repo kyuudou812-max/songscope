@@ -1,5 +1,11 @@
 # SongScope v0.2 Phase D1
 
+### D1 build 02 — IndexedDB upgrade待機の修正
+- Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
+- `onblocked` を検出してユーザーへ旧画面を閉じる案内を出す。
+- DB接続へ `onversionchange` を設定し、今後のschema更新時には旧画面側が接続を自動で閉じるようにした。
+- 録音・F0解析・D1 matcher/decisionのアルゴリズムは変更していない。
+
 > **Phase D1 build 01**: 実録音のA/Bでglobal offsetが約4分間一貫し、人間の聴感でも序盤・中盤・終盤の対応を確認できたため、D1を正式化しました。近接offset候補を独立解と誤認しないcandidate clusteringを追加し、候補の質・証拠量・往復整合性・drift・独立候補clusterから `resolved / ambiguous / unresolved` を保守的に判定します。`resolved` のときだけ「この位置合わせを反映」を表示します。
 
 カラオケで録音した自分の歌を、**あとから人間とChatGPTが客観的に比較・検証できるデータ**に変換するための、iPhone向けWebアプリ（PWA）です。
@@ -13,7 +19,7 @@
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
 - Schema Version: `0.5.0`
-- Build ID: `20260810-d1-01`
+- Build ID: `20260810-d1-02`
 
 ---
 
