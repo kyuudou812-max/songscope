@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-phaseD2diag';
-const SCHEMA_VERSION = '0.6.0';
-const BUILD_ID = '20260810-d2diag-01';
+const SCHEMA_VERSION = '0.6.1';
+const BUILD_ID = '20260810-d2diag-02';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -2647,26 +2647,32 @@ function d2AnalysisDurationSec(side) {
   if (F && F.timeSec && F.timeSec.length) return Math.max(0, Number(F.timeSec[F.timeSec.length - 1]) + hop);
   return cmpSideDuration(side);
 }
-function d2SideWindowStats(side, referenceStartSec, referenceEndSec, offsetSec) {
+function d2SideWindowStats(side, requestedReferenceStartSec, requestedReferenceEndSec, pairReferenceStartSec, pairReferenceEndSec, offsetSec) {
   const d = cmp[side];
   if (!d || !d.an || !d.an.frames) return null;
   const F = d.an.frames;
   const hop = d2FrameHopSec(d.an);
   const dur = d2AnalysisDurationSec(side);
-  const localStart = side === 'b' ? referenceStartSec - offsetSec : referenceStartSec;
-  const localEnd = side === 'b' ? referenceEndSec - offsetSec : referenceEndSec;
-  const clippedStart = Math.max(0, localStart);
-  const clippedEnd = Math.min(dur, localEnd);
-  const availableDurationSec = Math.max(0, clippedEnd - clippedStart);
-  const windowDurationSec = Math.max(0, referenceEndSec - referenceStartSec);
+  const requestedLocalStart = side === 'b' ? requestedReferenceStartSec - offsetSec : requestedReferenceStartSec;
+  const requestedLocalEnd = side === 'b' ? requestedReferenceEndSec - offsetSec : requestedReferenceEndSec;
+  const hasPair = isFinite(pairReferenceStartSec) && isFinite(pairReferenceEndSec) && pairReferenceEndSec > pairReferenceStartSec;
+  const localStart = hasPair ? (side === 'b' ? pairReferenceStartSec - offsetSec : pairReferenceStartSec) : null;
+  const localEnd = hasPair ? (side === 'b' ? pairReferenceEndSec - offsetSec : pairReferenceEndSec) : null;
+  const clippedStart = hasPair ? Math.max(0, localStart) : 0;
+  const clippedEnd = hasPair ? Math.min(dur, localEnd) : 0;
+  const availableDurationSec = hasPair ? Math.max(0, clippedEnd - clippedStart) : 0;
+  const windowDurationSec = Math.max(0, requestedReferenceEndSec - requestedReferenceStartSec);
   const rmsRel = [], f0Candidate = [], f0ConfCandidate = [];
   let frameCount = 0, candidateFrameCount = 0, ambiguityFrameCount = 0, cautionFrameCount = 0, strongFrameCount = 0;
+  // time_sec is a floating-point frame grid. Use a tiny tolerance so an intended
+  // [start,end) boundary does not randomly become 499/501 frames after offset mapping.
+  const timeEpsSec = 1e-7;
   if (availableDurationSec > 0) {
     const n = F.timeSec.length;
     for (let i = 0; i < n; i++) {
       const t = Number(F.timeSec[i]);
-      if (t < clippedStart) continue;
-      if (t >= clippedEnd) break;
+      if (t < clippedStart - timeEpsSec) continue;
+      if (t >= clippedEnd - timeEpsSec) break;
       frameCount++;
       const r = Number(F.rmsRelDb && F.rmsRelDb[i]);
       if (isFinite(r)) rmsRel.push(r);
@@ -2685,8 +2691,10 @@ function d2SideWindowStats(side, referenceStartSec, referenceEndSec, offsetSec) 
   }
   const r = (v, d = 6) => isFinite(v) ? +Number(v).toFixed(d) : null;
   return {
-    localStartSec: r(localStart, 3),
-    localEndSec: r(localEnd, 3),
+    requestedLocalStartSec: r(requestedLocalStart, 3),
+    requestedLocalEndSec: r(requestedLocalEnd, 3),
+    localStartSec: localStart === null ? null : r(localStart, 3),
+    localEndSec: localEnd === null ? null : r(localEnd, 3),
     availableDurationSec: r(availableDurationSec, 3),
     coverageRatio: windowDurationSec > 0 ? r(availableDurationSec / windowDurationSec, 6) : null,
     frameHopSec: r(hop, 6),
@@ -2766,18 +2774,18 @@ function d2MapUserSegments(rows, side, offsetSec) {
 }
 function d2WindowsCsv(pkg) {
   const head = [
-    'window_index','reference_start_sec','reference_end_sec','pair_available_duration_sec','pair_coverage_ratio',
-    'a_local_start_sec','a_local_end_sec','a_available_duration_sec','a_coverage_ratio','a_frame_count','a_f0_candidate_frames','a_f0_candidate_ratio','a_f0_ambiguity_frames','a_f0_ambiguity_ratio','a_f0_strong_ambiguity_ratio','a_rms_rel_p10','a_rms_rel_p50','a_rms_rel_p90','a_f0_candidate_p10_hz','a_f0_candidate_p50_hz','a_f0_candidate_p90_hz','a_f0_confidence_p50',
-    'b_local_start_sec','b_local_end_sec','b_available_duration_sec','b_coverage_ratio','b_frame_count','b_f0_candidate_frames','b_f0_candidate_ratio','b_f0_ambiguity_frames','b_f0_ambiguity_ratio','b_f0_strong_ambiguity_ratio','b_rms_rel_p10','b_rms_rel_p50','b_rms_rel_p90','b_f0_candidate_p10_hz','b_f0_candidate_p50_hz','b_f0_candidate_p90_hz','b_f0_confidence_p50'
+    'window_index','reference_start_sec','reference_end_sec','pair_reference_start_sec','pair_reference_end_sec','pair_available_duration_sec','pair_coverage_ratio','comparison_coverage_status',
+    'a_requested_local_start_sec','a_requested_local_end_sec','a_local_start_sec','a_local_end_sec','a_available_duration_sec','a_coverage_ratio','a_frame_count','a_f0_candidate_frames','a_f0_candidate_ratio','a_f0_ambiguity_frames','a_f0_ambiguity_ratio','a_f0_strong_ambiguity_ratio','a_rms_rel_p10','a_rms_rel_p50','a_rms_rel_p90','a_f0_candidate_p10_hz','a_f0_candidate_p50_hz','a_f0_candidate_p90_hz','a_f0_confidence_p50',
+    'b_requested_local_start_sec','b_requested_local_end_sec','b_local_start_sec','b_local_end_sec','b_available_duration_sec','b_coverage_ratio','b_frame_count','b_f0_candidate_frames','b_f0_candidate_ratio','b_f0_ambiguity_frames','b_f0_ambiguity_ratio','b_f0_strong_ambiguity_ratio','b_rms_rel_p10','b_rms_rel_p50','b_rms_rel_p90','b_f0_candidate_p10_hz','b_f0_candidate_p50_hz','b_f0_candidate_p90_hz','b_f0_confidence_p50'
   ];
   const rows = [head.join(',')];
-  const val = v => (v === null || v === undefined || !isFinite(v)) ? '' : String(v);
+  const val = v => { if (v === null || v === undefined) return ''; if (typeof v === 'number') return isFinite(v) ? String(v) : ''; return String(v); };
   for (const w of pkg.windows || []) {
     const a=w.a, b=w.b, ae=a.f0CandidateEvidence, be=b.f0CandidateEvidence, ao=a.observations, bo=b.observations;
     rows.push([
-      w.windowIndex,w.referenceStartSec,w.referenceEndSec,w.pairAvailableDurationSec,w.pairCoverageRatio,
-      a.localStartSec,a.localEndSec,a.availableDurationSec,a.coverageRatio,a.frameCount,ae.candidateFrameCount,ae.candidateRatioAmongAvailableFrames,ae.ambiguityFrameCount,ae.ambiguityRatioAmongCandidates,ae.strongAmbiguityRatioAmongCandidates,ao.rmsRelativeDb.p10,ao.rmsRelativeDb.p50,ao.rmsRelativeDb.p90,ao.f0CandidateHz.p10,ao.f0CandidateHz.p50,ao.f0CandidateHz.p90,ao.f0CandidateHz.confidenceP50,
-      b.localStartSec,b.localEndSec,b.availableDurationSec,b.coverageRatio,b.frameCount,be.candidateFrameCount,be.candidateRatioAmongAvailableFrames,be.ambiguityFrameCount,be.ambiguityRatioAmongCandidates,be.strongAmbiguityRatioAmongCandidates,bo.rmsRelativeDb.p10,bo.rmsRelativeDb.p50,bo.rmsRelativeDb.p90,bo.f0CandidateHz.p10,bo.f0CandidateHz.p50,bo.f0CandidateHz.p90,bo.f0CandidateHz.confidenceP50
+      w.windowIndex,w.referenceStartSec,w.referenceEndSec,w.pairReferenceStartSec,w.pairReferenceEndSec,w.pairAvailableDurationSec,w.pairCoverageRatio,w.comparisonCoverageStatus,
+      a.requestedLocalStartSec,a.requestedLocalEndSec,a.localStartSec,a.localEndSec,a.availableDurationSec,a.coverageRatio,a.frameCount,ae.candidateFrameCount,ae.candidateRatioAmongAvailableFrames,ae.ambiguityFrameCount,ae.ambiguityRatioAmongCandidates,ae.strongAmbiguityRatioAmongCandidates,ao.rmsRelativeDb.p10,ao.rmsRelativeDb.p50,ao.rmsRelativeDb.p90,ao.f0CandidateHz.p10,ao.f0CandidateHz.p50,ao.f0CandidateHz.p90,ao.f0CandidateHz.confidenceP50,
+      b.requestedLocalStartSec,b.requestedLocalEndSec,b.localStartSec,b.localEndSec,b.availableDurationSec,b.coverageRatio,b.frameCount,be.candidateFrameCount,be.candidateRatioAmongAvailableFrames,be.ambiguityFrameCount,be.ambiguityRatioAmongCandidates,be.strongAmbiguityRatioAmongCandidates,bo.rmsRelativeDb.p10,bo.rmsRelativeDb.p50,bo.rmsRelativeDb.p90,bo.f0CandidateHz.p10,bo.f0CandidateHz.p50,bo.f0CandidateHz.p90,bo.f0CandidateHz.confidenceP50
     ].map(val).join(','));
   }
   return rows.join('\n') + '\n';
@@ -2798,17 +2806,23 @@ async function buildD2DiagnosticPackage() {
   let idx = 0;
   for (let start = referenceAnchorSec; start + windowSec <= durA + 1e-6; start += hopSec) {
     const end = start + windowSec;
-    const a = d2SideWindowStats('a', start, end, offsetSec);
-    const b = d2SideWindowStats('b', start, end, offsetSec);
     const pairStart = Math.max(start, 0, offsetSec);
     const pairEnd = Math.min(end, durA, durB + offsetSec);
     const pairAvailable = Math.max(0, pairEnd - pairStart);
+    const pairCoverageRatio = +(pairAvailable / windowSec).toFixed(6);
+    // D2 compares only the common aligned interval. Never aggregate A over a
+    // longer interval than B in partial-coverage windows.
+    const a = d2SideWindowStats('a', start, end, pairStart, pairEnd, offsetSec);
+    const b = d2SideWindowStats('b', start, end, pairStart, pairEnd, offsetSec);
     windows.push({
       windowIndex: idx++,
       referenceStartSec: +start.toFixed(3),
       referenceEndSec: +end.toFixed(3),
+      pairReferenceStartSec: pairAvailable > 0 ? +pairStart.toFixed(3) : null,
+      pairReferenceEndSec: pairAvailable > 0 ? +pairEnd.toFixed(3) : null,
       pairAvailableDurationSec: +pairAvailable.toFixed(3),
-      pairCoverageRatio: +(pairAvailable / windowSec).toFixed(6),
+      pairCoverageRatio,
+      comparisonCoverageStatus: pairCoverageRatio >= 0.999 ? 'full' : (pairCoverageRatio > 0 ? 'partial' : 'none'),
       a, b
     });
   }
@@ -2821,7 +2835,7 @@ async function buildD2DiagnosticPackage() {
   const zeroPair = windows.filter(w => w.pairCoverageRatio === 0).length;
   const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
   return {
-    schemaVersion: 'songscope-d2diag-0.1.0',
+    schemaVersion: 'songscope-d2diag-0.1.1',
     packageType: 'pairwise_observation_comparison',
     status: 'diagnostic_only',
     generatedAt: nowIso(),
@@ -2829,6 +2843,7 @@ async function buildD2DiagnosticPackage() {
     buildId: BUILD_ID,
     comparisonPrinciples: [
       'This package reports aligned observations and evidence quantity; it does not label improvement.',
+      'Per-window A/B observations are aggregated only over the common aligned interval shared by both recordings.',
       'F0 candidate values are not corrected or deleted because of ambiguity flags; ambiguity is reported separately as evidence.',
       'rms_relative_db is normalized within each recording and must not be interpreted as absolute loudness difference.',
       'Missing or weak evidence remains missing/weak rather than being imputed.'
@@ -2851,6 +2866,12 @@ async function buildD2DiagnosticPackage() {
       hopSec,
       anchorSec: referenceAnchorSec,
       intervalConvention: '[start,end)'
+    },
+    windowingCoverage: {
+      policy: 'full_nominal_windows_only',
+      lastWindowEndSec: windows.length ? windows[windows.length - 1].referenceEndSec : 0,
+      unwindowedReferenceTailSec: windows.length ? +Math.max(0, durA - windows[windows.length - 1].referenceEndSec).toFixed(3) : +durA.toFixed(3),
+      note: 'A final tail shorter than the 10 s nominal window is not summarized in this diagnostic build.'
     },
     recordingA: d2RecordingDescriptor('a'),
     recordingB: d2RecordingDescriptor('b'),

@@ -18,10 +18,19 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.6.0`
-- Build ID: `20260810-d2diag-01`
+- Schema Version: `0.6.1`
+- Build ID: `20260810-d2diag-02`
 
 ## Phase D2 Diagnostic
+
+
+### D2 Diagnostic build 02 — common-overlap windowing fix
+- 部分coverage窓でA側を10秒、B側を3.6秒など異なる時間範囲で集計していたため、pairwise comparisonとして不正確だった。build 02では各窓の**共通alignment区間だけ**をA/B両方に使う。
+- `pairReferenceStartSec / pairReferenceEndSec` と `comparisonCoverageStatus (full/partial/none)` を出力し、coverage=0の窓では両側の比較観測値をnull/0にする。
+- offset後の浮動小数点境界で10秒窓が499/501 frameになりうる問題を微小toleranceで安定化した。
+- 現在の10秒/5秒window policyはfull nominal windowsのみ。末尾の未集計時間は`windowingCoverage.unwindowedReferenceTailSec`として明示する。
+- D1 alignment、audio-analysis-worker、IndexedDB schemaは変更していない。
+
 
 - D1のresolved mappingを使い、Recording A基準の10秒窓 / 5秒hopで同一曲位置の観測値を並べる診断段階です。
 - 書き出しは `comparison_summary.json` と `comparison_windows.csv` の2ファイルを含むZIPです。
