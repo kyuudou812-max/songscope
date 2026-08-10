@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase E1  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase E2  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,10 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseE1';
-const SCHEMA_VERSION = '0.8.0';
-const BUILD_ID = '20260810-e1-01';
+const APP_VERSION = '0.2.0-phaseE2';
+const SCHEMA_VERSION = '0.9.0';
+const BUILD_ID = '20260810-e2-01';
+const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -433,6 +434,7 @@ const state = {
   editingRec: false,
   recFormContext: null, // metadata provenance判定用
   evaluationImageMeta: null, // 現在録音の採点結果画像メタ（画像本体はaudio store内）
+  evaluationStructured: null, // 外部で画像から構造化した評価JSON（audio store内）
   markerDraft: null,   // {timeSec, tag, memo, markerId?}
   segmentDraft: null,
   worker: null,
@@ -589,24 +591,116 @@ function parseStoredScore(v) {
   const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
   return isFinite(n) ? +n.toFixed(3) : null;
 }
-function buildRecordingEvaluationAnchors(rec, imageMeta) {
-  const prov = normalizedMetadataProvenance(rec || {});
+function structuredEvaluationDocument(stored) {
+  if (!stored || typeof stored !== 'object') return null;
+  return stored.document && typeof stored.document === 'object' ? stored.document : stored;
+}
+function structuredOverallScore(stored) {
+  const doc = structuredEvaluationDocument(stored);
+  const v = doc && doc.result && doc.result.overallScore && doc.result.overallScore.value;
+  const n = Number(v);
+  return isFinite(n) ? +n.toFixed(3) : null;
+}
+function structuredEvaluationDescriptor(rec, imageMeta, stored) {
+  const doc = structuredEvaluationDocument(stored);
+  if (!doc) return { status: 'unavailable' };
+  const sourceSha = doc.sourceEvidence && doc.sourceEvidence.sha256 ? String(doc.sourceEvidence.sha256).toLowerCase() : null;
+  const currentSha = imageMeta && imageMeta.sha256 ? String(imageMeta.sha256).toLowerCase() : null;
+  const recId = rec && rec.recordingId || null;
+  const docRecId = doc.recordingId || null;
+  const recordingIdMatch = !!recId && !!docRecId && recId === docRecId;
+  const sourceEvidenceMatch = !!sourceSha && !!currentSha && sourceSha === currentSha;
+  let verificationStatus = 'unverified';
+  if (!currentSha) verificationStatus = 'source_image_missing';
+  else if (!recordingIdMatch) verificationStatus = 'recording_id_mismatch';
+  else if (!sourceEvidenceMatch) verificationStatus = 'source_image_sha_mismatch';
+  else verificationStatus = 'source_verified';
   return {
-    schemaVersion: 'songscope-evaluation-anchors-v1',
+    status: 'available',
+    schemaVersion: doc.schemaVersion || null,
+    recordingId: docRecId,
+    sourceEvidence: doc.sourceEvidence || null,
+    extraction: doc.extraction || null,
+    result: doc.result || null,
+    overallScore: structuredOverallScore(stored),
+    verification: {
+      status: verificationStatus,
+      recordingIdMatch,
+      sourceEvidenceMatch,
+      currentScoringImageSha256: currentSha
+    },
+    importMeta: stored.importMeta || null,
+    note: 'Externally structured interpretation of the attached scoring-result image. SongScope validates source identity but does not itself OCR or certify extracted values.'
+  };
+}
+function validateStructuredEvaluationDocument(doc, rec, imageMeta) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new Error('評価JSONの形式が正しくありません');
+  if (doc.schemaVersion !== EXTERNAL_EVALUATION_SCHEMA) throw new Error('未対応の評価JSON schemaです');
+  if (!doc.recordingId || !rec || doc.recordingId !== rec.recordingId) throw new Error('この録音用の評価JSONではありません');
+  const sourceSha = doc.sourceEvidence && doc.sourceEvidence.sha256 ? String(doc.sourceEvidence.sha256).toLowerCase() : '';
+  const currentSha = imageMeta && imageMeta.sha256 ? String(imageMeta.sha256).toLowerCase() : '';
+  if (!currentSha) throw new Error('先に採点結果画像を添付してください');
+  if (!sourceSha || sourceSha !== currentSha) throw new Error('評価JSONの元画像SHA-256が現在の採点結果画像と一致しません');
+  if (!doc.result || typeof doc.result !== 'object' || Array.isArray(doc.result)) throw new Error('評価JSONにresultがありません');
+  return true;
+}
+function buildEvaluationExtractionRequest(rec, imageMeta) {
+  if (!rec || !imageMeta || !imageMeta.sha256) return null;
+  return {
+    schemaVersion: 'songscope-evaluation-extraction-request-v1',
+    recordingId: rec.recordingId,
+    sourceEvidence: {
+      type: 'scoring_result_image',
+      sha256: imageMeta.sha256,
+      fileName: imageMeta.fileName || null,
+      mimeType: imageMeta.mimeType || null
+    },
+    requestedOutputSchemaVersion: EXTERNAL_EVALUATION_SCHEMA,
+    instructions: [
+      'Read the attached scoring-result image and structure only values that are explicitly readable.',
+      'Do not guess hidden numeric values from radar charts, bars, keyboards, or other graphical-only scales.',
+      'Preserve uncertainty with status fields instead of inventing confidence percentages.',
+      'Return a JSON document whose recordingId and sourceEvidence.sha256 exactly match this request.',
+      'Do not label improvement or infer an acoustic cause from the score.'
+    ],
+    minimumOutputEnvelope: {
+      schemaVersion: EXTERNAL_EVALUATION_SCHEMA,
+      recordingId: rec.recordingId,
+      sourceEvidence: { type: 'scoring_result_image', sha256: imageMeta.sha256, fileName: imageMeta.fileName || null },
+      extraction: { method: 'external_visual_extraction', userReview: 'not_yet_confirmed' },
+      result: {}
+    }
+  };
+}
+function buildRecordingEvaluationAnchors(rec, imageMeta, structured = state.evaluationStructured) {
+  const prov = normalizedMetadataProvenance(rec || {});
+  const structuredDesc = structuredEvaluationDescriptor(rec, imageMeta, structured);
+  const storedScore = parseStoredScore(rec && rec.damScore);
+  const extractedScore = structuredDesc.verification && structuredDesc.verification.status === 'source_verified' ? structuredDesc.overallScore : null;
+  let scoreConsistency = 'not_comparable';
+  if (storedScore !== null && extractedScore !== null) scoreConsistency = Math.abs(storedScore - extractedScore) <= 0.001 ? 'same_value' : 'different_value';
+  return {
+    schemaVersion: 'songscope-evaluation-anchors-v2',
     recordingId: rec && rec.recordingId || null,
     damScore: {
-      status: parseStoredScore(rec && rec.damScore) === null ? 'unavailable' : 'available',
-      value: parseStoredScore(rec && rec.damScore), rawStoredValue: rec && rec.damScore || null,
+      status: storedScore === null ? 'unavailable' : 'available',
+      value: storedScore, rawStoredValue: rec && rec.damScore || null,
       provenance: prov.damScore || { source: 'absent', confirmation: 'unknown' },
       note: 'External outcome metadata only; it does not identify the acoustic cause of a change.'
     },
     scoringResultImage: evaluationImageDescriptor(rec, imageMeta),
+    structuredScoringResult: structuredDesc,
+    consistencyChecks: {
+      storedDamScoreVsStructuredOverallScore: scoreConsistency,
+      policy: 'Differences are surfaced and never silently reconciled.'
+    },
     recordedAt: {
       value: rec && (rec.recordedAt || rec.createdAt) || null,
       provenance: prov.recordedAt || { source: 'legacy_unknown', confirmation: 'unknown' }
     },
     policy: {
       appDoesNotParseImage: true,
+      structuredEvaluationMustReferenceCurrentImageSha256: true,
       noAutomaticImprovementJudgement: true,
       doNotReconcileConflictsSilently: true
     }
@@ -1003,6 +1097,7 @@ async function openRecording(id) {
   state.markers = [];
   state.segments = [];
   state.evaluationImageMeta = null;
+  state.evaluationStructured = null;
 
   showView('view-review');
   renderReviewHeader();
@@ -1013,6 +1108,7 @@ async function openRecording(id) {
     const a = await dbGet('audio', id);
     if (a && a.blob) attachAudio(a.blob);
     state.evaluationImageMeta = a && a.evaluationImageMeta ? a.evaluationImageMeta : null;
+    state.evaluationStructured = a && a.evaluationStructured ? a.evaluationStructured : null;
     renderEvaluationAnchor();
   } catch (e) { toast('音声を読み込めませんでした'); }
 
@@ -1075,11 +1171,19 @@ function renderEvaluationAnchor() {
   if (!box || !state.rec) return;
   const score = parseStoredScore(state.rec.damScore);
   const img = evaluationImageDescriptor(state.rec, state.evaluationImageMeta);
+  const structured = structuredEvaluationDescriptor(state.rec, state.evaluationImageMeta, state.evaluationStructured);
   const parts = [];
   parts.push(score === null ? 'DAM点数: 未登録' : `DAM点数: ${score.toFixed(3)}`);
   parts.push(img.status === 'available' ? `採点結果画像: あり (${fmtBytes(img.fileSize || 0)})` : '採点結果画像: なし');
-  box.innerHTML = `<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small">画像は証拠として保存するだけで、SongScope自身はOCR・採点項目の解釈を行いません。</p>`;
+  if (structured.status !== 'available') parts.push('構造化評価: なし');
+  else {
+    const s = structured.overallScore === null ? '' : ` / 総合 ${structured.overallScore.toFixed(3)}`;
+    const v = structured.verification && structured.verification.status === 'source_verified' ? '画像SHA一致' : `要確認:${structured.verification && structured.verification.status || 'unverified'}`;
+    parts.push(`構造化評価: あり (${v}${s})`);
+  }
+  box.innerHTML = `<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small">SongScopeは画像をOCRしません。外部で構造化したJSONは、録音IDと元画像SHA-256が一致する場合だけ検証済み証拠として扱います。</p>`;
   const rm = $('#btn-eval-image-remove'); if (rm) rm.hidden = img.status !== 'available';
+  const srm = $('#btn-eval-json-remove'); if (srm) srm.hidden = structured.status !== 'available';
 }
 async function saveEvaluationImage(file) {
   if (!state.rec || !file) return;
@@ -1115,6 +1219,45 @@ async function removeEvaluationImage() {
     }
     state.evaluationImageMeta = null; renderEvaluationAnchor(); toast('採点結果画像を外しました');
   } catch (e) { toast('画像を外せませんでした'); }
+}
+
+async function saveStructuredEvaluation(file) {
+  if (!state.rec || !file) return;
+  if (file.size > 1024 * 1024) { toast('評価JSONが大きすぎます（1MB以下）'); return; }
+  try {
+    const buf = await file.arrayBuffer();
+    const text = new TextDecoder('utf-8').decode(buf);
+    const doc = JSON.parse(text);
+    validateStructuredEvaluationDocument(doc, state.rec, state.evaluationImageMeta);
+    if (state.evaluationStructured && !confirm('既存の構造化評価JSONを置き換えますか？')) return;
+    const asset = await dbGet('audio', state.rec.recordingId);
+    if (!asset || !asset.blob) throw new Error('元音声の保存データがありません');
+    asset.evaluationStructured = {
+      document: doc,
+      importMeta: {
+        source: 'external_json_import',
+        fileName: file.name || 'structured_evaluation.json',
+        fileSha256: await sha256Hex(buf),
+        importedAt: nowIso(),
+        appVersion: APP_VERSION,
+        buildId: BUILD_ID
+      }
+    };
+    await dbPut('audio', asset);
+    state.evaluationStructured = asset.evaluationStructured;
+    renderEvaluationAnchor(); toast('構造化評価JSONを保存しました');
+  } catch (e) {
+    console.error(e); toast((e && e.message) || '評価JSONを保存できませんでした');
+  }
+}
+async function removeStructuredEvaluation() {
+  if (!state.rec || !state.evaluationStructured) return;
+  if (!confirm('この録音に紐づけた構造化評価JSONを外しますか？')) return;
+  try {
+    const asset = await dbGet('audio', state.rec.recordingId);
+    if (asset) { delete asset.evaluationStructured; await dbPut('audio', asset); }
+    state.evaluationStructured = null; renderEvaluationAnchor(); toast('構造化評価JSONを外しました');
+  } catch (e) { toast('構造化評価JSONを外せませんでした'); }
 }
 
 function renderSummary() {
@@ -2085,7 +2228,7 @@ function buildSummaryJson(an) {
       recordingSetupPreset: rec.recordingSetupPreset || null
     },
     metadataProvenance: normalizedMetadataProvenance(rec),
-    evaluationAnchors: buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta),
+    evaluationAnchors: buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta, state.evaluationStructured),
     recordingLimitations: {
       containsAccompaniment: 'likely',
       note: ACCOMP_NOTE_EN,
@@ -2146,6 +2289,8 @@ function buildReportMd(an) {
   L.push(`DAM Score provenance: ${((normalizedMetadataProvenance(rec).damScore || {}).source) || ''}`);
   L.push(`RecordedAt provenance: ${((normalizedMetadataProvenance(rec).recordedAt || {}).source) || ''}`);
   L.push(`Scoring result image: ${state.evaluationImageMeta ? 'attached / SHA256 ' + (state.evaluationImageMeta.sha256 || '') : 'none'}`);
+  const structuredEval = structuredEvaluationDescriptor(rec, state.evaluationImageMeta, state.evaluationStructured);
+  L.push(`Structured scoring result: ${structuredEval.status === 'available' ? (structuredEval.verification.status + (structuredEval.overallScore === null ? '' : ' / overall ' + structuredEval.overallScore)) : 'none'}`);
   L.push(`Key: ${rec.keyChange || ''}`);
   L.push(`Octave: ${rec.octave || ''}`);
   L.push(`Device: ${rec.device || ''}`);
@@ -2244,8 +2389,12 @@ function buildReportMd(an) {
   } else L.push('(none)');
   L.push('', '## Files', '');
   L.push('summary.json', 'analysis_history.json', 'evaluation_anchors.json', 'frames.csv', 'markers.csv', 'user_segments.csv', 'detected_segments.csv', '');
+  if (state.evaluationStructured) L.push('evaluation/structured_scoring_result.json');
   L.push('waveform.png', 'loudness.png', 'pitch.png', 'spectrogram.png');
-  if (state.evaluationImageMeta) L.push('evaluation/scoring_result_image' + imageExtFromMeta(state.evaluationImageMeta));
+  if (state.evaluationImageMeta) {
+    L.push('evaluation/scoring_result_image' + imageExtFromMeta(state.evaluationImageMeta));
+    L.push('evaluation/extraction_request.json');
+  }
   L.push('', '## Important', '');
   L.push('This application does not diagnose singing ability.');
   L.push('The measurements above are observations for later comparison and hypothesis testing.');
@@ -2277,6 +2426,7 @@ async function doExport() {
     if (analysisHistory.length) rec.analysisCount = analysisHistory.length;
     const binaryAsset = await dbGet('audio', rec.recordingId).catch(() => null);
     state.evaluationImageMeta = binaryAsset && binaryAsset.evaluationImageMeta ? binaryAsset.evaluationImageMeta : null;
+    state.evaluationStructured = binaryAsset && binaryAsset.evaluationStructured ? binaryAsset.evaluationStructured : null;
 
     files.push({ name: 'report.md', data: buildReportMd(an) });
     files.push({ name: 'summary.json', data: JSON.stringify(buildSummaryJson(an), null, 2) });
@@ -2287,9 +2437,13 @@ async function doExport() {
       latestAnalysisId: rec.latestAnalysisId || (an && an.analysisId) || null,
       analyses: analysisHistory
     }, null, 2) });
-    files.push({ name: 'evaluation_anchors.json', data: JSON.stringify(buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta), null, 2) });
+    files.push({ name: 'evaluation_anchors.json', data: JSON.stringify(buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta, state.evaluationStructured), null, 2) });
+    if (state.evaluationStructured) {
+      files.push({ name: 'evaluation/structured_scoring_result.json', data: JSON.stringify(structuredEvaluationDocument(state.evaluationStructured), null, 2) });
+    }
     if (binaryAsset && binaryAsset.evaluationImageBlob && state.evaluationImageMeta) {
       files.push({ name: 'evaluation/scoring_result_image' + imageExtFromMeta(state.evaluationImageMeta), data: new Uint8Array(await binaryAsset.evaluationImageBlob.arrayBuffer()) });
+      files.push({ name: 'evaluation/extraction_request.json', data: JSON.stringify(buildEvaluationExtractionRequest(rec, state.evaluationImageMeta), null, 2) });
     }
     files.push({ name: 'markers.csv', data: markersCsv() });
     files.push({ name: 'user_segments.csv', data: userSegmentsCsv() });
@@ -2339,6 +2493,7 @@ async function backupAll() {
       out.recordings.push({
         recording: r,
         evaluationImageMeta: asset && asset.evaluationImageMeta ? asset.evaluationImageMeta : null,
+        evaluationStructured: asset && asset.evaluationStructured ? asset.evaluationStructured : null,
         markers: mk,
         segments: sg,
         analysisHistory: hist,
@@ -2351,7 +2506,7 @@ async function backupAll() {
     }
     try { out.alignmentDiagnostics = await dbAll('alignmentDiagnostics'); } catch (e) { out.alignmentDiagnostics = []; }
     try { out.alignmentResults = await dbAll('alignmentResults'); } catch (e) { out.alignmentResults = []; }
-    out.note = 'analysisHistoryは各解析runのcompact provenanceです。alignmentDiagnosticsは候補証拠、alignmentResultsはD1判定結果です。採点結果画像はメタデータのみで、画像バイト自体はこのJSONバックアップに含めません。frames等のフレーム単位データは最新analysis以外バックアップに含めません。';
+    out.note = 'analysisHistoryは各解析runのcompact provenanceです。alignmentDiagnosticsは候補証拠、alignmentResultsはD1判定結果です。採点結果画像はメタデータのみで画像バイト自体はこのJSONバックアップに含めません。構造化評価JSONは小さいためdocument+import provenanceを含めます。frames等のフレーム単位データは最新analysis以外バックアップに含めません。';
     closeSheet();
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
     await saveBlob(blob, `songscope_backup_${new Date().toISOString().slice(0, 10)}.json`);
@@ -2922,7 +3077,8 @@ function d2RecordingDescriptor(side) {
     },
     metadataProvenance: normalizedMetadataProvenance(rec),
     evaluationEvidence: {
-      scoringResultImage: evaluationImageDescriptor(rec, d.asset && d.asset.evaluationImageMeta ? d.asset.evaluationImageMeta : null)
+      scoringResultImage: evaluationImageDescriptor(rec, d.asset && d.asset.evaluationImageMeta ? d.asset.evaluationImageMeta : null),
+      structuredScoringResult: structuredEvaluationDescriptor(rec, d.asset && d.asset.evaluationImageMeta ? d.asset.evaluationImageMeta : null, d.asset && d.asset.evaluationStructured ? d.asset.evaluationStructured : null)
     }
   };
 }
@@ -3051,6 +3207,12 @@ function d2MetricCatalog() {
         interpretationClass: 'outcome_anchor',
         allowedInterpretation: ['Use as an external scoring outcome when present, while checking machine/mode/key and other provenance.'],
         prohibitedInterpretation: ['Direct acoustic explanation of why the score changed']
+      },
+      structuredScoringResult: {
+        source: 'external_json_linked_to_scoring_result_image_sha256',
+        interpretationClass: 'outcome_anchor',
+        allowedInterpretation: ['Use readable values extracted from a preserved scoring-result image when recordingId and source image SHA-256 verify.'],
+        prohibitedInterpretation: ['Treating externally extracted values as app OCR', 'Silently overriding conflicting manual metadata', 'Direct acoustic explanation of score changes']
       }
     }
   };
@@ -3058,12 +3220,12 @@ function d2MetricCatalog() {
 function d2EvaluationAnchors(descA, descB) {
   const a = (descA && descA.userMetadata) || {}, b = (descB && descB.userMetadata) || {};
   const scoreA = parseStoredScore(a.damScore), scoreB = parseStoredScore(b.damScore);
+  const provA = descA && descA.metadataProvenance || {}, provB = descB && descB.metadataProvenance || {};
+  const confirmed = (prov, key) => prov[key] && prov[key].confirmation === 'user_confirmed';
+  const sameKnownConfirmed = key => a[key] && b[key] && String(a[key]).trim() === String(b[key]).trim() && confirmed(provA, key) && confirmed(provB, key);
+  const requiredReportedSame = ['device', 'scoringMode', 'keyChange', 'octave'];
   let scoreStatus = 'unavailable';
   if (scoreA !== null && scoreB !== null) {
-    const provA = descA && descA.metadataProvenance || {}, provB = descB && descB.metadataProvenance || {};
-    const confirmed = (prov, key) => prov[key] && prov[key].confirmation === 'user_confirmed';
-    const sameKnownConfirmed = key => a[key] && b[key] && String(a[key]).trim() === String(b[key]).trim() && confirmed(provA, key) && confirmed(provB, key);
-    const requiredReportedSame = ['device', 'scoringMode', 'keyChange', 'octave'];
     const scoresConfirmed = confirmed(provA, 'damScore') && confirmed(provB, 'damScore');
     scoreStatus = scoresConfirmed && requiredReportedSame.every(sameKnownConfirmed)
       ? 'available_confirmed_metadata_conditions_match'
@@ -3071,6 +3233,18 @@ function d2EvaluationAnchors(descA, descB) {
   }
   const imgA = descA && descA.evaluationEvidence ? descA.evaluationEvidence.scoringResultImage : { status: 'unavailable' };
   const imgB = descB && descB.evaluationEvidence ? descB.evaluationEvidence.scoringResultImage : { status: 'unavailable' };
+  const stA = descA && descA.evaluationEvidence ? descA.evaluationEvidence.structuredScoringResult : { status: 'unavailable' };
+  const stB = descB && descB.evaluationEvidence ? descB.evaluationEvidence.structuredScoringResult : { status: 'unavailable' };
+  const validStructured = x => x && x.status === 'available' && x.verification && x.verification.status === 'source_verified' && x.overallScore !== null;
+  const stScoreA = validStructured(stA) ? stA.overallScore : null;
+  const stScoreB = validStructured(stB) ? stB.overallScore : null;
+  let structuredStatus = 'unavailable';
+  if (validStructured(stA) && validStructured(stB)) {
+    structuredStatus = requiredReportedSame.every(sameKnownConfirmed)
+      ? 'available_both_confirmed_metadata_conditions_match'
+      : 'available_both_comparability_not_established';
+  } else if (validStructured(stA) || validStructured(stB)) structuredStatus = 'available_one_side';
+  const consistency = (stored, extracted) => stored !== null && extracted !== null ? (Math.abs(stored - extracted) <= 0.001 ? 'same_value' : 'different_value') : 'not_comparable';
   return {
     damScore: {
       status: scoreStatus,
@@ -3078,8 +3252,8 @@ function d2EvaluationAnchors(descA, descB) {
       b: scoreB,
       deltaBminusA: scoreA !== null && scoreB !== null ? +(scoreB - scoreA).toFixed(3) : null,
       provenance: {
-        a: descA && descA.metadataProvenance ? (descA.metadataProvenance.damScore || { source: 'legacy_unknown', confirmation: 'unknown' }) : { source: 'legacy_unknown', confirmation: 'unknown' },
-        b: descB && descB.metadataProvenance ? (descB.metadataProvenance.damScore || { source: 'legacy_unknown', confirmation: 'unknown' }) : { source: 'legacy_unknown', confirmation: 'unknown' }
+        a: provA.damScore || { source: 'legacy_unknown', confirmation: 'unknown' },
+        b: provB.damScore || { source: 'legacy_unknown', confirmation: 'unknown' }
       },
       note: 'Score delta is an outcome observation only. It does not identify the acoustic cause of a change.'
     },
@@ -3089,6 +3263,19 @@ function d2EvaluationAnchors(descA, descB) {
       b: imgB,
       parsedByApp: false,
       note: 'Attached scoring-result images are preserved as external evidence. SongScope does not OCR, normalize, or silently reconcile them with manually stored score metadata.'
+    },
+    structuredScoringResults: {
+      status: structuredStatus,
+      a: stA,
+      b: stB,
+      overallScoreA: stScoreA,
+      overallScoreB: stScoreB,
+      deltaBminusA: stScoreA !== null && stScoreB !== null ? +(stScoreB - stScoreA).toFixed(3) : null,
+      consistencyWithStoredDamScore: {
+        a: consistency(scoreA, stScoreA),
+        b: consistency(scoreB, stScoreB)
+      },
+      note: 'Values are externally structured from preserved image evidence and are usable only when source verification passes. Comparison conditions remain a separate question.'
     }
   };
 }
@@ -3157,9 +3344,9 @@ async function buildD2DiagnosticPackage() {
   const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
   const descA = d2RecordingDescriptor('a'), descB = d2RecordingDescriptor('b');
   const evalAnchors = d2EvaluationAnchors(descA, descB);
-  const hasOutcomeAnchor = evalAnchors.damScore.status !== 'unavailable' || evalAnchors.scoringResultImages.status !== 'unavailable';
+  const hasOutcomeAnchor = evalAnchors.damScore.status !== 'unavailable' || evalAnchors.scoringResultImages.status !== 'unavailable' || evalAnchors.structuredScoringResults.status !== 'unavailable';
   return {
-    schemaVersion: 'songscope-d2-0.3.0',
+    schemaVersion: 'songscope-d2-0.4.0',
     packageType: 'pairwise_observation_comparison',
     status: 'aligned_observation_comparison_ready',
     generatedAt: nowIso(),
@@ -3252,6 +3439,10 @@ async function exportD2DiagnosticPackage() {
       const asset = d && d.asset;
       if (asset && asset.evaluationImageBlob && asset.evaluationImageMeta) {
         files.push({ name: `evaluation/${label}_scoring_result_image${imageExtFromMeta(asset.evaluationImageMeta)}`, data: new Uint8Array(await asset.evaluationImageBlob.arrayBuffer()) });
+        files.push({ name: `evaluation/${label}_extraction_request.json`, data: JSON.stringify(buildEvaluationExtractionRequest(d.rec, asset.evaluationImageMeta), null, 2) });
+      }
+      if (asset && asset.evaluationStructured) {
+        files.push({ name: `evaluation/${label}_structured_scoring_result.json`, data: JSON.stringify(structuredEvaluationDocument(asset.evaluationStructured), null, 2) });
       }
     }
     const blob = SongScopeZip.createZip(files);
@@ -3580,6 +3771,11 @@ function wireReview() {
     const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) saveEvaluationImage(f);
   });
   $('#btn-eval-image-remove').addEventListener('click', removeEvaluationImage);
+  $('#btn-eval-json').addEventListener('click', () => $('#eval-json-input').click());
+  $('#eval-json-input').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) saveStructuredEvaluation(f);
+  });
+  $('#btn-eval-json-remove').addEventListener('click', removeStructuredEvaluation);
 
   $('#btn-delete-rec').addEventListener('click', async () => {
     if (!state.rec) return;

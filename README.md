@@ -440,3 +440,14 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - DAM点数・recordedAtなどに metadata provenance を追加します。既存データで由来を証明できない値は `legacy_unknown` のままにし、推測で user-confirmed にしません。
 - 新規録音の recordedAt がファイルの lastModified 由来なら `file_last_modified_unverified`、日時をユーザーが編集した場合は `user_edited / user_confirmed` と記録します。
 - DB_VERは5のままです。新しいObjectStoreは作らず、D1のDB upgrade問題を再発させません。
+
+
+## Phase E2 build 01 — 外部構造化評価の安全な取込
+
+- SongScope自身は採点結果画像をOCRしません。代わりに、ChatGPT等の外部解釈で作成した `songscope-external-evaluation-v1` JSONを読み込めます。
+- 取込時に `recordingId` と、添付済み採点結果画像の SHA-256 を必須照合します。違う録音・違う画像の評価JSONは拒否します。
+- 構造化評価は元画像・手入力DAM点数とは別の証拠として保持し、値が食い違っても自動補正・上書きしません。
+- 通常ZIPには `evaluation/structured_scoring_result.json`、D2比較ZIPには A/B各側の構造化評価JSONを含めます。
+- D2の `evaluationAnchors.structuredScoringResults` は、画像SHA照合済みの総合点が両側にある場合のみ差分を出します。採点条件の比較可能性は別判定のままです。
+- DB schemaは変更せず `DB_VER=5` のまま。構造化評価は既存audio assetの追加プロパティとして保存します。
+- 採点結果画像を含むZIPには `evaluation/extraction_request.json`（比較ZIPではA/B別）も同梱し、外部解釈側へ録音ID・画像SHA・出力schema・禁止推測を機械可読で伝えます。
