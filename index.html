@@ -227,10 +227,28 @@
       <div id="cmp-align-result" class="note"><p class="small">まだ判定していません。</p></div>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>D2 + E3 比較パッケージ</span><span class="mono small">Observation + outcome evidence</span></div>
-      <p class="small">保存済みのresolved D1を使い、同じ曲位置の観測値と証拠量を10秒窓・5秒hopで並べます。両側にsource-verifiedの構造化採点結果があれば、E3の項目別Outcome差も別証拠として同梱します。F0 candidateは混合音声の周期候補であり、vocal F0や音程正確性とは扱いません。改善・悪化や原因の判定は行いません。</p>
+      <div class="section-head tight"><span>E4 比較前提の確認</span><span class="mono small">Chronology + scoring context</span></div>
+      <p class="small">A/Bの選択順とは別に「どちらを先に歌ったか」を本人確認として保存できます。採点条件は、機種・採点モード・キー変更・オクターブの4項目がこの2回で同じだったかだけを確認します。録音メタデータ自体は書き換えません。</p>
+      <div id="cmp-context-status" class="note"><p class="small">A/Bを選ぶと、保存済みの比較前提を確認します。</p></div>
+      <p class="small"><b>時間順</b></p>
       <div class="row gap wrap">
-        <button id="btn-d2-export" class="mini accent">比較パッケージを書き出す（D2+E3）</button>
+        <button id="btn-context-order-a-first" class="mini">Aが先</button>
+        <button id="btn-context-order-b-first" class="mini">Bが先</button>
+        <button id="btn-context-order-clear" class="mini">順序を未確定に戻す</button>
+      </div>
+      <p class="small"><b>採点条件</b>（機種・採点モード・キー・オクターブ）</p>
+      <div class="row gap wrap">
+        <button id="btn-context-cond-same" class="mini">この2回は同じ</button>
+        <button id="btn-context-cond-diff" class="mini">違いがある</button>
+        <button id="btn-context-cond-clear" class="mini">条件を未確定に戻す</button>
+      </div>
+      <p class="small">「同じ」は部屋・マイク位置・体調などまで同一だったという意味ではありません。分からない場合は未確定のままで構いません。</p>
+    </div>
+    <div class="card">
+      <div class="section-head tight"><span>D2 + E3 + E4 比較パッケージ</span><span class="mono small">Observation + outcome evidence</span></div>
+      <p class="small">保存済みのresolved D1を使い、同じ曲位置の観測値と証拠量を10秒窓・5秒hopで並べます。両側にsource-verifiedの構造化採点結果があれば、E3の項目別Outcome差も別証拠として同梱します。E4で時間順が確定した場合は、A/B差とは別に「後−前」の外部評価変化も出します。F0 candidateは混合音声の周期候補であり、vocal F0や音程正確性とは扱いません。改善・悪化や原因の判定は行いません。</p>
+      <div class="row gap wrap">
+        <button id="btn-d2-export" class="mini accent">比較パッケージを書き出す（D2+E3+E4）</button>
       </div>
       <div id="cmp-d2-result" class="note"><p class="small">D1がresolvedになったA/Bで使用できます。E3は評価証拠が片側だけでも安全に出力し、足りない側をmissingのまま残します。</p></div>
     </div>

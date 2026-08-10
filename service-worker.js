@@ -3,7 +3,7 @@
  * 変更頻度の高いアプリ資産は network-first、アイコン等は cache-first。
  */
 const CACHE = 'songscope-v0.2.0-phaseE3-20260810-e3-01';
-const BUILD_ID = '20260810-e3-01';
+const BUILD_ID = '20260810-e4-01';
 const SHELL = [
   './',
   './index.html',

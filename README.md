@@ -466,3 +466,15 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - D2の `evaluationAnchors.structuredScoringResults` は、画像SHA照合済みの総合点が両側にある場合のみ差分を出します。採点条件の比較可能性は別判定のままです。
 - DB schemaは変更せず `DB_VER=5` のまま。構造化評価は既存audio assetの追加プロパティとして保存します。
 - 採点結果画像を含むZIPには `evaluation/extraction_request.json`（比較ZIPではA/B別）も同梱し、外部解釈側へ録音ID・画像SHA・出力schema・禁止推測を機械可読で伝えます。
+
+
+## Phase E4 build 01 — Chronology / scoring-condition context
+
+- A/B選択順と、実際の「先→後」を分離しました。タイトル末尾の数字、選択順、由来不明の同一recordedAtから順序を推測しません。
+- 比較画面で「Aが先 / Bが先」を明示すると、pair-levelの本人確認として `alignmentResults.comparisonContext` に保存します。既存D1を再実行してもcomparisonContextを引き継ぎます。
+- 採点条件は「機種・採点モード・キー変更・オクターブ」の4項目について、この2回で同じ / 違うをpair-levelで確認できます。recording metadataは上書きしません。
+- per-recordingのuser-confirmed metadataとpair-level確認が矛盾する場合は `conflict_pair_report_vs_recording_metadata` として自動解決しません。
+- source-verified採点結果が両側あり、時間順が確立すると、`outcome_comparison.json` に `progressionObservation` を追加し、A/B差とは別に `later - earlier` を保存します。これは外部評価の変化であり、歌唱力改善や原因を自動判定しません。
+- 比較ZIPに `comparison_context.json` を追加しました。
+- DB_VERは5のままです。新ObjectStoreは作りません。`audio-analysis-worker.js` / `alignment-worker.js` は変更しません。
+- App: `0.2.0-phaseE4` / Schema: `0.11.0` / Build: `20260810-e4-01`
