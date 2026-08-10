@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=2">
+<link rel="stylesheet" href="styles.css?v=20260810-r0-01">
 <title>SongScope</title>
 </head>
 <body>
@@ -38,7 +38,9 @@
       <p class="mono small" id="storage-est"></p>
       <div class="row gap">
         <button id="btn-persist" class="mini">永続化を要求</button>
-        <button id="btn-backup-all" class="mini">全データをJSONで書き出す</button>
+        <button id="btn-backup-all" class="mini">完全バックアップZIP</button>
+        <button id="btn-restore-all" class="mini">バックアップを復元</button>
+        <input type="file" id="restore-input" accept="application/zip,.zip" hidden>
       </div>
     </div>
 
@@ -348,7 +350,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js"></script>
-<script src="app.js?v=20260810-e3-01"></script>
+<script src="zip.js?v=20260810-r0-01"></script>
+<script src="app.js?v=20260810-r0-01"></script>
 </body>
 </html>

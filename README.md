@@ -1,4 +1,25 @@
-# SongScope v0.2 Phase F2
+# SongScope v0.2 Audit Remediation R0 build 01
+
+外部監査後の最優先修正。Phase F2の分析ロジックは変更せず、**データ保全とPWA更新安全性**だけを修正する。
+
+- App: `0.2.0-auditR0` / Build: `20260810-r0-01` / schema: `0.13.1` / DB: `5`
+- 「全データJSON」を廃止し、IndexedDB全store・raw audio・採点画像・full analysisを含む `songscope-full-backup-v1` ZIPを作成する。
+- 同ZIPの復元を実装。復元前にZIP CRC32、Blob SHA-256、recording audio SHA-256、採点画像SHA-256、structured evaluation bindingを検証する。
+- 復元は既存データを削除しないmerge方式。同一primary keyは検証済みバックアップ側で更新し、recordingIdとaudio SHAが衝突する場合は停止する。
+- Service Workerのoffline fallbackは `ignoreSearch: true` を使用し、HTMLのcache-busting queryをbuild IDに統一。install時の`skipWaiting()`を廃止して実行中ページとのversion skewを避ける。
+- IndexedDB `VersionError` は「サイトデータを削除しない」専用案内へ変換する。
+- F1/F2/D1/D2/E系の意味論・workerアルゴリズムは変更しない。
+
+## R0実機検証手順
+
+1. 更新後、ホームの **完全バックアップZIP** を押してZIPを保存する。
+2. そのZIPをChatGPTへ送って内部構造・raw evidenceの同梱・SHA整合を監査する。
+3. 可能ならSongScopeの **バックアップを復元** から同ZIPを選択し、検証後の確認画面で復元する。既存データは削除されない。
+4. 復元後に録音数、DAM画像、構造化評価、E4/F1/F2が維持されていることを確認する。
+
+---
+
+# Base snapshot: SongScope v0.2 Phase F2（R0は分析ロジックを維持）
 
 ### D1 build 02 — IndexedDB upgrade待機の修正
 - Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
@@ -18,8 +39,8 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.13.0`
-- Build ID: `20260810-f2-01`
+- Current Schema Version: `0.13.1`
+- Current Build ID: `20260810-r0-01`
 
 
 ## Phase F2 — Repeated-direction Pattern evidence
@@ -340,9 +361,11 @@ ChatGPTはZIPのままアップロードできます（できない場合はFile
 
 1. **原本をボイスメモ側に残しておく。** 解析結果は原本があればいつでも作り直せます。
 2. ホーム画面の「**永続化を要求**」を押しておく（端末が対応していれば削除されにくくなります）。
-3. ときどき「**全データをJSONで書き出す**」でバックアップする。
-   - このJSONには録音メタ情報・マーカー・区間・解析サマリーが入ります（音声とフレーム単位データは含みません。これらは原本から再解析できます）。
-4. 大事な録音は、そのつどZIPを書き出して保管する。
+3. ときどき「**完全バックアップZIP**」を書き出して、SongScopeとは別の場所へ保管する。
+   - IndexedDB全store、raw audio、採点画像、full analysis、alignment dataを含む復元用バックアップです。
+   - ZIP内部のCRC32に加え、復元時にraw audioと採点画像のSHA-256を再検証します。
+4. 復元するときは「**バックアップを復元**」からSongScope完全バックアップZIPを選びます。既存データは消さず、同一IDのみ検証済みバックアップ内容で更新します。
+5. ボイスメモ側の原本も引き続き残してください。完全バックアップとは別系統の原本保全になります。
 
 ---
 

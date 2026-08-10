@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase F2  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Audit Remediation R0  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseF2';
-const SCHEMA_VERSION = '0.13.0';
-const BUILD_ID = '20260810-f2-01';
+const APP_VERSION = '0.2.0-auditR0';
+const SCHEMA_VERSION = '0.13.1';
+const BUILD_ID = '20260810-r0-01';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -182,6 +182,17 @@ const DB_VER = 5;
 let dbp = null;
 
 const DB_BLOCKED_CODE = 'SONGSCOPE_DB_UPGRADE_BLOCKED';
+const DB_VERSION_ERROR_CODE = 'SONGSCOPE_DB_VERSION_NEWER';
+function makeDbVersionError(original) {
+  const e = new Error('この端末には、この画面より新しいSongScopeのデータベースがあります。');
+  e.code = DB_VERSION_ERROR_CODE;
+  e.originalError = original || null;
+  return e;
+}
+function isDbVersionError(e) { return !!(e && e.code === DB_VERSION_ERROR_CODE); }
+function dbVersionUserMessage() {
+  return '古いSongScope画面が開かれています。サイトデータを削除せず、SongScopeの全画面を閉じてから最新版を開き直してください。';
+}
 function makeDbBlockedError() {
   const e = new Error('SongScopeのデータベース更新が、別のSongScope画面によって待機中です。');
   e.code = DB_BLOCKED_CODE;
@@ -264,7 +275,8 @@ function db() {
       if (settled) return;
       settled = true;
       dbp = null;
-      rej(req.error);
+      const err = req.error;
+      rej(err && err.name === 'VersionError' ? makeDbVersionError(err) : err);
     };
   });
   return dbp;
@@ -454,7 +466,11 @@ function showView(id) {
 async function loadRecordings() {
   let list = [];
   try { list = await dbAll('recordings'); }
-  catch (e) { toast('保存データを読み込めませんでした'); }
+  catch (e) {
+    if (isDbVersionError(e)) toast(dbVersionUserMessage(), 6500);
+    else if (isDbBlockedError(e)) toast(dbBlockedUserMessage(), 6500);
+    else toast('保存データを読み込めませんでした');
+  }
   list.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   state.recordings = list;
   renderHome();
@@ -2479,42 +2495,305 @@ async function doExport() {
   }
 }
 
-/* ---------------- 全データバックアップ ---------------- */
+/* ---------------- 完全バックアップ / 復元 ---------------- */
+const FULL_BACKUP_SCHEMA = 'songscope-full-backup-v1';
+const FULL_BACKUP_BINARY_TAG = '__songscopeBackupBinaryV1';
+const FULL_BACKUP_STORE_NAMES = [
+  'recordings', 'audio', 'analysis', 'analysisHistory', 'markers', 'segments',
+  'alignmentFeatures', 'alignmentDiagnostics', 'alignmentResults'
+];
+
+function backupPathToken(v) {
+  return String(v || 'item').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80) || 'item';
+}
+function backupBlobExt(mimeType, name) {
+  const n = String(name || '').match(/\.[A-Za-z0-9]{1,8}$/);
+  if (n) return n[0].toLowerCase();
+  const t = String(mimeType || '').toLowerCase();
+  if (t.includes('mp4') || t.includes('m4a')) return '.m4a';
+  if (t.includes('mpeg')) return '.mp3';
+  if (t.includes('wav')) return '.wav';
+  if (t.includes('aac')) return '.aac';
+  if (t.includes('png')) return '.png';
+  if (t.includes('jpeg') || t.includes('jpg')) return '.jpg';
+  if (t.includes('webp')) return '.webp';
+  if (t.includes('json')) return '.json';
+  return '.bin';
+}
+function backupSpecialNumber(v) {
+  if (Number.isNaN(v)) return { __songscopeSpecialNumberV1: 'NaN' };
+  if (v === Infinity) return { __songscopeSpecialNumberV1: 'Infinity' };
+  if (v === -Infinity) return { __songscopeSpecialNumberV1: '-Infinity' };
+  return v;
+}
+
+async function backupEncodeValue(value, ctx, pathHint) {
+  if (value === null || value === undefined || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return isFinite(value) ? value : backupSpecialNumber(value);
+  if (typeof value === 'bigint') return { __songscopeBigIntV1: String(value) };
+
+  if (typeof Blob !== 'undefined' && value instanceof Blob) {
+    const bytes = new Uint8Array(await value.arrayBuffer());
+    const isFile = typeof File !== 'undefined' && value instanceof File;
+    const originalName = isFile ? value.name : '';
+    const ext = backupBlobExt(value.type, originalName);
+    const path = `binary/${backupPathToken(pathHint)}_${String(ctx.binaryCounter++).padStart(5, '0')}${ext}`;
+    const sha = await sha256Hex(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    ctx.files.push({ name: path, data: bytes });
+    ctx.binaryManifest.push({ path, kind: isFile ? 'File' : 'Blob', byteLength: bytes.byteLength, mimeType: value.type || '', fileName: originalName || null, sha256: sha });
+    return {
+      [FULL_BACKUP_BINARY_TAG]: true,
+      kind: isFile ? 'File' : 'Blob', path, byteLength: bytes.byteLength,
+      mimeType: value.type || '', fileName: originalName || null,
+      lastModified: isFile && isFinite(value.lastModified) ? value.lastModified : null,
+      sha256: sha
+    };
+  }
+
+  if (value instanceof ArrayBuffer) {
+    const bytes = new Uint8Array(value.slice(0));
+    const path = `binary/${backupPathToken(pathHint)}_${String(ctx.binaryCounter++).padStart(5, '0')}.arraybuffer.bin`;
+    ctx.files.push({ name: path, data: bytes });
+    return { [FULL_BACKUP_BINARY_TAG]: true, kind: 'ArrayBuffer', path, byteLength: bytes.byteLength };
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
+    const ctor = value instanceof DataView ? 'DataView' : (value.constructor && value.constructor.name) || 'Uint8Array';
+    const path = `binary/${backupPathToken(pathHint)}_${String(ctx.binaryCounter++).padStart(5, '0')}.${backupPathToken(ctor)}.bin`;
+    ctx.files.push({ name: path, data: bytes });
+    return { [FULL_BACKUP_BINARY_TAG]: true, kind: 'TypedArray', ctor, path, byteLength: bytes.byteLength };
+  }
+
+  if (Array.isArray(value)) {
+    const out = [];
+    for (let i = 0; i < value.length; i++) out.push(await backupEncodeValue(value[i], ctx, `${pathHint}_${i}`));
+    return out;
+  }
+
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = await backupEncodeValue(v, ctx, `${pathHint}_${k}`);
+    return out;
+  }
+  return null;
+}
+
+function backupTypedArrayCtor(name) {
+  const map = {
+    Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array,
+    Int32Array, Uint32Array, Float32Array, Float64Array
+  };
+  if (typeof BigInt64Array !== 'undefined') map.BigInt64Array = BigInt64Array;
+  if (typeof BigUint64Array !== 'undefined') map.BigUint64Array = BigUint64Array;
+  return map[name] || null;
+}
+
+async function backupDecodeValue(value, entries) {
+  if (value === null || value === undefined || typeof value !== 'object') return value;
+  if (Object.prototype.hasOwnProperty.call(value, '__songscopeSpecialNumberV1')) {
+    if (value.__songscopeSpecialNumberV1 === 'NaN') return NaN;
+    if (value.__songscopeSpecialNumberV1 === 'Infinity') return Infinity;
+    if (value.__songscopeSpecialNumberV1 === '-Infinity') return -Infinity;
+    throw new Error('バックアップ内の特殊数値が不正です');
+  }
+  if (Object.prototype.hasOwnProperty.call(value, '__songscopeBigIntV1')) return BigInt(value.__songscopeBigIntV1);
+  if (value[FULL_BACKUP_BINARY_TAG] === true) {
+    const bytes = entries.get(value.path);
+    if (!bytes) throw new Error(`バックアップ内のバイナリが見つかりません: ${value.path}`);
+    if (Number(value.byteLength) !== bytes.byteLength) throw new Error(`バイナリサイズが一致しません: ${value.path}`);
+    const copy = bytes.slice();
+    if (value.sha256) {
+      const got = await sha256Hex(copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength));
+      if (got.toLowerCase() !== String(value.sha256).toLowerCase()) throw new Error(`バイナリSHA-256が一致しません: ${value.path}`);
+    }
+    if (value.kind === 'ArrayBuffer') return copy.buffer;
+    if (value.kind === 'TypedArray') {
+      if (value.ctor === 'DataView') return new DataView(copy.buffer);
+      const C = backupTypedArrayCtor(value.ctor);
+      if (!C) throw new Error(`未対応のTypedArrayです: ${value.ctor}`);
+      return new C(copy.buffer);
+    }
+    if (value.kind === 'File' && typeof File !== 'undefined') {
+      return new File([copy], value.fileName || 'restored.bin', { type: value.mimeType || '', lastModified: Number(value.lastModified || Date.now()) });
+    }
+    if (value.kind === 'Blob' || value.kind === 'File') return new Blob([copy], { type: value.mimeType || '' });
+    throw new Error(`未対応のバイナリ種別です: ${value.kind}`);
+  }
+  if (Array.isArray(value)) {
+    const out = [];
+    for (const v of value) out.push(await backupDecodeValue(v, entries));
+    return out;
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) out[k] = await backupDecodeValue(v, entries);
+  return out;
+}
+
+async function buildFullBackupPackage() {
+  const ctx = { files: [], binaryCounter: 0, binaryManifest: [] };
+  const storeCounts = {};
+  for (let i = 0; i < FULL_BACKUP_STORE_NAMES.length; i++) {
+    const store = FULL_BACKUP_STORE_NAMES[i];
+    const rows = await dbAll(store).catch(() => []);
+    storeCounts[store] = rows.length;
+    const encoded = await backupEncodeValue(rows, ctx, `store_${store}`);
+    ctx.files.push({ name: `stores/${store}.json`, data: JSON.stringify(encoded) });
+    $('#busy-bar').style.width = String(10 + Math.round((i + 1) / FULL_BACKUP_STORE_NAMES.length * 62)) + '%';
+    $('#busy-msg').textContent = `${store} を保存しています… (${rows.length}件)`;
+  }
+  const rawAudio = ctx.binaryManifest.filter(x => /store_audio.*_blob_/i.test(x.path));
+  const evalImages = ctx.binaryManifest.filter(x => /evaluationImageBlob/i.test(x.path));
+  const manifest = {
+    schemaVersion: FULL_BACKUP_SCHEMA,
+    app: 'SongScope', appVersion: APP_VERSION, schemaVersionAtExport: SCHEMA_VERSION,
+    buildId: BUILD_ID, dbName: DB_NAME, dbVersion: DB_VER, exportedAt: nowIso(),
+    restoreMode: 'merge_backup_precedence_for_same_primary_key',
+    settings: JSON.parse(JSON.stringify(settings)),
+    preferences: { includeAudioInNormalExport: getFlag('includeAudio', false) },
+    stores: storeCounts,
+    binaryAssets: ctx.binaryManifest,
+    rawEvidenceSummary: {
+      blobCount: ctx.binaryManifest.filter(x => x.kind === 'Blob' || x.kind === 'File').length,
+      audioBlobCount: rawAudio.length,
+      evaluationImageBlobCount: evalImages.length,
+      totalBinaryBytes: ctx.binaryManifest.reduce((a, x) => a + Number(x.byteLength || 0), 0)
+    },
+    integrity: {
+      zipEntryCrc32VerifiedOnRestore: true,
+      blobSha256VerifiedOnRestore: true,
+      recordingAudioSha256CrossCheckedOnRestore: true,
+      evaluationImageSha256CrossCheckedOnRestore: true
+    },
+    note: '完全復元用バックアップ。IndexedDB全store、raw audio、採点画像、full analysis、alignment dataを含みます。復元は既存データを削除せず、同一primary keyはバックアップ側で更新します。'
+  };
+  ctx.files.unshift({ name: 'manifest.json', data: JSON.stringify(manifest, null, 2) });
+  return { manifest, files: ctx.files };
+}
+
 async function backupAll() {
   try {
-    busy('バックアップ', '全プロジェクトを収集しています…', 20);
-    const recs = await dbAll('recordings');
-    const out = { schemaVersion: SCHEMA_VERSION, app: 'SongScope', appVersion: APP_VERSION, exportedAt: nowIso(), settings, recordings: [] };
-    for (const r of recs) {
-      const mk = await dbByRec('markers', r.recordingId);
-      const sg = await dbByRec('segments', r.recordingId);
-      const an = await dbGet('analysis', r.recordingId);
-      const hist = await dbByRec('analysisHistory', r.recordingId).catch(() => []);
-      const asset = await dbGet('audio', r.recordingId).catch(() => null);
-      out.recordings.push({
-        recording: r,
-        evaluationImageMeta: asset && asset.evaluationImageMeta ? asset.evaluationImageMeta : null,
-        evaluationStructured: asset && asset.evaluationStructured ? asset.evaluationStructured : null,
-        markers: mk,
-        segments: sg,
-        analysisHistory: hist,
-        analysisSummary: an ? {
-          analysisId: an.analysisId || null, appVersion: an.appVersion || null, buildId: an.buildId || null,
-          audioSha256: an.audioSha256 || null, summary: an.summary, settings: an.settings,
-          engine: an.engine, detectedSegments: an.detectedSegments, createdAt: an.createdAt
-        } : null
-      });
-    }
-    try { out.alignmentDiagnostics = await dbAll('alignmentDiagnostics'); } catch (e) { out.alignmentDiagnostics = []; }
-    try { out.alignmentResults = await dbAll('alignmentResults'); } catch (e) { out.alignmentResults = []; }
-    out.note = 'analysisHistoryは各解析runのcompact provenanceです。alignmentDiagnosticsは候補証拠、alignmentResultsはD1判定結果です。採点結果画像はメタデータのみで画像バイト自体はこのJSONバックアップに含めません。構造化評価JSONは小さいためdocument+import provenanceを含めます。frames等のフレーム単位データは最新analysis以外バックアップに含めません。';
+    busy('完全バックアップ', 'IndexedDBとraw evidenceを収集しています…', 5);
+    const pkg = await buildFullBackupPackage();
+    $('#busy-msg').textContent = 'ZIPを作成しています…';
+    $('#busy-bar').style.width = '85%';
+    const blob = SongScopeZip.createZip(pkg.files);
+    $('#busy-bar').style.width = '100%';
     closeSheet();
-    const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
-    await saveBlob(blob, `songscope_backup_${new Date().toISOString().slice(0, 10)}.json`);
-    toast('バックアップを書き出しました');
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+    const name = `songscope_full_backup_${stamp}.zip`;
+    const how = await saveBlob(blob, name);
+    if (how !== 'cancelled') toast(`完全バックアップを書き出しました（${fmtBytes(blob.size)}）`, 4000);
   } catch (e) {
     closeSheet();
-    toast('バックアップに失敗しました');
+    console.error(e);
+    toast('完全バックアップに失敗しました：' + ((e && e.message) || ''), 5500);
+  }
+}
+
+async function parseFullBackupFile(file) {
+  const entries = await SongScopeZip.readZip(file);
+  const td = new TextDecoder('utf-8');
+  const manifestBytes = entries.get('manifest.json');
+  if (!manifestBytes) throw new Error('manifest.json がありません');
+  const manifest = JSON.parse(td.decode(manifestBytes));
+  if (!manifest || manifest.schemaVersion !== FULL_BACKUP_SCHEMA) throw new Error('SongScope完全バックアップv1ではありません');
+  if (Number(manifest.dbVersion || 0) > DB_VER) throw new Error('このバックアップは、より新しいSongScopeで作成されています。最新版を開いてください');
+
+  const stores = {};
+  for (const store of FULL_BACKUP_STORE_NAMES) {
+    const raw = entries.get(`stores/${store}.json`);
+    if (!raw) throw new Error(`stores/${store}.json がありません`);
+    const encoded = JSON.parse(td.decode(raw));
+    const decoded = await backupDecodeValue(encoded, entries);
+    if (!Array.isArray(decoded)) throw new Error(`${store} の形式が不正です`);
+    const expected = manifest.stores && Number(manifest.stores[store]);
+    if (isFinite(expected) && decoded.length !== expected) throw new Error(`${store} の件数がmanifestと一致しません`);
+    stores[store] = decoded;
+  }
+  return { manifest, stores };
+}
+
+async function validateFullBackupEvidence(parsed) {
+  const recMap = new Map((parsed.stores.recordings || []).map(r => [r.recordingId, r]));
+  for (const asset of parsed.stores.audio || []) {
+    if (!asset || !asset.recordingId) throw new Error('audio storeにrecordingIdの無いrecordがあります');
+    const rec = recMap.get(asset.recordingId) || null;
+    if (asset.blob && rec && rec.audioSha256) {
+      const ab = await asset.blob.arrayBuffer();
+      const got = await sha256Hex(ab);
+      if (got.toLowerCase() !== String(rec.audioSha256).toLowerCase()) throw new Error(`raw audio SHA-256不一致: ${asset.recordingId}`);
+    }
+    if (asset.evaluationImageBlob && asset.evaluationImageMeta && asset.evaluationImageMeta.sha256) {
+      const ab = await asset.evaluationImageBlob.arrayBuffer();
+      const got = await sha256Hex(ab);
+      if (got.toLowerCase() !== String(asset.evaluationImageMeta.sha256).toLowerCase()) throw new Error(`採点画像SHA-256不一致: ${asset.recordingId}`);
+    }
+    if (asset.evaluationStructured && rec) validateStructuredEvaluationDocument(structuredEvaluationDocument(asset.evaluationStructured), rec, asset.evaluationImageMeta || null);
+  }
+  // 同じrecordingIdに異なる既存SHAがある場合だけ、自動mergeを止める。
+  for (const rec of parsed.stores.recordings || []) {
+    const existing = await dbGet('recordings', rec.recordingId).catch(() => null);
+    if (existing && existing.audioSha256 && rec.audioSha256 && String(existing.audioSha256).toLowerCase() !== String(rec.audioSha256).toLowerCase()) {
+      throw new Error(`既存データとrecordingIdが衝突しています: ${rec.recordingId}`);
+    }
+  }
+  return true;
+}
+
+async function restoreFullBackupAtomic(parsed) {
+  const d = await db();
+  const stores = FULL_BACKUP_STORE_NAMES.filter(n => d.objectStoreNames.contains(n));
+  await new Promise((resolve, reject) => {
+    const tx = d.transaction(stores, 'readwrite');
+    try {
+      for (const store of stores) {
+        const os = tx.objectStore(store);
+        for (const row of parsed.stores[store] || []) os.put(row);
+      }
+    } catch (e) {
+      try { tx.abort(); } catch (_) { }
+      reject(e); return;
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('復元トランザクションに失敗しました'));
+    tx.onabort = () => reject(tx.error || new Error('復元トランザクションが中断されました'));
+  });
+  if (parsed.manifest.settings && typeof parsed.manifest.settings === 'object') {
+    settings = Object.assign({}, DEFAULT_SETTINGS, parsed.manifest.settings);
+    saveSettings();
+  }
+  if (parsed.manifest.preferences && typeof parsed.manifest.preferences.includeAudioInNormalExport === 'boolean') {
+    setFlag('includeAudio', parsed.manifest.preferences.includeAudioInNormalExport);
+  }
+}
+
+async function restoreAll(file) {
+  if (!file) return;
+  try {
+    busy('完全バックアップを検証', 'ZIPのCRCとmanifestを確認しています…', 8);
+    const parsed = await parseFullBackupFile(file);
+    $('#busy-msg').textContent = 'raw audio・採点画像のSHA-256を検証しています…';
+    $('#busy-bar').style.width = '45%';
+    await validateFullBackupEvidence(parsed);
+    closeSheet();
+    const recCount = Number(parsed.manifest.stores && parsed.manifest.stores.recordings || 0);
+    const ok = confirm(`完全バックアップを復元します。\n\n録音: ${recCount}件\n作成日時: ${parsed.manifest.exportedAt || '不明'}\n\n既存データは削除しません。同じIDのデータはバックアップ内容で更新します。続行しますか？`);
+    if (!ok) return;
+    busy('復元中', '検証済みデータを1つのIndexedDBトランザクションで復元しています…', 72);
+    await restoreFullBackupAtomic(parsed);
+    $('#busy-bar').style.width = '100%';
+    closeSheet();
+    state.rec = null; state.analysis = null;
+    await loadRecordings();
+    refreshStorageEstimate();
+    toast(`復元しました（録音 ${recCount}件）`, 4500);
+  } catch (e) {
+    closeSheet();
+    console.error(e);
+    if (isDbVersionError(e)) toast(dbVersionUserMessage(), 6500);
+    else if (isDbBlockedError(e)) toast(dbBlockedUserMessage(), 6500);
+    else toast('復元を中止しました：' + ((e && e.message) || ''), 6500);
   }
 }
 
@@ -4857,6 +5136,12 @@ function wireHome() {
   });
   $('#btn-settings').addEventListener('click', openSettingsSheet);
   $('#btn-backup-all').addEventListener('click', backupAll);
+  $('#btn-restore-all').addEventListener('click', () => $('#restore-input').click());
+  $('#restore-input').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (f) restoreAll(f);
+  });
   $('#btn-compare-open').addEventListener('click', openCompare);
   $('#btn-persist').addEventListener('click', async () => {
     try {

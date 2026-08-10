@@ -1,17 +1,17 @@
-/* SongScope service worker — Phase F2.
- * 録音・解析結果は IndexedDB にあり、ここでは扱わない。外部通信も行わない。
- * 変更頻度の高いアプリ資産は network-first、アイコン等は cache-first。
+/* SongScope service worker — Audit Remediation R0.
+ * IndexedDBの証拠データは扱わない。アプリ資産のoffline fallbackのみ担当する。
+ * install時にskipWaitingしない: 実行中ページと新workerのversion skewを避ける。
  */
-const CACHE = 'songscope-v0.2.0-phaseF2-20260810-f2-01';
-const BUILD_ID = '20260810-f2-01';
+const CACHE = 'songscope-v0.2.0-auditR0-20260810-r0-01';
+const BUILD_ID = '20260810-r0-01';
 const SHELL = [
   './',
   './index.html',
-  './styles.css',
+  './styles.css?v=' + BUILD_ID,
   './app.js?v=' + BUILD_ID,
   './audio-analysis-worker.js?v=' + BUILD_ID,
   './alignment-worker.js?v=' + BUILD_ID,
-  './zip.js',
+  './zip.js?v=' + BUILD_ID,
   './manifest.json',
   './icon-180.png',
   './icon-192.png',
@@ -19,7 +19,7 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
 });
 
 self.addEventListener('activate', e => {
@@ -33,7 +33,7 @@ function isMutableRequest(req, url) {
   if (req.mode === 'navigate') return true;
   const p = url.pathname;
   return p.endsWith('/index.html') || p.endsWith('/app.js') || p.endsWith('/audio-analysis-worker.js') || p.endsWith('/alignment-worker.js') ||
-    p.endsWith('/styles.css') || p.endsWith('/manifest.json') || p.endsWith('/service-worker.js');
+    p.endsWith('/styles.css') || p.endsWith('/zip.js') || p.endsWith('/manifest.json') || p.endsWith('/service-worker.js');
 }
 
 async function networkFirst(req) {
@@ -43,10 +43,11 @@ async function networkFirst(req) {
     if (res && res.status === 200 && res.type === 'basic') cache.put(req, res.clone()).catch(() => {});
     return res;
   } catch (err) {
-    const hit = await cache.match(req);
+    // HTML側のcache-busting queryとprecache keyがずれてもoffline fallbackできる。
+    const hit = await cache.match(req, { ignoreSearch: true });
     if (hit) return hit;
     if (req.mode === 'navigate') {
-      const fallback = await cache.match('./index.html');
+      const fallback = await cache.match('./index.html', { ignoreSearch: true });
       if (fallback) return fallback;
     }
     throw err;
@@ -55,7 +56,7 @@ async function networkFirst(req) {
 
 async function cacheFirst(req) {
   const cache = await caches.open(CACHE);
-  const hit = await cache.match(req);
+  const hit = await cache.match(req, { ignoreSearch: true });
   if (hit) return hit;
   const res = await fetch(req);
   if (res && res.status === 200 && res.type === 'basic') cache.put(req, res.clone()).catch(() => {});

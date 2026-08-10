@@ -93,5 +93,75 @@
     return new Blob(parts.concat(central, [eocd]), { type: 'application/zip' });
   }
 
-  global.SongScopeZip = { createZip: createZip, crc32: crc32 };
+  /**
+   * SongScope自身が作る store-method ZIP を読みます。
+   * 復元用途なので central directory / local header / CRC32 を照合し、
+   * encryption / compression / ZIP64 は受け付けません。
+   * @param {Blob|ArrayBuffer|Uint8Array} source
+   * @returns {Promise<Map<string,Uint8Array>>}
+   */
+  async function readZip(source) {
+    var ab;
+    if (source instanceof ArrayBuffer) ab = source;
+    else if (source instanceof Uint8Array) ab = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength);
+    else if (source && typeof source.arrayBuffer === 'function') ab = await source.arrayBuffer();
+    else throw new Error('ZIPを読み込めません');
+    var u8 = new Uint8Array(ab);
+    var dv = new DataView(ab);
+    if (u8.length < 22) throw new Error('ZIPが短すぎます');
+
+    var eocd = -1;
+    var min = Math.max(0, u8.length - 22 - 65535);
+    for (var i = u8.length - 22; i >= min; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('ZIPのEOCDが見つかりません');
+    var diskNo = dv.getUint16(eocd + 4, true);
+    var cdDisk = dv.getUint16(eocd + 6, true);
+    var entriesDisk = dv.getUint16(eocd + 8, true);
+    var entriesTotal = dv.getUint16(eocd + 10, true);
+    var cdSize = dv.getUint32(eocd + 12, true);
+    var cdOffset = dv.getUint32(eocd + 16, true);
+    if (diskNo !== 0 || cdDisk !== 0 || entriesDisk !== entriesTotal) throw new Error('multi-disk ZIPは未対応です');
+    if (entriesTotal === 0xFFFF || cdSize === 0xFFFFFFFF || cdOffset === 0xFFFFFFFF) throw new Error('ZIP64は未対応です');
+    if (cdOffset + cdSize > u8.length) throw new Error('ZIP central directoryが範囲外です');
+
+    var dec = new TextDecoder('utf-8');
+    var out = new Map();
+    var pos = cdOffset;
+    for (var n = 0; n < entriesTotal; n++) {
+      if (pos + 46 > u8.length || dv.getUint32(pos, true) !== 0x02014b50) throw new Error('ZIP central headerが不正です');
+      var flags = dv.getUint16(pos + 8, true);
+      var method = dv.getUint16(pos + 10, true);
+      var crc = dv.getUint32(pos + 16, true);
+      var compSize = dv.getUint32(pos + 20, true);
+      var uncompSize = dv.getUint32(pos + 24, true);
+      var nameLen = dv.getUint16(pos + 28, true);
+      var extraLen = dv.getUint16(pos + 30, true);
+      var commentLen = dv.getUint16(pos + 32, true);
+      var localOffset = dv.getUint32(pos + 42, true);
+      if ((flags & 0x0001) !== 0) throw new Error('暗号化ZIPは未対応です');
+      if (method !== 0) throw new Error('圧縮ZIPは未対応です。SongScope完全バックアップZIPを選択してください');
+      if (compSize !== uncompSize) throw new Error('ZIPサイズ情報が不正です');
+      if (pos + 46 + nameLen + extraLen + commentLen > u8.length) throw new Error('ZIP central entryが範囲外です');
+      var name = dec.decode(u8.slice(pos + 46, pos + 46 + nameLen));
+
+      if (localOffset + 30 > u8.length || dv.getUint32(localOffset, true) !== 0x04034b50) throw new Error('ZIP local headerが不正です');
+      var localMethod = dv.getUint16(localOffset + 8, true);
+      var localNameLen = dv.getUint16(localOffset + 26, true);
+      var localExtraLen = dv.getUint16(localOffset + 28, true);
+      if (localMethod !== method) throw new Error('ZIP methodが一致しません');
+      var dataStart = localOffset + 30 + localNameLen + localExtraLen;
+      var dataEnd = dataStart + compSize;
+      if (dataEnd > u8.length) throw new Error('ZIP entry dataが範囲外です');
+      var data = u8.slice(dataStart, dataEnd);
+      if (crc32(data) !== crc) throw new Error('ZIP CRC32が一致しません: ' + name);
+      if (out.has(name)) throw new Error('ZIP内に重複ファイル名があります: ' + name);
+      out.set(name, data);
+      pos += 46 + nameLen + extraLen + commentLen;
+    }
+    return out;
+  }
+
+  global.SongScopeZip = { createZip: createZip, readZip: readZip, crc32: crc32 };
 })(self);
