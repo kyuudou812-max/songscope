@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase D2  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase E1  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseD2';
-const SCHEMA_VERSION = '0.7.0';
-const BUILD_ID = '20260810-d2-01';
+const APP_VERSION = '0.2.0-phaseE1';
+const SCHEMA_VERSION = '0.8.0';
+const BUILD_ID = '20260810-e1-01';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -431,6 +431,8 @@ const state = {
   confMin: DEFAULT_SETTINGS.minimumConfidence,
   pendingFile: null,   // 追加待ちのファイル
   editingRec: false,
+  recFormContext: null, // metadata provenance判定用
+  evaluationImageMeta: null, // 現在録音の採点結果画像メタ（画像本体はaudio store内）
   markerDraft: null,   // {timeSec, tag, memo, markerId?}
   segmentDraft: null,
   worker: null,
@@ -507,8 +509,10 @@ function openAddSheet(file) {
   $('#f-mode').value = '';
   $('#f-memo').value = '';
   $('#f-setup').value = settings.recordingSetupPreset;
-  const d = file && file.lastModified ? new Date(file.lastModified) : new Date();
+  const hasFileModified = !!(file && file.lastModified && isFinite(file.lastModified));
+  const d = hasFileModified ? new Date(file.lastModified) : new Date();
   $('#f-recat').value = toLocalInput(d);
+  state.recFormContext = { mode: 'add', initial: recFormSnapshot(), previousProvenance: {}, recordedAtDefaultSource: hasFileModified ? 'file_last_modified_unverified' : 'import_time_default' };
   const det = $('#sheet-rec .details');
   if (det) det.open = false;   // 任意項目は毎回入力させない
   openSheet('sheet-rec');
@@ -516,6 +520,97 @@ function openAddSheet(file) {
 function toLocalInput(d) {
   const p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const REC_METADATA_PROVENANCE_FIELDS = ['title','artist','damScore','keyChange','octave','device','scoringMode','memo','recordingSetupPreset','recordedAt'];
+function recFormSnapshot() {
+  const at = $('#f-recat').value;
+  return {
+    title: $('#f-title').value.trim(), artist: $('#f-artist').value.trim(), damScore: $('#f-score').value.trim(),
+    keyChange: $('#f-key').value.trim(), octave: $('#f-octave').value.trim(), device: $('#f-device').value.trim(),
+    scoringMode: $('#f-mode').value.trim(), memo: $('#f-memo').value.trim(), recordingSetupPreset: $('#f-setup').value.trim(),
+    recordedAt: at ? new Date(at).toISOString() : null
+  };
+}
+function provenanceEntry(source, confirmation = 'unknown') {
+  return { source, confirmation, updatedAt: nowIso() };
+}
+function normalizedMetadataProvenance(rec) {
+  const src = rec && rec.metadataProvenance && typeof rec.metadataProvenance === 'object' ? rec.metadataProvenance : {};
+  const out = {};
+  for (const k of REC_METADATA_PROVENANCE_FIELDS) {
+    if (src[k] && src[k].source) out[k] = src[k];
+    else if (rec && rec[k]) out[k] = { source: 'legacy_unknown', confirmation: 'unknown', updatedAt: rec.updatedAt || rec.createdAt || null };
+  }
+  return out;
+}
+function buildMetadataProvenance(form) {
+  const ctx = state.recFormContext || {};
+  const prev = ctx.previousProvenance || {};
+  const initial = ctx.initial || {};
+  const out = Object.assign({}, prev);
+  const same = (a,b) => String(a == null ? '' : a) === String(b == null ? '' : b);
+  for (const k of REC_METADATA_PROVENANCE_FIELDS) {
+    const value = form[k];
+    if (!value) { if (ctx.mode === 'edit' && !same(value, initial[k])) delete out[k]; continue; }
+    if (ctx.mode === 'add') {
+      if (k === 'recordedAt' && same(value, initial[k])) out[k] = provenanceEntry(ctx.recordedAtDefaultSource || 'import_time_default', 'unverified');
+      else if (k === 'recordingSetupPreset' && same(value, initial[k])) out[k] = provenanceEntry('default_preset', 'unverified');
+      else if (k === 'title' && same(value, initial[k])) out[k] = provenanceEntry('file_name_default', 'unverified');
+      else out[k] = provenanceEntry('user_input', 'user_confirmed');
+    } else if (!same(value, initial[k])) {
+      out[k] = provenanceEntry('user_edited', 'user_confirmed');
+    } else if (!out[k] || !out[k].source) {
+      out[k] = { source: 'legacy_unknown', confirmation: 'unknown', updatedAt: state.rec && (state.rec.updatedAt || state.rec.createdAt) || null };
+    }
+  }
+  return out;
+}
+function imageExtFromMeta(meta) {
+  const type = String(meta && meta.mimeType || '').toLowerCase();
+  if (type.includes('png')) return '.png';
+  if (type.includes('webp')) return '.webp';
+  if (type.includes('heic') || type.includes('heif')) return '.heic';
+  if (type.includes('jpeg') || type.includes('jpg')) return '.jpg';
+  const m = String(meta && meta.fileName || '').match(/\.(png|jpe?g|webp|heic|heif)$/i);
+  return m ? m[0].toLowerCase().replace('.jpeg','.jpg') : '.img';
+}
+function evaluationImageDescriptor(rec, meta) {
+  if (!meta || !meta.sha256) return { status: 'unavailable' };
+  return {
+    status: 'available', type: 'scoring_result_image', source: 'user_attachment',
+    recordingId: rec && rec.recordingId || null, fileName: meta.fileName || null, mimeType: meta.mimeType || null,
+    fileSize: meta.fileSize || null, sha256: meta.sha256, attachedAt: meta.attachedAt || null,
+    parsedByApp: false, interpretation: 'Image evidence only. SongScope does not OCR or infer score/subscores from this image.'
+  };
+}
+function parseStoredScore(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+  return isFinite(n) ? +n.toFixed(3) : null;
+}
+function buildRecordingEvaluationAnchors(rec, imageMeta) {
+  const prov = normalizedMetadataProvenance(rec || {});
+  return {
+    schemaVersion: 'songscope-evaluation-anchors-v1',
+    recordingId: rec && rec.recordingId || null,
+    damScore: {
+      status: parseStoredScore(rec && rec.damScore) === null ? 'unavailable' : 'available',
+      value: parseStoredScore(rec && rec.damScore), rawStoredValue: rec && rec.damScore || null,
+      provenance: prov.damScore || { source: 'absent', confirmation: 'unknown' },
+      note: 'External outcome metadata only; it does not identify the acoustic cause of a change.'
+    },
+    scoringResultImage: evaluationImageDescriptor(rec, imageMeta),
+    recordedAt: {
+      value: rec && (rec.recordedAt || rec.createdAt) || null,
+      provenance: prov.recordedAt || { source: 'legacy_unknown', confirmation: 'unknown' }
+    },
+    policy: {
+      appDoesNotParseImage: true,
+      noAutomaticImprovementJudgement: true,
+      doNotReconcileConflictsSilently: true
+    }
+  };
 }
 
 function openEditSheet(rec) {
@@ -532,6 +627,7 @@ function openEditSheet(rec) {
   $('#f-memo').value = rec.memo || '';
   $('#f-setup').value = rec.recordingSetupPreset || settings.recordingSetupPreset;
   $('#f-recat').value = rec.recordedAt ? toLocalInput(new Date(rec.recordedAt)) : '';
+  state.recFormContext = { mode: 'edit', initial: recFormSnapshot(), previousProvenance: normalizedMetadataProvenance(rec) };
   const det = $('#sheet-rec .details');
   if (det) det.open = true;
   openSheet('sheet-rec');
@@ -541,7 +637,7 @@ function readRecForm() {
   const t = $('#f-title').value.trim();
   if (!t) { toast('曲名を入力してください'); return null; }
   const at = $('#f-recat').value;
-  return {
+  const form = {
     title: t,
     artist: $('#f-artist').value.trim(),
     damScore: $('#f-score').value.trim(),
@@ -553,6 +649,8 @@ function readRecForm() {
     recordingSetupPreset: $('#f-setup').value.trim(),
     recordedAt: at ? new Date(at).toISOString() : nowIso()
   };
+  form.metadataProvenance = buildMetadataProvenance(form);
+  return form;
 }
 
 async function onRecSave() {
@@ -615,8 +713,12 @@ async function onRecSave() {
     // 同一音源の再解析では既存の記録日時や既入力メタデータを原則保持する。
     rec.title = form.title || rec.title;
     if (form.artist) rec.artist = form.artist;
+    rec.metadataProvenance = normalizedMetadataProvenance(rec);
     for (const k of ['damScore', 'keyChange', 'octave', 'device', 'scoringMode', 'memo', 'recordingSetupPreset']) {
-      if (form[k]) rec[k] = form[k];
+      if (form[k]) {
+        rec[k] = form[k];
+        if (form.metadataProvenance && form.metadataProvenance[k]) rec.metadataProvenance[k] = form.metadataProvenance[k];
+      }
     }
     try { applySongIdentityFields(rec, await deriveSongIdentity(rec.title, rec.artist)); }
     catch (e) { if (identity) applySongIdentityFields(rec, identity); }
@@ -900,6 +1002,7 @@ async function openRecording(id) {
   state.loop = { a: null, b: null, on: false };
   state.markers = [];
   state.segments = [];
+  state.evaluationImageMeta = null;
 
   showView('view-review');
   renderReviewHeader();
@@ -909,6 +1012,8 @@ async function openRecording(id) {
   try {
     const a = await dbGet('audio', id);
     if (a && a.blob) attachAudio(a.blob);
+    state.evaluationImageMeta = a && a.evaluationImageMeta ? a.evaluationImageMeta : null;
+    renderEvaluationAnchor();
   } catch (e) { toast('音声を読み込めませんでした'); }
 
   // レビューデータ
@@ -941,6 +1046,7 @@ async function openRecording(id) {
       startAnalysis(rec);
     }
   }
+  renderEvaluationAnchor();
   renderSummary();
   renderSegments();          // 解析が揃った状態で区間統計を出し直す
   requestAnimationFrame(drawAllGraphs);
@@ -962,6 +1068,53 @@ function renderReviewHeader() {
   if (rec.sampleRate) chips.push(rec.sampleRate + ' Hz / ' + rec.channels + 'ch');
   $('#rv-meta').innerHTML = chips.filter(Boolean).map(c => `<span class="pill">${escapeHtml(c)}</span>`).join('');
   $('#t-tot').textContent = fmtTime(rec.durationSec);
+}
+
+function renderEvaluationAnchor() {
+  const box = $('#rv-eval-status');
+  if (!box || !state.rec) return;
+  const score = parseStoredScore(state.rec.damScore);
+  const img = evaluationImageDescriptor(state.rec, state.evaluationImageMeta);
+  const parts = [];
+  parts.push(score === null ? 'DAM点数: 未登録' : `DAM点数: ${score.toFixed(3)}`);
+  parts.push(img.status === 'available' ? `採点結果画像: あり (${fmtBytes(img.fileSize || 0)})` : '採点結果画像: なし');
+  box.innerHTML = `<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small">画像は証拠として保存するだけで、SongScope自身はOCR・採点項目の解釈を行いません。</p>`;
+  const rm = $('#btn-eval-image-remove'); if (rm) rm.hidden = img.status !== 'available';
+}
+async function saveEvaluationImage(file) {
+  if (!state.rec || !file) return;
+  const looksImage = String(file.type || '').startsWith('image/') || /\.(png|jpe?g|webp|heic|heif)$/i.test(String(file.name || ''));
+  if (!looksImage) { toast('画像ファイルを選んでください'); return; }
+  if (file.size > 30 * 1024 * 1024) { toast('画像が大きすぎます（30MB以下）'); return; }
+  try {
+    busy('評価アンカー', '採点結果画像を保存しています…', 30);
+    const buf = await file.arrayBuffer();
+    const sha = await sha256Hex(buf);
+    const asset = await dbGet('audio', state.rec.recordingId);
+    if (!asset || !asset.blob) throw new Error('元音声の保存データがありません');
+    asset.evaluationImageBlob = file;
+    asset.evaluationImageMeta = {
+      type: 'scoring_result_image', source: 'user_attachment', fileName: file.name || 'scoring_result_image',
+      mimeType: file.type || 'application/octet-stream', fileSize: file.size, sha256: sha, attachedAt: nowIso(), parsedByApp: false
+    };
+    await dbPut('audio', asset);
+    state.evaluationImageMeta = asset.evaluationImageMeta;
+    closeSheet(); renderEvaluationAnchor(); toast('採点結果画像を保存しました');
+  } catch (e) {
+    closeSheet(); console.error(e); toast('採点結果画像を保存できませんでした');
+  }
+}
+async function removeEvaluationImage() {
+  if (!state.rec || !state.evaluationImageMeta) return;
+  if (!confirm('この録音に紐づけた採点結果画像を外しますか？')) return;
+  try {
+    const asset = await dbGet('audio', state.rec.recordingId);
+    if (asset) {
+      delete asset.evaluationImageBlob; delete asset.evaluationImageMeta;
+      await dbPut('audio', asset);
+    }
+    state.evaluationImageMeta = null; renderEvaluationAnchor(); toast('採点結果画像を外しました');
+  } catch (e) { toast('画像を外せませんでした'); }
 }
 
 function renderSummary() {
@@ -1931,6 +2084,8 @@ function buildSummaryJson(an) {
       memo: rec.memo || null,
       recordingSetupPreset: rec.recordingSetupPreset || null
     },
+    metadataProvenance: normalizedMetadataProvenance(rec),
+    evaluationAnchors: buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta),
     recordingLimitations: {
       containsAccompaniment: 'likely',
       note: ACCOMP_NOTE_EN,
@@ -1988,6 +2143,9 @@ function buildReportMd(an) {
   L.push(`RecordedAt: ${rec.recordedAt ? fmtDate(rec.recordedAt) : ''}`);
   L.push(`Duration: ${fmtClock(rec.durationSec || 0)} (${num(rec.durationSec, 2)} s)`);
   L.push(`DAM Score: ${rec.damScore || ''}`);
+  L.push(`DAM Score provenance: ${((normalizedMetadataProvenance(rec).damScore || {}).source) || ''}`);
+  L.push(`RecordedAt provenance: ${((normalizedMetadataProvenance(rec).recordedAt || {}).source) || ''}`);
+  L.push(`Scoring result image: ${state.evaluationImageMeta ? 'attached / SHA256 ' + (state.evaluationImageMeta.sha256 || '') : 'none'}`);
   L.push(`Key: ${rec.keyChange || ''}`);
   L.push(`Octave: ${rec.octave || ''}`);
   L.push(`Device: ${rec.device || ''}`);
@@ -2085,8 +2243,9 @@ function buildReportMd(an) {
     if (an.detectedSegments.length > 200) L.push(`| … | | | | | | (${an.detectedSegments.length} segments in detected_segments.csv) |`);
   } else L.push('(none)');
   L.push('', '## Files', '');
-  L.push('summary.json', 'analysis_history.json', 'frames.csv', 'markers.csv', 'user_segments.csv', 'detected_segments.csv', '');
+  L.push('summary.json', 'analysis_history.json', 'evaluation_anchors.json', 'frames.csv', 'markers.csv', 'user_segments.csv', 'detected_segments.csv', '');
   L.push('waveform.png', 'loudness.png', 'pitch.png', 'spectrogram.png');
+  if (state.evaluationImageMeta) L.push('evaluation/scoring_result_image' + imageExtFromMeta(state.evaluationImageMeta));
   L.push('', '## Important', '');
   L.push('This application does not diagnose singing ability.');
   L.push('The measurements above are observations for later comparison and hypothesis testing.');
@@ -2116,6 +2275,8 @@ async function doExport() {
     catch (e) { }
     if (an && an.analysisId) rec.latestAnalysisId = an.analysisId;
     if (analysisHistory.length) rec.analysisCount = analysisHistory.length;
+    const binaryAsset = await dbGet('audio', rec.recordingId).catch(() => null);
+    state.evaluationImageMeta = binaryAsset && binaryAsset.evaluationImageMeta ? binaryAsset.evaluationImageMeta : null;
 
     files.push({ name: 'report.md', data: buildReportMd(an) });
     files.push({ name: 'summary.json', data: JSON.stringify(buildSummaryJson(an), null, 2) });
@@ -2126,6 +2287,10 @@ async function doExport() {
       latestAnalysisId: rec.latestAnalysisId || (an && an.analysisId) || null,
       analyses: analysisHistory
     }, null, 2) });
+    files.push({ name: 'evaluation_anchors.json', data: JSON.stringify(buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta), null, 2) });
+    if (binaryAsset && binaryAsset.evaluationImageBlob && state.evaluationImageMeta) {
+      files.push({ name: 'evaluation/scoring_result_image' + imageExtFromMeta(state.evaluationImageMeta), data: new Uint8Array(await binaryAsset.evaluationImageBlob.arrayBuffer()) });
+    }
     files.push({ name: 'markers.csv', data: markersCsv() });
     files.push({ name: 'user_segments.csv', data: userSegmentsCsv() });
     files.push({ name: 'detected_segments.csv', data: detectedSegmentsCsv(an) });
@@ -2135,7 +2300,7 @@ async function doExport() {
 
     if ($('#chk-include-audio').checked) {
       $('#busy-msg').textContent = '元音声を追加しています…';
-      const a = await dbGet('audio', rec.recordingId);
+      const a = binaryAsset || await dbGet('audio', rec.recordingId);
       if (a && a.blob) {
         const ext = (rec.fileName && rec.fileName.match(/\.[a-z0-9]+$/i)) ? rec.fileName.match(/\.[a-z0-9]+$/i)[0] : '.m4a';
         files.push({ name: 'original_audio' + ext, data: new Uint8Array(await a.blob.arrayBuffer()) });
@@ -2170,8 +2335,10 @@ async function backupAll() {
       const sg = await dbByRec('segments', r.recordingId);
       const an = await dbGet('analysis', r.recordingId);
       const hist = await dbByRec('analysisHistory', r.recordingId).catch(() => []);
+      const asset = await dbGet('audio', r.recordingId).catch(() => null);
       out.recordings.push({
         recording: r,
+        evaluationImageMeta: asset && asset.evaluationImageMeta ? asset.evaluationImageMeta : null,
         markers: mk,
         segments: sg,
         analysisHistory: hist,
@@ -2184,7 +2351,7 @@ async function backupAll() {
     }
     try { out.alignmentDiagnostics = await dbAll('alignmentDiagnostics'); } catch (e) { out.alignmentDiagnostics = []; }
     try { out.alignmentResults = await dbAll('alignmentResults'); } catch (e) { out.alignmentResults = []; }
-    out.note = 'analysisHistoryは各解析runのcompact provenanceです。alignmentDiagnosticsは候補証拠、alignmentResultsはD1判定結果です。frames等のフレーム単位データは最新analysis以外バックアップに含めません。原本音声を保持していれば再解析できます。';
+    out.note = 'analysisHistoryは各解析runのcompact provenanceです。alignmentDiagnosticsは候補証拠、alignmentResultsはD1判定結果です。採点結果画像はメタデータのみで、画像バイト自体はこのJSONバックアップに含めません。frames等のフレーム単位データは最新analysis以外バックアップに含めません。';
     closeSheet();
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
     await saveBlob(blob, `songscope_backup_${new Date().toISOString().slice(0, 10)}.json`);
@@ -2391,7 +2558,7 @@ async function loadCmpSide(side, id) {
     audio = new Audio(url);
     audio.preload = 'metadata';
   }
-  cmp[side] = { rec, an, audio, url };
+  cmp[side] = { rec, an, audio, url, asset: au || null };
   drawCompare();
 }
 
@@ -2752,6 +2919,10 @@ function d2RecordingDescriptor(side) {
       scoringMode: rec.scoringMode || null,
       recordingSetupPreset: rec.recordingSetupPreset || null,
       source: 'recording_metadata'
+    },
+    metadataProvenance: normalizedMetadataProvenance(rec),
+    evaluationEvidence: {
+      scoringResultImage: evaluationImageDescriptor(rec, d.asset && d.asset.evaluationImageMeta ? d.asset.evaluationImageMeta : null)
     }
   };
 }
@@ -2886,29 +3057,42 @@ function d2MetricCatalog() {
 }
 function d2EvaluationAnchors(descA, descB) {
   const a = (descA && descA.userMetadata) || {}, b = (descB && descB.userMetadata) || {};
-  const parseScore = v => {
-    if (v === null || v === undefined || String(v).trim() === '') return null;
-    const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
-    return isFinite(n) ? +n.toFixed(3) : null;
-  };
-  const scoreA = parseScore(a.damScore), scoreB = parseScore(b.damScore);
+  const scoreA = parseStoredScore(a.damScore), scoreB = parseStoredScore(b.damScore);
   let scoreStatus = 'unavailable';
   if (scoreA !== null && scoreB !== null) {
-    const sameKnown = key => a[key] && b[key] && String(a[key]).trim() === String(b[key]).trim();
+    const provA = descA && descA.metadataProvenance || {}, provB = descB && descB.metadataProvenance || {};
+    const confirmed = (prov, key) => prov[key] && prov[key].confirmation === 'user_confirmed';
+    const sameKnownConfirmed = key => a[key] && b[key] && String(a[key]).trim() === String(b[key]).trim() && confirmed(provA, key) && confirmed(provB, key);
     const requiredReportedSame = ['device', 'scoringMode', 'keyChange', 'octave'];
-    scoreStatus = requiredReportedSame.every(sameKnown) ? 'available_stored_metadata_conditions_match' : 'available_comparability_not_established';
+    const scoresConfirmed = confirmed(provA, 'damScore') && confirmed(provB, 'damScore');
+    scoreStatus = scoresConfirmed && requiredReportedSame.every(sameKnownConfirmed)
+      ? 'available_confirmed_metadata_conditions_match'
+      : 'available_comparability_not_established';
   }
+  const imgA = descA && descA.evaluationEvidence ? descA.evaluationEvidence.scoringResultImage : { status: 'unavailable' };
+  const imgB = descB && descB.evaluationEvidence ? descB.evaluationEvidence.scoringResultImage : { status: 'unavailable' };
   return {
     damScore: {
       status: scoreStatus,
       a: scoreA,
       b: scoreB,
       deltaBminusA: scoreA !== null && scoreB !== null ? +(scoreB - scoreA).toFixed(3) : null,
-      provenance: { source: 'recording_metadata', confirmation: 'unknown' },
+      provenance: {
+        a: descA && descA.metadataProvenance ? (descA.metadataProvenance.damScore || { source: 'legacy_unknown', confirmation: 'unknown' }) : { source: 'legacy_unknown', confirmation: 'unknown' },
+        b: descB && descB.metadataProvenance ? (descB.metadataProvenance.damScore || { source: 'legacy_unknown', confirmation: 'unknown' }) : { source: 'legacy_unknown', confirmation: 'unknown' }
+      },
       note: 'Score delta is an outcome observation only. It does not identify the acoustic cause of a change.'
+    },
+    scoringResultImages: {
+      status: imgA.status === 'available' && imgB.status === 'available' ? 'available_both' : (imgA.status === 'available' || imgB.status === 'available' ? 'available_one_side' : 'unavailable'),
+      a: imgA,
+      b: imgB,
+      parsedByApp: false,
+      note: 'Attached scoring-result images are preserved as external evidence. SongScope does not OCR, normalize, or silently reconcile them with manually stored score metadata.'
     }
   };
 }
+
 function d2WindowsCsv(pkg) {
   const head = [
     'window_index','reference_start_sec','reference_end_sec','pair_reference_start_sec','pair_reference_end_sec','pair_available_duration_sec','pair_coverage_ratio','comparison_coverage_status',
@@ -2971,8 +3155,11 @@ async function buildD2DiagnosticPackage() {
   const partialPair = windows.filter(w => w.pairCoverageRatio > 0 && w.pairCoverageRatio < 0.999).length;
   const zeroPair = windows.filter(w => w.pairCoverageRatio === 0).length;
   const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
+  const descA = d2RecordingDescriptor('a'), descB = d2RecordingDescriptor('b');
+  const evalAnchors = d2EvaluationAnchors(descA, descB);
+  const hasOutcomeAnchor = evalAnchors.damScore.status !== 'unavailable' || evalAnchors.scoringResultImages.status !== 'unavailable';
   return {
-    schemaVersion: 'songscope-d2-0.2.0',
+    schemaVersion: 'songscope-d2-0.3.0',
     packageType: 'pairwise_observation_comparison',
     status: 'aligned_observation_comparison_ready',
     generatedAt: nowIso(),
@@ -3012,16 +3199,16 @@ async function buildD2DiagnosticPackage() {
       unwindowedReferenceTailSec: windows.length ? +Math.max(0, durA - windows[windows.length - 1].referenceEndSec).toFixed(3) : +durA.toFixed(3),
       note: 'A final tail shorter than the 10 s nominal window is not summarized in this diagnostic build.'
     },
-    recordingA: d2RecordingDescriptor('a'),
-    recordingB: d2RecordingDescriptor('b'),
+    recordingA: descA,
+    recordingB: descB,
     metricCatalog: d2MetricCatalog(),
-    recordingConditionComparison: d2ConditionComparison(d2RecordingDescriptor('a'), d2RecordingDescriptor('b')),
-    evaluationAnchors: d2EvaluationAnchors(d2RecordingDescriptor('a'), d2RecordingDescriptor('b')),
+    recordingConditionComparison: d2ConditionComparison(descA, descB),
+    evaluationAnchors: evalAnchors,
     comparisonReadiness: {
       temporalAlignment: 'resolved',
       temporalWindowing: 'validated_same_aligned_interval',
       vocalSpecificAcousticMetrics: 'not_available',
-      outcomeEvaluation: 'requires_external_anchor',
+      outcomeEvaluation: hasOutcomeAnchor ? 'external_anchor_available_requires_interpretation' : 'requires_external_anchor',
       overall: 'observation_comparison_only'
     },
     overlap: {
@@ -3056,9 +3243,17 @@ async function exportD2DiagnosticPackage() {
     const pkg = await buildD2DiagnosticPackage();
     const files = [
       { name: 'metric_catalog.json', data: JSON.stringify(pkg.metricCatalog, null, 2) },
+      { name: 'evaluation_anchors.json', data: JSON.stringify(pkg.evaluationAnchors, null, 2) },
       { name: 'comparison_summary.json', data: JSON.stringify(pkg, null, 2) },
       { name: 'comparison_windows.csv', data: d2WindowsCsv(pkg) }
     ];
+    for (const pair of [['A', cmp.a], ['B', cmp.b]]) {
+      const label = pair[0], d = pair[1];
+      const asset = d && d.asset;
+      if (asset && asset.evaluationImageBlob && asset.evaluationImageMeta) {
+        files.push({ name: `evaluation/${label}_scoring_result_image${imageExtFromMeta(asset.evaluationImageMeta)}`, data: new Uint8Array(await asset.evaluationImageBlob.arrayBuffer()) });
+      }
+    }
     const blob = SongScopeZip.createZip(files);
     const stamp = new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
     const name = `songscope_compare_${safeName(pkg.recordingA.title)}_vs_${safeName(pkg.recordingB.title)}_${stamp}.zip`;
@@ -3380,6 +3575,11 @@ function wireReview() {
   $('#chk-include-audio').checked = getFlag('includeAudio', false);
   $('#chk-include-audio').addEventListener('change', e => setFlag('includeAudio', e.target.checked));
   $('#btn-export').addEventListener('click', doExport);
+  $('#btn-eval-image').addEventListener('click', () => $('#eval-image-input').click());
+  $('#eval-image-input').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) saveEvaluationImage(f);
+  });
+  $('#btn-eval-image-remove').addEventListener('click', removeEvaluationImage);
 
   $('#btn-delete-rec').addEventListener('click', async () => {
     if (!state.rec) return;

@@ -1,4 +1,4 @@
-# SongScope v0.2 Phase D2
+# SongScope v0.2 Phase E1
 
 ### D1 build 02 — IndexedDB upgrade待機の修正
 - Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
@@ -18,8 +18,8 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.6.2`
-- Build ID: `20260810-d2-01`
+- Schema Version: `0.8.0`
+- Build ID: `20260810-e1-01`
 
 ## Phase D2 — aligned observation comparison
 
@@ -431,3 +431,12 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - `resolved` のときだけ「この位置合わせを反映」を表示します。自動で勝手にoffsetを書き換えません。
 - `alignmentResults` にはpairごとの最新D1判定（resolved / ambiguous / unresolved）を保存し、resolved時だけcanonical mappingを持たせます。将来D2はresolved mappingだけを参照します。`alignmentDiagnostics` は各判定runの根拠として残します。
 - `audio-analysis-worker.js` は変更していません。
+
+
+### Phase E1 build 01 — Outcome / Evaluation evidence
+- D2の観測比較は変更せず、外部評価を別レイヤーの evidence として保存します。
+- レビュー画面から採点結果画像を1枚添付できます。画像は元音声と同じ IndexedDB の recording asset に紐づけ、SongScope自身はOCR・採点項目解釈を行いません。
+- 通常ZIPへ `evaluation_anchors.json` と、添付時は `evaluation/scoring_result_image.*` を追加します。D2比較ZIPにも `evaluation_anchors.json` と A/B の添付画像を含めます。
+- DAM点数・recordedAtなどに metadata provenance を追加します。既存データで由来を証明できない値は `legacy_unknown` のままにし、推測で user-confirmed にしません。
+- 新規録音の recordedAt がファイルの lastModified 由来なら `file_last_modified_unverified`、日時をユーザーが編集した場合は `user_edited / user_confirmed` と記録します。
+- DB_VERは5のままです。新しいObjectStoreは作らず、D1のDB upgrade問題を再発させません。

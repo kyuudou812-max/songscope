@@ -133,6 +133,18 @@
       <div id="rv-summary" class="mono small"></div>
     </details>
 
+    <div class="card" id="rv-eval-card">
+      <div class="section-head tight"><span>評価アンカー</span><span class="mono small">Outcome evidence</span></div>
+      <p class="small">DAM等の外部評価は、音響観測とは別の証拠として保存します。採点結果画像は1タップで添付できますが、SongScope自身はOCR・採点項目の解釈・上達判定を行いません。</p>
+      <div id="rv-eval-status" class="note"><p class="small">DAM点数: 未登録 ／ 採点結果画像: なし</p></div>
+      <div class="row gap wrap">
+        <button id="btn-eval-image" class="mini accent">採点結果画像を追加</button>
+        <button id="btn-eval-image-remove" class="mini" hidden>画像を外す</button>
+      </div>
+      <input type="file" id="eval-image-input" accept="image/*" hidden>
+      <p class="small">DAM点数・キー・機種・採点モードは右上の「情報」から編集できます。画像と手入力値が食い違っても自動補正しません。</p>
+    </div>
+
     <div class="card">
       <label class="switch-row">
         <span>元音声もZIPへ含める<span class="sub2">ファイルが大きくなります</span></span>
@@ -300,6 +312,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="zip.js"></script>
-<script src="app.js?v=20260810-d2-01"></script>
+<script src="app.js?v=20260810-e1-01"></script>
 </body>
 </html>
