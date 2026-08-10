@@ -254,7 +254,7 @@
     </div>
     <div class="card">
       <div class="section-head tight"><span>F1 曲履歴パッケージ</span><span class="mono small">History / progression evidence</span></div>
-      <p class="small">A/Bと同じ <code>songId</code> に属する<strong>別録音</strong>をまとめ、E4で確認した時間順やsource-verifiedの採点結果をcompactな履歴にします。再解析runは別歌唱として数えません。2録音の差はtrendと呼ばず、3件以上で初めて探索的な反復パターンを扱います。</p>
+      <p class="small">A/Bと同じ <code>songId</code> の保存recordを集め、<strong>exact raw audio SHA-256で同一音源のrecordingId重複を1歌唱へ正規化</strong>してから履歴化します。SHAを確認できない旧recordは監査用に残しますが歌唱回数には数えません。再解析runも別歌唱として数えず、2録音の差はtrendと呼びません。</p>
       <div class="row gap wrap">
         <button id="btn-f1-export" class="mini accent">この曲の履歴を書き出す（F1）</button>
       </div>

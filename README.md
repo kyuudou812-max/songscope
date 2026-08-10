@@ -18,11 +18,23 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.12.0`
-- Build ID: `20260810-f1-01`
+- Schema Version: `0.12.1`
+- Build ID: `20260810-f1-02`
 
 
 ## Phase F1 — Same-song History / Progression evidence
+
+### F1 build 02 — physical recording identity canonicalization
+
+- build 01実機で、同じraw音声SHA-256を持つlegacy `recordingId` が複数残り、実歌唱2回を4 recordingとして数える問題を確認したため修正。Historyの件数は`recordingId`数ではなく**exact raw audio SHA-256で解決したphysical recording数**を使います。
+- 同じSHA-256の複数recordingIdは1つのphysical recordingにcanonicalizeし、`canonicalRecordingId` / `aliasRecordingIds` / `sourceRecordingIds` を監査可能な形で残します。元recordは削除・統合しません。
+- SHA未保存の旧recordでもIndexedDBのaudio blobが残っていれば、F1 export時にSHA-256を非破壊で計算して照合します。DBへは書き戻しません。
+- SHAもraw blobも無くexact identityを確認できない旧recordは `identityResolution.unresolvedRecords` に隔離し、physical recording数・chronology・pattern readinessから除外します。recordedAtやduration一致だけでは同一音声と推測しません。
+- E4 chronologyがlegacy aliasのrecordingIdを参照している場合も、alias→canonicalへ変換してphysical recording間の順序制約として利用します。同一physical recording内へ畳み込まれる制約は歌唱間chronologyとして扱いません。
+- 同じexact raw音声のalias同士に異なるsource-verified構造化採点結果が存在する場合は `duplicate_alias_evidence_conflict` として止め、勝手にどちらかをtrendへ採用しません。
+- F1 ZIPへ `history_identity_resolution.json` を追加。`history_outcomes.csv` にphysical recording ID、alias IDs、audio SHA、identity sourceを追加しました。
+- DB_VER=5、D1/D2/E1–E4、audio-analysis-worker、alignment-workerは変更なし。
+- App: `0.2.0-phaseF1` / Schema: `0.12.1` / Build: `20260810-f1-02`
 
 ### F1 build 01 — compact history package
 

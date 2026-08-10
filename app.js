@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-phaseF1';
-const SCHEMA_VERSION = '0.12.0';
-const BUILD_ID = '20260810-f1-01';
+const SCHEMA_VERSION = '0.12.1';
+const BUILD_ID = '20260810-f1-02';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -3775,14 +3775,28 @@ function e3OutcomeComparison(descA, descB, pairContext = null, chronology = null
  * analysisHistoryの再解析runは「別歌唱」として数えない。
  * chronological orderは証拠制約から解き、曖昧/矛盾時は無理に並べない。
  * ===================================================================== */
-function f1DescriptorFromStored(rec, an, asset) {
-  rec = rec || {}; an = an || {}; asset = asset || {};
+function f1DescriptorFromStored(rec, an, asset, audioIdentity) {
+  rec = rec || {}; an = an || {}; asset = asset || {}; audioIdentity = audioIdentity || {};
+  const effectiveSha = audioIdentity.sha256 || rec.audioSha256 || an.audioSha256 || null;
   return {
     recordingId: rec.recordingId || null,
-    audioSha256: rec.audioSha256 || an.audioSha256 || null,
+    audioSha256: effectiveSha,
+    audioIdentityEvidence: {
+      status: effectiveSha ? 'exact_sha256_available' : 'identity_unresolved',
+      sha256: effectiveSha,
+      source: audioIdentity.source || (rec.audioSha256 ? 'recording_metadata' : (an.audioSha256 ? 'latest_analysis' : 'unavailable')),
+      storedRecordingAudioSha256: rec.audioSha256 || null,
+      latestAnalysisAudioSha256: an.audioSha256 || null,
+      storedAudioBlobPresent: !!(asset && asset.blob),
+      hashComputationError: audioIdentity.hashComputationError || null,
+      note: effectiveSha
+        ? 'Exact raw-file SHA-256 is available for physical-recording identity resolution.'
+        : 'No exact raw-file SHA-256 could be established. This legacy record is not counted as a physical singing performance in F1 trend readiness.'
+    },
     songId: rec.songId || null,
     songIdentityKey: rec.songIdentityKey || null,
     songIdentityBasis: rec.songIdentityBasis || null,
+    recordingIdentityBasis: rec.recordingIdentityBasis || null,
     title: rec.title || '',
     artist: rec.artist || '',
     recordedAt: rec.recordedAt || rec.createdAt || null,
@@ -3811,11 +3825,119 @@ async function f1LoadDescriptorsForSong(songId) {
   for (const rec of recs) {
     const an = await dbGet('analysis', rec.recordingId).catch(() => null);
     const asset = await dbGet('audio', rec.recordingId).catch(() => null);
-    out.push(f1DescriptorFromStored(rec, an, asset));
+    let sha = rec.audioSha256 || (an && an.audioSha256) || null;
+    let source = rec.audioSha256 ? 'recording_metadata' : ((an && an.audioSha256) ? 'latest_analysis' : 'unavailable');
+    let hashComputationError = null;
+    // 旧recordingでSHAが未保存でも、raw audio blobが残っていればF1 export時に非破壊で再計算する。
+    // ここではrecordings storeへ書き戻さず、physical identity解決の証拠としてのみ使う。
+    if (!sha && asset && asset.blob && typeof asset.blob.arrayBuffer === 'function') {
+      try {
+        sha = await sha256Hex(await asset.blob.arrayBuffer());
+        source = 'stored_audio_blob_sha256_computed_at_history_export';
+      } catch (e) {
+        hashComputationError = (e && e.message) ? String(e.message) : String(e);
+      }
+    }
+    out.push(f1DescriptorFromStored(rec, an, asset, { sha256: sha, source, hashComputationError }));
   }
   // このsortは表示/JSON安定化だけ。chronologyの証拠には使わない。
   out.sort((a,b) => String(a.recordingId || '').localeCompare(String(b.recordingId || '')));
   return out;
+}
+function f1CanonicalDescriptorScore(desc) {
+  let score = 0;
+  const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult;
+  const img = desc && desc.evaluationEvidence && desc.evaluationEvidence.scoringResultImage;
+  if (e3StructuredIsSourceVerified(st)) score += 1000000;
+  if (img && img.status === 'available') score += 100000;
+  const prov = desc && desc.metadataProvenance || {};
+  for (const k of ['recordedAt','device','scoringMode','keyChange','octave']) {
+    if (prov[k] && prov[k].confirmation === 'user_confirmed') score += 10000;
+  }
+  if (desc && desc.analysisId) score += 1000;
+  score += Math.min(999, Math.max(0, Number(desc && desc.analysisCount || 0)));
+  return score;
+}
+function f1VerifiedOutcomeSignature(desc) {
+  const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult;
+  if (!e3StructuredIsSourceVerified(st)) return null;
+  return JSON.stringify({
+    sourceImageSha256: st.sourceEvidence && st.sourceEvidence.sha256 || null,
+    result: st.result || null
+  });
+}
+function f1ResolvePhysicalRecordings(descs) {
+  const bySha = new Map();
+  const unresolved = [];
+  for (const d of descs || []) {
+    if (!d || !d.audioSha256) { unresolved.push(d); continue; }
+    if (!bySha.has(d.audioSha256)) bySha.set(d.audioSha256, []);
+    bySha.get(d.audioSha256).push(d);
+  }
+  const aliasToCanonical = new Map();
+  const physical = [];
+  let duplicateAliasCount = 0;
+  for (const [sha, group0] of bySha.entries()) {
+    const group = group0.slice().sort((a,b) => {
+      const ds = f1CanonicalDescriptorScore(b) - f1CanonicalDescriptorScore(a);
+      return ds || String(a.recordingId || '').localeCompare(String(b.recordingId || ''));
+    });
+    const canonical = group[0];
+    const aliases = group.slice(1);
+    duplicateAliasCount += aliases.length;
+    for (const d of group) if (d && d.recordingId) aliasToCanonical.set(d.recordingId, canonical.recordingId);
+    const verifiedSignatures = Array.from(new Set(group.map(f1VerifiedOutcomeSignature).filter(Boolean)));
+    const evidenceConflict = verifiedSignatures.length > 1;
+    const resolved = Object.assign({}, canonical, {
+      physicalRecordingId: 'phy_' + sha.slice(0, 24),
+      physicalIdentity: {
+        status: 'resolved_exact_audio_sha256',
+        audioSha256: sha,
+        canonicalRecordingId: canonical.recordingId,
+        sourceRecordingIds: group.map(x => x.recordingId).filter(Boolean),
+        aliasRecordingIds: aliases.map(x => x.recordingId).filter(Boolean),
+        sourceRecordCount: group.length,
+        canonicalSelection: 'evidence_richness_then_analysis_count_then_recording_id_v1',
+        verifiedStructuredOutcomeConflict: evidenceConflict,
+        note: group.length > 1
+          ? 'Multiple legacy recordingIds share the exact same raw audio SHA-256 and count as one physical singing performance.'
+          : 'One exact raw audio SHA-256 maps to one physical singing performance for F1 counting.'
+      }
+    });
+    physical.push(resolved);
+  }
+  physical.sort((a,b) => String(a.recordingId || '').localeCompare(String(b.recordingId || '')));
+  return {
+    physicalDescriptors: physical,
+    aliasToCanonical,
+    audit: {
+      status: unresolved.length ? 'resolved_with_unresolved_legacy_records' : 'resolved',
+      method: 'exact_raw_audio_sha256_v1',
+      storedRecordingRecordCount: (descs || []).length,
+      physicalRecordingCount: physical.length,
+      duplicateAliasRecordCount: duplicateAliasCount,
+      unresolvedIdentityRecordCount: unresolved.length,
+      physicalRecordings: physical.map(d => ({
+        physicalRecordingId: d.physicalRecordingId,
+        audioSha256: d.audioSha256,
+        canonicalRecordingId: d.recordingId,
+        sourceRecordingIds: d.physicalIdentity.sourceRecordingIds,
+        aliasRecordingIds: d.physicalIdentity.aliasRecordingIds,
+        verifiedStructuredOutcomeConflict: !!d.physicalIdentity.verifiedStructuredOutcomeConflict
+      })),
+      unresolvedRecords: unresolved.map(d => ({
+        recordingId: d && d.recordingId || null,
+        title: d && d.title || '',
+        recordedAt: d && d.recordedAt || null,
+        durationSec: d && d.durationSec !== undefined ? d.durationSec : null,
+        analysisCount: d && d.analysisCount !== undefined ? d.analysisCount : null,
+        audioIdentityEvidence: d && d.audioIdentityEvidence || null,
+        reason: 'exact_audio_sha256_unavailable_after_stored_blob_hash_attempt',
+        countedAsPhysicalRecording: false
+      })),
+      guardrail: 'recordingId alone is not a physical-performance count. Exact duplicate SHA-256 records are canonicalized; unresolved legacy records are preserved for audit but excluded from history/trend readiness.'
+    }
+  };
 }
 function f1VerifiedResult(desc) {
   const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult;
@@ -3823,6 +3945,14 @@ function f1VerifiedResult(desc) {
 }
 function f1OutcomeObservation(desc) {
   const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult || { status: 'unavailable' };
+  if (desc && desc.physicalIdentity && desc.physicalIdentity.verifiedStructuredOutcomeConflict) {
+    return {
+      status: 'duplicate_alias_evidence_conflict',
+      sourceVerification: 'conflict',
+      sourceImageSha256: null, userReview: 'unknown', scoringDate: null, overallScore: null, nationalAverage: null, heartBonus: null, ranking: null, metrics: {}, techniques: {}, vibrato: null,
+      note: 'Multiple source-verified structured outcomes are attached to recordingId aliases of the same exact raw audio. SongScope does not choose one silently for history analysis.'
+    };
+  }
   const result = f1VerifiedResult(desc);
   const metrics = {};
   const techniques = {};
@@ -3857,8 +3987,9 @@ function f1PushOrderConstraint(map, earlierId, laterId, evidence) {
   if (!map.has(key)) map.set(key, { earlierRecordingId: earlierId, laterRecordingId: laterId, evidence: [] });
   map.get(key).evidence.push(evidence);
 }
-async function f1ChronologyConstraints(descs) {
+async function f1ChronologyConstraints(descs, aliasToCanonical) {
   const ids = new Set(descs.map(d => d.recordingId).filter(Boolean));
+  const canonicalId = id => (aliasToCanonical && aliasToCanonical.get(id)) || id;
   const edgeMap = new Map();
   const results = await dbAll('alignmentResults').catch(() => []);
   // 同一raw音声pairに複数algorithm-versionのresultが残っても、最新contextだけを採用する。
@@ -3877,9 +4008,15 @@ async function f1ChronologyConstraints(descs) {
   for (const x of latestPairContext.values()) {
     const ar=x.ar, c=x.pc && x.pc.chronology;
     if (!c || c.status !== 'user_confirmed_order') continue;
-    if (!ids.has(c.earlierRecordingId) || !ids.has(c.laterRecordingId)) continue;
-    f1PushOrderConstraint(edgeMap, c.earlierRecordingId, c.laterRecordingId, {
-      source: 'user_pair_confirmation', pairKey: ar.pairKey || null, confirmedAt: c.confirmedAt || null
+    const earlierId = canonicalId(c.earlierRecordingId), laterId = canonicalId(c.laterRecordingId);
+    if (!ids.has(earlierId) || !ids.has(laterId)) continue;
+    // alias→canonical化で同一physical recording内に畳み込まれた順序制約は、歌唱間chronologyではないため無視する。
+    if (earlierId === laterId) continue;
+    f1PushOrderConstraint(edgeMap, earlierId, laterId, {
+      source: 'user_pair_confirmation', pairKey: ar.pairKey || null, confirmedAt: c.confirmedAt || null,
+      originalEarlierRecordingId: c.earlierRecordingId || null,
+      originalLaterRecordingId: c.laterRecordingId || null,
+      identityCanonicalized: earlierId !== c.earlierRecordingId || laterId !== c.laterRecordingId
     });
   }
   for (let i=0; i<descs.length; i++) for (let j=i+1; j<descs.length; j++) {
@@ -4063,11 +4200,11 @@ function f1HistoryCsv(pkg) {
     Object.keys((r.outcome&&r.outcome.techniques)||{}).forEach(k=>techKeys.add(k));
   }
   const mks=Array.from(metricKeys).sort(), tks=Array.from(techKeys).sort();
-  const head=['chronology_index','recording_id','title','recorded_at','recorded_at_confirmation','structured_outcome_status','scoring_date','overall_score','national_average','heart_bonus',...mks.map(k=>'metric_'+k),...tks.map(k=>'technique_'+k+'_count'),'vibrato_duration_sec','vibrato_count','vibrato_type'];
+  const head=['chronology_index','physical_recording_id','recording_id','alias_recording_ids','audio_sha256','audio_identity_source','title','recorded_at','recorded_at_confirmation','structured_outcome_status','scoring_date','overall_score','national_average','heart_bonus',...mks.map(k=>'metric_'+k),...tks.map(k=>'technique_'+k+'_count'),'vibrato_duration_sec','vibrato_count','vibrato_type'];
   const out=[head.join(',')];
   for(const row of rows){
     const o=row.outcome||{}, p=row.recording.metadataProvenance&&row.recording.metadataProvenance.recordedAt||{};
-    const vals=[row.chronologyIndex||'',row.recording.recordingId,row.recording.title,row.recording.recordedAt||'',p.confirmation||'unknown',o.status,o.scoringDate||'',o.overallScore,o.nationalAverage,o.heartBonus,
+    const vals=[row.chronologyIndex||'',row.recording.physicalRecordingId||'',row.recording.recordingId,(row.recording.physicalIdentity&&row.recording.physicalIdentity.aliasRecordingIds||[]).join('|'),row.recording.audioSha256||'',row.recording.audioIdentityEvidence&&row.recording.audioIdentityEvidence.source||'',row.recording.title,row.recording.recordedAt||'',p.confirmation||'unknown',o.status,o.scoringDate||'',o.overallScore,o.nationalAverage,o.heartBonus,
       ...mks.map(k=>o.metrics&&o.metrics[k]?o.metrics[k].value:''),...tks.map(k=>o.techniques&&o.techniques[k]?o.techniques[k].count:''),
       o.vibrato&&o.vibrato.totalDurationSec,o.vibrato&&o.vibrato.count,o.vibrato&&o.vibrato.type];
     out.push(vals.map(v=>v===null||v===undefined?'':csvEscape(v)).join(','));
@@ -4080,9 +4217,12 @@ async function buildF1HistoryPackage() {
   if(!base) throw new Error('AまたはBに履歴対象の録音を選択してください');
   if(!base.songId) throw new Error('選択録音にsongIdがありません');
   if(a&&b&&a.songId&&b.songId&&a.songId!==b.songId) throw new Error('A/BのsongIdが異なります。履歴は同じ曲グループだけを対象にします');
-  const descs=await f1LoadDescriptorsForSong(base.songId);
-  if(!descs.length) throw new Error('このsongIdの録音が見つかりません');
-  const constraints=await f1ChronologyConstraints(descs);
+  const storedDescs=await f1LoadDescriptorsForSong(base.songId);
+  if(!storedDescs.length) throw new Error('このsongIdの録音が見つかりません');
+  const identityResolution=f1ResolvePhysicalRecordings(storedDescs);
+  const descs=identityResolution.physicalDescriptors;
+  if(!descs.length) throw new Error('exact audio SHA-256を確認できるphysical recordingがありません。旧録音のraw audioが残っているか確認してください');
+  const constraints=await f1ChronologyConstraints(descs, identityResolution.aliasToCanonical);
   const chronology=f1ResolveOrder(descs,constraints);
   const byId=new Map(descs.map(d=>[d.recordingId,d]));
   const stable=descs.slice();
@@ -4099,20 +4239,28 @@ async function buildF1HistoryPackage() {
   else if(descs.length>=3 && verifiedCount===descs.length) readiness='exploratory_pattern_available';
   const series=chronology.status==='fully_ordered'?f1BuildSeries(recordings,conditionChain):[];
   return {
-    schemaVersion:'songscope-history-0.1.0',
+    schemaVersion:'songscope-history-0.2.0',
     packageType:'same_song_compact_history_evidence',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
       songId:base.songId,
       representativeTitle:base.title||'',representativeArtist:base.artist||'',
       recordingCount:descs.length,
-      note:'songId is the persistent grouping key. Different display titles may still belong to this manually/explicitly grouped song.'
+      physicalRecordingCount:descs.length,
+      storedRecordingRecordCount:storedDescs.length,
+      duplicateAliasRecordCount:identityResolution.audit.duplicateAliasRecordCount,
+      unresolvedIdentityRecordCount:identityResolution.audit.unresolvedIdentityRecordCount,
+      note:'recordingCount is the number of exact-SHA-resolved physical recordings, not the number of legacy recordingId rows. Different display titles may still belong to this manually/explicitly grouped song.'
     },
+    identityResolution: identityResolution.audit,
     chronology,
     scoringConditionChain:conditionChain,
     patternReadiness:{
       status:readiness,
       recordingCount:descs.length,
+      physicalRecordingCount:descs.length,
+      storedRecordingRecordCount:storedDescs.length,
+      unresolvedIdentityRecordCount:identityResolution.audit.unresolvedIdentityRecordCount,
       sourceVerifiedStructuredOutcomeCount:verifiedCount,
       minimumOrderedComparableRecordingsForExploratoryPattern:3,
       minimumOrderedComparableRecordingsForRepeatedObservationPattern:5,
@@ -4125,7 +4273,8 @@ async function buildF1HistoryPackage() {
       note:'F1 is a compact history package. Source image SHA/provenance is retained, while raw images/audio and D2 frame windows stay in single-recording/pair packages for targeted audit.'
     },
     interpretationGuardrails:[
-      'One recordingId represents one raw recording/performance identity; analysisHistory re-runs are not counted as new singing performances.',
+      'F1 physical-performance counting uses exact raw audio SHA-256, not recordingId count. Legacy recordingId aliases with the same SHA-256 count once; analysisHistory re-runs also do not count as new singing performances.',
+      'Legacy records without a recoverable exact audio SHA-256 are preserved in identityResolution.unresolvedRecords but excluded from physical recording count and trend readiness.',
       'No chronology is inferred from title suffixes, A/B selection order, or unverified timestamps.',
       'A two-take difference is not a trend. At least three fully ordered, source-verified, scoring-condition-comparable recordings are required even for an exploratory direction pattern.',
       'Five or more such recordings permit a repeated-observation pattern label, but still do not prove durable singing skill change or causation.',
@@ -4142,6 +4291,7 @@ async function exportF1HistoryPackage() {
     const pkg=await buildF1HistoryPackage();
     const files=[
       {name:'song_history.json',data:JSON.stringify(pkg,null,2)},
+      {name:'history_identity_resolution.json',data:JSON.stringify({song:pkg.song,identityResolution:pkg.identityResolution},null,2)},
       {name:'history_chronology.json',data:JSON.stringify({song:pkg.song,chronology:pkg.chronology,scoringConditionChain:pkg.scoringConditionChain,patternReadiness:pkg.patternReadiness},null,2)},
       {name:'history_outcomes.csv',data:f1HistoryCsv(pkg)}
     ];
@@ -4149,7 +4299,7 @@ async function exportF1HistoryPackage() {
     const stamp=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
     const name=`songscope_history_${safeName(pkg.song.representativeTitle||'song')}_${stamp}.zip`;
     const how=await saveBlob(blob,name);
-    if(note)note.innerHTML=`<p><b>F1曲履歴パッケージを書き出しました</b></p><p class="small mono">recordings ${pkg.song.recordingCount} / chronology ${escapeHtml(pkg.chronology.status)} / verified outcomes ${pkg.patternReadiness.sourceVerifiedStructuredOutcomeCount}</p><p class="small">pattern readiness: <b>${escapeHtml(pkg.patternReadiness.status)}</b>。2録音の差をtrendとは呼びません。画像・音声・frame単位データは含めないcompact exportです。</p>`;
+    if(note)note.innerHTML=`<p><b>F1曲履歴パッケージを書き出しました</b></p><p class="small mono">physical recordings ${pkg.song.recordingCount} / stored rows ${pkg.song.storedRecordingRecordCount} / duplicate aliases ${pkg.song.duplicateAliasRecordCount} / unresolved ${pkg.song.unresolvedIdentityRecordCount}</p><p class="small mono">chronology ${escapeHtml(pkg.chronology.status)} / verified outcomes ${pkg.patternReadiness.sourceVerifiedStructuredOutcomeCount}</p><p class="small">pattern readiness: <b>${escapeHtml(pkg.patternReadiness.status)}</b>。recordingIdの重複はexact audio SHA-256で正規化し、SHA不明の旧recordはtrend件数から除外します。</p>`;
     if(how!=='cancelled')toast(`${name}を書き出しました`);
   }catch(e){
     console.error(e); if(note)note.innerHTML=`<p class="small">F1生成に失敗しました: ${escapeHtml((e&&e.message)||String(e))}</p>`; toast('F1曲履歴パッケージを作成できませんでした');
