@@ -227,12 +227,12 @@
       <div id="cmp-align-result" class="note"><p class="small">まだ判定していません。</p></div>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>D2 同一区間比較</span><span class="mono small">Observation comparison</span></div>
-      <p class="small">保存済みのresolved D1を使い、同じ曲位置の観測値と証拠量を10秒窓・5秒hopで並べます。F0 candidateは混合音声の周期候補であり、vocal F0や音程正確性とは扱いません。改善・悪化の判定は行いません。</p>
+      <div class="section-head tight"><span>D2 + E3 比較パッケージ</span><span class="mono small">Observation + outcome evidence</span></div>
+      <p class="small">保存済みのresolved D1を使い、同じ曲位置の観測値と証拠量を10秒窓・5秒hopで並べます。両側にsource-verifiedの構造化採点結果があれば、E3の項目別Outcome差も別証拠として同梱します。F0 candidateは混合音声の周期候補であり、vocal F0や音程正確性とは扱いません。改善・悪化や原因の判定は行いません。</p>
       <div class="row gap wrap">
-        <button id="btn-d2-export" class="mini accent">D2比較パッケージを書き出す</button>
+        <button id="btn-d2-export" class="mini accent">比較パッケージを書き出す（D2+E3）</button>
       </div>
-      <div id="cmp-d2-result" class="note"><p class="small">D1がresolvedになったA/Bで使用できます。</p></div>
+      <div id="cmp-d2-result" class="note"><p class="small">D1がresolvedになったA/Bで使用できます。E3は評価証拠が片側だけでも安全に出力し、足りない側をmissingのまま残します。</p></div>
     </div>
     <div class="card">
       <div class="section-head tight"><span>共有ループ（A基準時間）</span><span class="mono small" id="cmp-ab-readout">開始: — / 終了: —</span></div>
@@ -315,6 +315,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="zip.js"></script>
-<script src="app.js?v=20260810-e2-01"></script>
+<script src="app.js?v=20260810-e3-01"></script>
 </body>
 </html>

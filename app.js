@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase E2  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase E3  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseE2';
-const SCHEMA_VERSION = '0.9.0';
-const BUILD_ID = '20260810-e2-01';
+const APP_VERSION = '0.2.0-phaseE3';
+const SCHEMA_VERSION = '0.10.0';
+const BUILD_ID = '20260810-e3-01';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
@@ -3235,15 +3235,15 @@ function d2EvaluationAnchors(descA, descB) {
   const imgB = descB && descB.evaluationEvidence ? descB.evaluationEvidence.scoringResultImage : { status: 'unavailable' };
   const stA = descA && descA.evaluationEvidence ? descA.evaluationEvidence.structuredScoringResult : { status: 'unavailable' };
   const stB = descB && descB.evaluationEvidence ? descB.evaluationEvidence.structuredScoringResult : { status: 'unavailable' };
-  const validStructured = x => x && x.status === 'available' && x.verification && x.verification.status === 'source_verified' && x.overallScore !== null;
-  const stScoreA = validStructured(stA) ? stA.overallScore : null;
-  const stScoreB = validStructured(stB) ? stB.overallScore : null;
+  const verifiedStructured = x => x && x.status === 'available' && x.verification && x.verification.status === 'source_verified';
+  const stScoreA = verifiedStructured(stA) ? stA.overallScore : null;
+  const stScoreB = verifiedStructured(stB) ? stB.overallScore : null;
   let structuredStatus = 'unavailable';
-  if (validStructured(stA) && validStructured(stB)) {
+  if (verifiedStructured(stA) && verifiedStructured(stB)) {
     structuredStatus = requiredReportedSame.every(sameKnownConfirmed)
       ? 'available_both_confirmed_metadata_conditions_match'
       : 'available_both_comparability_not_established';
-  } else if (validStructured(stA) || validStructured(stB)) structuredStatus = 'available_one_side';
+  } else if (verifiedStructured(stA) || verifiedStructured(stB)) structuredStatus = 'available_one_side';
   const consistency = (stored, extracted) => stored !== null && extracted !== null ? (Math.abs(stored - extracted) <= 0.001 ? 'same_value' : 'different_value') : 'not_comparable';
   return {
     damScore: {
@@ -3277,6 +3277,183 @@ function d2EvaluationAnchors(descA, descB) {
       },
       note: 'Values are externally structured from preserved image evidence and are usable only when source verification passes. Comparison conditions remain a separate question.'
     }
+  };
+}
+
+
+/* ---------------- Phase E3: pairwise outcome evidence ---------------- */
+function e3StructuredIsSourceVerified(desc) {
+  return !!(desc && desc.status === 'available' && desc.verification && desc.verification.status === 'source_verified');
+}
+function e3ReadableNumber(node, valueKey = 'value') {
+  if (!node || node.status !== 'readable') return null;
+  const n = Number(node[valueKey]);
+  return isFinite(n) ? n : null;
+}
+function e3Number(v, digits = 3) {
+  const n = Number(v);
+  return isFinite(n) ? +n.toFixed(digits) : null;
+}
+function e3NumericPair(key, label, a, b, unit, classification, directionality = 'descriptive_only') {
+  const av = a === null || a === undefined ? null : e3Number(a);
+  const bv = b === null || b === undefined ? null : e3Number(b);
+  let status = 'unavailable';
+  if (av !== null && bv !== null) status = 'available_both';
+  else if (av !== null || bv !== null) status = 'available_one_side';
+  return {
+    key, label: label || key, status, a: av, b: bv,
+    deltaBminusA: av !== null && bv !== null ? e3Number(bv - av) : null,
+    unit: unit || null,
+    classification,
+    directionality,
+    interpretation: 'Numeric difference only. This field does not by itself establish overall singing improvement or an acoustic cause.'
+  };
+}
+function e3ArrayMap(result, arrayKey, valueKey) {
+  const out = new Map();
+  const rows = result && Array.isArray(result[arrayKey]) ? result[arrayKey] : [];
+  for (const row of rows) {
+    if (!row || !row.key || row.status !== 'readable') continue;
+    const n = Number(row[valueKey]);
+    if (!isFinite(n)) continue;
+    out.set(String(row.key), {
+      key: String(row.key),
+      label: row.label || String(row.key),
+      value: n,
+      unit: row.unit || (valueKey === 'count' ? 'count' : null)
+    });
+  }
+  return out;
+}
+function e3UnionKeys(aMap, bMap) {
+  return Array.from(new Set([...aMap.keys(), ...bMap.keys()])).sort();
+}
+function e3StrictScoringConditionComparability(descA, descB) {
+  const fields = ['device', 'scoringMode', 'keyChange', 'octave'];
+  const a = descA && descA.userMetadata || {}, b = descB && descB.userMetadata || {};
+  const pa = descA && descA.metadataProvenance || {}, pb = descB && descB.metadataProvenance || {};
+  const rows = fields.map(field => {
+    const av = String(a[field] === null || a[field] === undefined ? '' : a[field]).trim();
+    const bv = String(b[field] === null || b[field] === undefined ? '' : b[field]).trim();
+    const ac = !!(pa[field] && pa[field].confirmation === 'user_confirmed');
+    const bc = !!(pb[field] && pb[field].confirmation === 'user_confirmed');
+    let status = 'not_established';
+    if (av && bv && ac && bc) status = av === bv ? 'confirmed_same' : 'confirmed_different';
+    return {
+      field,
+      status,
+      a: av || null,
+      b: bv || null,
+      aConfirmation: pa[field] && pa[field].confirmation || 'unknown',
+      bConfirmation: pb[field] && pb[field].confirmation || 'unknown'
+    };
+  });
+  let overallStatus = 'not_established';
+  if (rows.some(r => r.status === 'confirmed_different')) overallStatus = 'confirmed_difference_present';
+  else if (rows.every(r => r.status === 'confirmed_same')) overallStatus = 'confirmed_match';
+  return {
+    overallStatus,
+    requiredFields: fields,
+    fields: rows,
+    note: 'Outcome comparability requires user-confirmed matching machine/mode/key/octave metadata. Stored-value equality without confirmation is not promoted to confirmed comparability.'
+  };
+}
+function e3OutcomeComparison(descA, descB) {
+  const stA = descA && descA.evaluationEvidence && descA.evaluationEvidence.structuredScoringResult || { status: 'unavailable' };
+  const stB = descB && descB.evaluationEvidence && descB.evaluationEvidence.structuredScoringResult || { status: 'unavailable' };
+  const verifiedA = e3StructuredIsSourceVerified(stA), verifiedB = e3StructuredIsSourceVerified(stB);
+  const resultA = verifiedA && stA.result && typeof stA.result === 'object' ? stA.result : {};
+  const resultB = verifiedB && stB.result && typeof stB.result === 'object' ? stB.result : {};
+  const conditions = e3StrictScoringConditionComparability(descA, descB);
+
+  let status = 'requires_structured_evaluations';
+  if (verifiedA && verifiedB) {
+    if (conditions.overallStatus === 'confirmed_match') status = 'pairwise_outcome_observation_comparable';
+    else if (conditions.overallStatus === 'confirmed_difference_present') status = 'pairwise_outcome_observation_conditions_differ';
+    else status = 'pairwise_outcome_observation_available_comparability_not_established';
+  } else if (verifiedA || verifiedB) status = 'waiting_for_second_structured_evaluation';
+
+  const metricsA = e3ArrayMap(resultA, 'metrics', 'value');
+  const metricsB = e3ArrayMap(resultB, 'metrics', 'value');
+  const metrics = e3UnionKeys(metricsA, metricsB).map(key => {
+    const a = metricsA.get(key), b = metricsB.get(key);
+    return e3NumericPair(key, (a && a.label) || (b && b.label) || key,
+      a ? a.value : null, b ? b.value : null, (a && a.unit) || (b && b.unit) || null,
+      'external_scoring_metric', 'metric_specific_not_assumed');
+  });
+
+  const techA = e3ArrayMap(resultA, 'techniques', 'count');
+  const techB = e3ArrayMap(resultB, 'techniques', 'count');
+  const techniques = e3UnionKeys(techA, techB).map(key => {
+    const a = techA.get(key), b = techB.get(key);
+    return e3NumericPair(key, (a && a.label) || (b && b.label) || key,
+      a ? a.value : null, b ? b.value : null, 'count',
+      'technique_occurrence_count', 'non_monotonic');
+  });
+
+  const vibA = resultA.vibrato && resultA.vibrato.status === 'readable' ? resultA.vibrato : null;
+  const vibB = resultB.vibrato && resultB.vibrato.status === 'readable' ? resultB.vibrato : null;
+  const typeA = vibA && vibA.type ? String(vibA.type) : null;
+  const typeB = vibB && vibB.type ? String(vibB.type) : null;
+  const typeStatus = typeA && typeB ? (typeA === typeB ? 'same_value' : 'different_value') : (typeA || typeB ? 'available_one_side' : 'unavailable');
+
+  const rankingA = resultA.ranking && resultA.ranking.status === 'readable' ? resultA.ranking : null;
+  const rankingB = resultB.ranking && resultB.ranking.status === 'readable' ? resultB.ranking : null;
+
+  return {
+    schemaVersion: 'songscope-outcome-comparison-v1',
+    status,
+    sourceEvidence: {
+      a: {
+        recordingId: descA && descA.recordingId || null,
+        structuredStatus: stA.status || 'unavailable',
+        verificationStatus: stA.verification && stA.verification.status || 'unavailable',
+        scoringImageSha256: stA.sourceEvidence && stA.sourceEvidence.sha256 || null,
+        userReview: stA.extraction && stA.extraction.userReview || 'unknown'
+      },
+      b: {
+        recordingId: descB && descB.recordingId || null,
+        structuredStatus: stB.status || 'unavailable',
+        verificationStatus: stB.verification && stB.verification.status || 'unavailable',
+        scoringImageSha256: stB.sourceEvidence && stB.sourceEvidence.sha256 || null,
+        userReview: stB.extraction && stB.extraction.userReview || 'unknown'
+      }
+    },
+    scoringConditionComparability: conditions,
+    outcomeObservations: {
+      overallScore: e3NumericPair('overall_score', '総合点', e3ReadableNumber(resultA.overallScore), e3ReadableNumber(resultB.overallScore), 'points', 'overall_external_score', 'higher_score_is_higher_external_outcome_only'),
+      heartBonus: e3NumericPair('heart_bonus', 'ハートボーナス', e3ReadableNumber(resultA.heartBonus), e3ReadableNumber(resultB.heartBonus), 'points', 'external_score_component', 'descriptive_only'),
+      metrics,
+      techniques,
+      vibrato: {
+        totalDurationSec: e3NumericPair('vibrato_total_duration_sec', 'ビブラート合計時間', vibA && isFinite(Number(vibA.totalDurationSec)) ? Number(vibA.totalDurationSec) : null, vibB && isFinite(Number(vibB.totalDurationSec)) ? Number(vibB.totalDurationSec) : null, 'seconds', 'technique_measurement', 'non_monotonic'),
+        count: e3NumericPair('vibrato_count', 'ビブラート回数', vibA && isFinite(Number(vibA.count)) ? Number(vibA.count) : null, vibB && isFinite(Number(vibB.count)) ? Number(vibB.count) : null, 'count', 'technique_occurrence_count', 'non_monotonic'),
+        type: { status: typeStatus, a: typeA, b: typeB, interpretation: 'Categorical observation only; a type change is not automatically better or worse.' }
+      }
+    },
+    contextualEvidence: {
+      nationalAverage: e3NumericPair('national_average', '全国平均', e3ReadableNumber(resultA.nationalAverage), e3ReadableNumber(resultB.nationalAverage), 'points', 'population_context', 'context_only'),
+      ranking: {
+        status: rankingA && rankingB ? 'available_both' : (rankingA || rankingB ? 'available_one_side' : 'unavailable'),
+        a: rankingA ? { position: Number(rankingA.position), total: Number(rankingA.total) } : null,
+        b: rankingB ? { position: Number(rankingB.position), total: Number(rankingB.total) } : null,
+        deltaNotComputed: true,
+        note: 'Ranking denominator/cohort may differ, so a raw rank delta is not produced.'
+      },
+      scoringDate: {
+        status: resultA.scoringDate && resultB.scoringDate ? 'available_both' : (resultA.scoringDate || resultB.scoringDate ? 'available_one_side' : 'unavailable'),
+        a: resultA.scoringDate && resultA.scoringDate.value || null,
+        b: resultB.scoringDate && resultB.scoringDate.value || null
+      }
+    },
+    interpretationGuardrails: [
+      'This file compares preserved external scoring outcomes; it does not label overall singing improvement.',
+      'A positive score delta is an external outcome increase, not proof of a specific acoustic improvement or cause.',
+      'Technique-count increases/decreases are non-monotonic and must not be ranked as better/worse by count alone.',
+      'Field comparisons require source-verified structured evaluations. Missing values remain missing.',
+      'Scoring-condition comparability is separate from source verification and is not inferred from equal unconfirmed stored metadata.',
+      'SongScope mixed-audio F0/RMS observations remain separate evidence and are not used to explain score deltas automatically.'
+    ]
   };
 }
 
@@ -3344,10 +3521,11 @@ async function buildD2DiagnosticPackage() {
   const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
   const descA = d2RecordingDescriptor('a'), descB = d2RecordingDescriptor('b');
   const evalAnchors = d2EvaluationAnchors(descA, descB);
+  const outcomeComparison = e3OutcomeComparison(descA, descB);
   const hasOutcomeAnchor = evalAnchors.damScore.status !== 'unavailable' || evalAnchors.scoringResultImages.status !== 'unavailable' || evalAnchors.structuredScoringResults.status !== 'unavailable';
   return {
-    schemaVersion: 'songscope-d2-0.4.0',
-    packageType: 'pairwise_observation_comparison',
+    schemaVersion: 'songscope-d2-0.5.0',
+    packageType: 'pairwise_observation_and_outcome_evidence',
     status: 'aligned_observation_comparison_ready',
     generatedAt: nowIso(),
     appVersion: APP_VERSION,
@@ -3359,7 +3537,8 @@ async function buildD2DiagnosticPackage() {
       'F0 ambiguity flags are heuristic diagnostics: ambiguity=none does not mean correct, and ambiguity does not provide an error probability.',
       'F0 candidate ratio is estimator evidence, not voiced ratio or singing duration.',
       'rms_relative_db is normalized within each recording and must not be interpreted as absolute loudness or singer vocal volume difference.',
-      'Missing or weak evidence remains missing/weak rather than being imputed.'
+      'Missing or weak evidence remains missing/weak rather than being imputed.',
+      'Phase E3 compares source-verified external scoring fields as outcome observations; it never attributes an acoustic cause or labels overall singing improvement.'
     ],
     alignment: {
       status: resolved.result.status,
@@ -3391,11 +3570,12 @@ async function buildD2DiagnosticPackage() {
     metricCatalog: d2MetricCatalog(),
     recordingConditionComparison: d2ConditionComparison(descA, descB),
     evaluationAnchors: evalAnchors,
+    outcomeComparison,
     comparisonReadiness: {
       temporalAlignment: 'resolved',
       temporalWindowing: 'validated_same_aligned_interval',
       vocalSpecificAcousticMetrics: 'not_available',
-      outcomeEvaluation: hasOutcomeAnchor ? 'external_anchor_available_requires_interpretation' : 'requires_external_anchor',
+      outcomeEvaluation: outcomeComparison.status,
       overall: 'observation_comparison_only'
     },
     overlap: {
@@ -3431,6 +3611,7 @@ async function exportD2DiagnosticPackage() {
     const files = [
       { name: 'metric_catalog.json', data: JSON.stringify(pkg.metricCatalog, null, 2) },
       { name: 'evaluation_anchors.json', data: JSON.stringify(pkg.evaluationAnchors, null, 2) },
+      { name: 'outcome_comparison.json', data: JSON.stringify(pkg.outcomeComparison, null, 2) },
       { name: 'comparison_summary.json', data: JSON.stringify(pkg, null, 2) },
       { name: 'comparison_windows.csv', data: d2WindowsCsv(pkg) }
     ];
@@ -3449,7 +3630,7 @@ async function exportD2DiagnosticPackage() {
     const stamp = new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
     const name = `songscope_compare_${safeName(pkg.recordingA.title)}_vs_${safeName(pkg.recordingB.title)}_${stamp}.zip`;
     const how = await saveBlob(blob, name);
-    if (note) note.innerHTML = `<p><b>D2比較パッケージを書き出しました</b></p><p class="small mono">offset ${pkg.alignment.offsetSec >= 0 ? '+' : ''}${pkg.alignment.offsetSec.toFixed(1)} s / overlap ${pkg.overlap.durationSec.toFixed(1)} s / windows ${pkg.evidenceSummary.windowCount} / full pair ${pkg.evidenceSummary.fullPairCoverageWindowCount}</p><p class="small">改善判定はしません。F0 candidateは混合音声の周期候補として扱い、metric_catalog.jsonに解釈禁止事項を明記しています。</p>`;
+    if (note) note.innerHTML = `<p><b>D2比較パッケージを書き出しました</b></p><p class="small mono">offset ${pkg.alignment.offsetSec >= 0 ? '+' : ''}${pkg.alignment.offsetSec.toFixed(1)} s / overlap ${pkg.overlap.durationSec.toFixed(1)} s / windows ${pkg.evidenceSummary.windowCount} / full pair ${pkg.evidenceSummary.fullPairCoverageWindowCount}</p><p class="small">E3 outcome: ${escapeHtml(pkg.outcomeComparison.status)}。改善判定はしません。F0 candidateは混合音声の周期候補として扱い、外部採点との差も原因説明には使いません。</p>`;
     if (how !== 'cancelled') toast(`${name}を書き出しました`);
   } catch (e) {
     console.error(e);

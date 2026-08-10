@@ -1,4 +1,4 @@
-# SongScope v0.2 Phase E1
+# SongScope v0.2 Phase E3
 
 ### D1 build 02 — IndexedDB upgrade待機の修正
 - Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
@@ -18,8 +18,21 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.8.0`
-- Build ID: `20260810-e1-01`
+- Schema Version: `0.10.0`
+- Build ID: `20260810-e3-01`
+
+## Phase E3 — pairwise outcome evidence
+
+### E3 build 01 — structured scoring outcome comparison
+
+- E2でsource-verifiedになった構造化採点結果を、A/B比較ZIP内で項目ごとに比較する `outcome_comparison.json` を追加。
+- 比較対象は総合点、明示的に読めた採点metrics、技法回数、ビブラート、ハートボーナス等。欠損値は補完しない。
+- 技法回数やビブラート量は増減を出しても「多いほど良い」とは扱わない。ランキングは母集団が変わりうるためraw deltaを作らない。
+- `recordingId` と採点画像SHA-256が検証済みの構造化評価だけをOutcome観測に使う。source verificationと採点条件comparabilityを分離する。
+- 採点条件の比較可能性は、機種・採点モード・キー・オクターブが双方で `user_confirmed` かつ一致した場合のみ `confirmed_match`。保存値が同じだけでは昇格しない。
+- 両側評価が揃っていない場合も失敗せず、`waiting_for_second_structured_evaluation` など明示的な状態を出力する。
+- 外部評価差とD2音響観測は自動で因果づけしない。総合的な「上達」判定もSongScopeでは行わない。
+- DB_VER=5、audio-analysis-worker / alignment-workerは変更なし。
 
 ## Phase D2 — aligned observation comparison
 
@@ -50,7 +63,7 @@
 
 
 - D1のresolved mappingを使い、Recording A基準の10秒窓 / 5秒hopで同一曲位置の観測値を並べる診断段階です。
-- 書き出しは `comparison_summary.json` と `comparison_windows.csv` の2ファイルを含むZIPです。
+- 比較ZIPには `comparison_summary.json`、`comparison_windows.csv`、`metric_catalog.json`、`evaluation_anchors.json` を含み、Phase E3では `outcome_comparison.json` も追加します。
 - 初期指標は `rms_relative_db` のp10/p50/p90、`f0_candidate_hz` のp10/p50/p90、F0 candidate量、ambiguity量です。
 - ambiguity flagを理由にF0候補を訂正・削除しません。`ambiguity=none`も正しさの保証として扱いません。
 - `rms_relative_db` は各録音内で正規化された観測値で、録音間の絶対音量差とは解釈しません。
@@ -242,6 +255,8 @@ ZIPファイル（`songscope_曲名_日時.zip`）が作られ、iPhoneの共有
 | `markers.csv` | あなたが押したマーカー |
 | `user_segments.csv` | あなたが指定した区間＋その統計値 |
 | `detected_segments.csv` | 解析エンジンが自動検出した活動区間 |
+| `evaluation_anchors.json` | DAM等の外部評価証拠・provenance。画像や構造化評価が無い場合も状態を明示 |
+| `evaluation/...` | 採点結果画像・抽出依頼JSON・source-verified構造化評価（存在するものだけ） |
 | `waveform.png` `loudness.png` `pitch.png` `spectrogram.png` | グラフ画像（横1600px。マーカーも描き込まれています） |
 
 「**元音声もZIPへ含める**」をONにすると音声ファイルも入りますが、サイズが大きくなるため**既定はOFF**です。
