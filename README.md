@@ -1,8 +1,8 @@
-# SongScope v0.2 Audit Remediation R0 build 01
+# SongScope v0.2 Audit Remediation R0 build 03
 
 外部監査後の最優先修正。Phase F2の分析ロジックは変更せず、**データ保全とPWA更新安全性**だけを修正する。
 
-- App: `0.2.0-auditR0` / Build: `20260810-r0-02` / schema: `0.13.2` / DB: `5`
+- App: `0.2.0-auditR0` / Build: `20260810-r0-03` / schema: `0.13.3` / DB: `5`
 - 「全データJSON」を廃止し、IndexedDB全store・raw audio・採点画像・full analysisを含む `songscope-full-backup-v1` ZIPを作成する。
 - 同ZIPの復元を実装。復元前にZIP CRC32、Blob SHA-256、recording audio SHA-256、採点画像SHA-256、structured evaluation bindingを検証する。
 - 復元は既存データを削除しないmerge方式。同一primary keyは検証済みバックアップ側で更新し、recordingIdとaudio SHAが衝突する場合は停止する。
@@ -16,12 +16,22 @@
 - プライベートブラウズを災害復旧試験環境として使わず、通常Safari上の一時DBでempty-DB restore経路を検証できる。
 - 本番restoreのmerge/atomic方針、完全バックアップschema `songscope-full-backup-v1`、DB_VER=5は変更なし。
 
+## Audit R0 build 03
+- build 02実機で、empty-DB restoreと全照合の後、一時DB削除だけが `blocked` となりテスト全体を失敗扱いしていたため修正。
+- `dbAllFromConnection()` は `getAll().onsuccess` ではなくreadonly transactionの `oncomplete` まで待ってから返す。照合transactionが閉じる前にDBをdeleteするraceを除去。
+- `deleteDatabase().onblocked` は即失敗にせず、connection解放後の同一request成功を待つ。一定時間残る場合のみcleanup warningとする。
+- 復旧検証（空DBへのrestore＋全store/binary一致）と一時DB cleanupを別ステータス化。cleanupだけ失敗しても復旧検証を失敗へ格下げしない。
+- self-test reportを `songscope-disaster-recovery-selftest-v2` に更新し、`verificationStatus` と `cleanupStatus` を別々に記録。
+- 本番DB・完全バックアップschema・DB_VER・分析ロジック・workerは変更なし。
+
+
 ## R0実機検証手順
 
 1. 更新後、ホームの **完全バックアップZIP** を押してZIPを保存する。
 2. そのZIPをChatGPTへ送って内部構造・raw evidenceの同梱・SHA整合を監査する。
 3. 可能ならSongScopeの **バックアップを復元** から同ZIPを選択し、検証後の確認画面で復元する。既存データは削除されない。
 4. 復元後に録音数、DAM画像、構造化評価、E4/F1/F2が維持されていることを確認する。
+5. **災害復旧セルフテスト** で同じバックアップを選び、`verificationStatus: passed` の結果JSONを書き出す。cleanupは独立項目として確認する。
 
 ---
 
@@ -45,8 +55,8 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Current Schema Version: `0.13.2`
-- Current Build ID: `20260810-r0-02`
+- Current Schema Version: `0.13.3`
+- Current Build ID: `20260810-r0-03`
 
 
 ## Phase F2 — Repeated-direction Pattern evidence

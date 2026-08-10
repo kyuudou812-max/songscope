@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-auditR0';
-const SCHEMA_VERSION = '0.13.2';
-const BUILD_ID = '20260810-r0-02';
+const SCHEMA_VERSION = '0.13.3';
+const BUILD_ID = '20260810-r0-03';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -2818,20 +2818,48 @@ function openStandaloneSongScopeDb(name) {
     req.onblocked = () => reject(new Error('一時DBの作成がblockedになりました'));
   });
 }
-function deleteStandaloneDb(name) {
+function deleteStandaloneDb(name, opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs || 5000);
   return new Promise((resolve, reject) => {
     const req = indexedDB.deleteDatabase(name);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error || new Error('一時DBを削除できませんでした'));
-    req.onblocked = () => reject(new Error('一時DBの削除がblockedになりました'));
+    let settled = false;
+    let blockedObserved = false;
+    let timer = null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(value);
+    };
+    req.onsuccess = () => finish(resolve, { deleted: true, blockedObserved });
+    req.onerror = () => finish(reject, req.error || new Error('一時DBを削除できませんでした'));
+    // blockedは「削除失敗」ではない。既存connectionがcloseされれば同じrequestが後から成功できる。
+    req.onblocked = () => { blockedObserved = true; };
+    timer = setTimeout(() => {
+      const e = new Error(blockedObserved ? '一時DB削除がblockedのままタイムアウトしました' : '一時DB削除がタイムアウトしました');
+      e.code = blockedObserved ? 'SONGSCOPE_TEMP_DB_DELETE_BLOCKED_TIMEOUT' : 'SONGSCOPE_TEMP_DB_DELETE_TIMEOUT';
+      e.blockedObserved = blockedObserved;
+      finish(reject, e);
+    }, timeoutMs);
   });
 }
 function dbAllFromConnection(d, store) {
+  // IDBRequest成功時点ではtransactionがまだactiveな場合がある。
+  // self-testで直後にDBをclose/deleteするとSafariでdeleteDatabaseがblockedになり得るため、
+  // transaction.oncompleteまで待ってから結果を返す。
   return new Promise((resolve, reject) => {
     const tx = d.transaction(store, 'readonly');
     const req = tx.objectStore(store).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error || new Error(`${store}の読出しに失敗しました`));
+    let rows = null;
+    let requestError = null;
+    req.onsuccess = () => { rows = req.result || []; };
+    req.onerror = () => { requestError = req.error || new Error(`${store}の読出しに失敗しました`); };
+    tx.oncomplete = () => {
+      if (requestError) reject(requestError);
+      else resolve(rows || []);
+    };
+    tx.onerror = () => reject(requestError || tx.error || new Error(`${store}の読出しtransactionに失敗しました`));
+    tx.onabort = () => reject(requestError || tx.error || new Error(`${store}の読出しtransactionが中断されました`));
   });
 }
 
@@ -2913,31 +2941,66 @@ async function disasterRecoverySelfTest(file) {
   if (!file) return;
   const testDbName = `${DB_NAME}_restore_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   let testDb = null;
+  let verificationPassed = false;
+  let summary = null;
+  let parsed = null;
+  let cleanup = { status: 'not_attempted', temporaryDatabaseDeletedAfterVerification: false, blockedObserved: false, error: null };
   try {
     busy('災害復旧セルフテスト', 'バックアップZIPを検証しています…', 7);
-    const parsed = await parseFullBackupFile(file);
+    parsed = await parseFullBackupFile(file);
     $('#busy-msg').textContent = 'raw audio・採点画像のSHA-256を検証しています…';
     $('#busy-bar').style.width = '28%';
     await validateFullBackupEvidence(parsed, { checkExistingConflicts: false });
     $('#busy-msg').textContent = '本番データとは別の空DBを作成しています…';
     $('#busy-bar').style.width = '43%';
-    await deleteStandaloneDb(testDbName).catch(() => {});
+    // testDbNameは毎回ランダムで一意。事前deleteは不要で、古いconnectionとの競合も避ける。
     testDb = await openStandaloneSongScopeDb(testDbName);
     $('#busy-msg').textContent = '空DBへ完全復元しています…';
     $('#busy-bar').style.width = '58%';
     await restoreBackupStoresToDb(parsed, testDb);
     $('#busy-msg').textContent = '復元後の全store・binaryを元バックアップと照合しています…';
     $('#busy-bar').style.width = '76%';
-    const summary = await verifyDbAgainstParsedBackup(testDb, parsed);
-    $('#busy-bar').style.width = '100%';
+    summary = await verifyDbAgainstParsedBackup(testDb, parsed);
+    verificationPassed = true;
+
+    // 復旧成否はここで確定。cleanupは別の検査項目として扱う。
+    $('#busy-msg').textContent = '復旧検証は成功しました。一時DBを後片付けしています…';
+    $('#busy-bar').style.width = '92%';
     try { testDb.close(); } catch (_) { }
     testDb = null;
-    await deleteStandaloneDb(testDbName);
+    // WebKitではclose直後にdeleteを投げるとblockedを一度通知することがある。
+    // readonly transaction完了を待った上で、さらにevent loopを1回譲る。
+    await new Promise(resolve => setTimeout(resolve, 80));
+    try {
+      const deletion = await deleteStandaloneDb(testDbName, { timeoutMs: 5000 });
+      cleanup = {
+        status: 'deleted',
+        temporaryDatabaseDeletedAfterVerification: true,
+        blockedObserved: !!(deletion && deletion.blockedObserved),
+        error: null
+      };
+    } catch (cleanupError) {
+      cleanup = {
+        status: cleanupError && cleanupError.code === 'SONGSCOPE_TEMP_DB_DELETE_BLOCKED_TIMEOUT' ? 'blocked_timeout_warning' : 'cleanup_warning',
+        temporaryDatabaseDeletedAfterVerification: false,
+        blockedObserved: !!(cleanupError && cleanupError.blockedObserved),
+        error: {
+          name: cleanupError && cleanupError.name || 'Error',
+          code: cleanupError && cleanupError.code || null,
+          message: cleanupError && cleanupError.message || String(cleanupError)
+        }
+      };
+      console.warn('Disaster recovery self-test cleanup warning', cleanupError);
+    }
+
+    $('#busy-bar').style.width = '100%';
     closeSheet();
     const recs = Number(summary.stores.recordings || 0);
     const report = {
-      schemaVersion: 'songscope-disaster-recovery-selftest-v1',
+      schemaVersion: 'songscope-disaster-recovery-selftest-v2',
       status: 'passed',
+      verificationStatus: 'passed',
+      cleanupStatus: cleanup.status,
       testedAt: nowIso(),
       app: { name: 'SongScope', version: APP_VERSION, buildId: BUILD_ID, schemaVersion: SCHEMA_VERSION, dbVersion: DB_VER },
       inputBackup: {
@@ -2946,9 +3009,18 @@ async function disasterRecoverySelfTest(file) {
         sourceAppVersion: parsed.manifest.appVersion || null, sourceBuildId: parsed.manifest.buildId || null,
         dbVersion: parsed.manifest.dbVersion, stores: parsed.manifest.stores || {}
       },
-      isolation: { temporaryDatabaseUsed: true, productionDatabaseName: DB_NAME, productionDatabaseModifiedBySelfTest: false, temporaryDatabaseDeletedAfterVerification: true },
+      isolation: {
+        temporaryDatabaseUsed: true,
+        productionDatabaseName: DB_NAME,
+        productionDatabaseModifiedBySelfTest: false,
+        temporaryDatabaseDeletedAfterVerification: cleanup.temporaryDatabaseDeletedAfterVerification,
+        cleanupStatus: cleanup.status,
+        cleanupBlockedObserved: cleanup.blockedObserved,
+        cleanupError: cleanup.error
+      },
       verification: {
         zipCrcValidated: true, manifestValidated: true, rawAudioAndScoringImageShaValidated: true,
+        emptyTemporaryDatabaseRestoreCompleted: true,
         restoredStoreCountsMatched: true, restoredRowsCompared: summary.checkedRows, restoredValuesAndBinaryMatched: true,
         stores: summary.stores
       }
@@ -2957,10 +3029,19 @@ async function disasterRecoverySelfTest(file) {
     const reportName = `songscope_restore_selftest_${stamp}.json`;
     const reportBlob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     const how = await saveBlob(reportBlob, reportName);
-    toast(`災害復旧セルフテスト成功：空DBから ${recs}録音を完全復元・照合しました${how === 'cancelled' ? '' : '（結果JSONを書き出しました）'}`, 7000);
+    const cleanupNote = cleanup.temporaryDatabaseDeletedAfterVerification
+      ? ''
+      : '。復旧検証は成功しましたが、一時DBの削除だけ警告になりました';
+    toast(`災害復旧セルフテスト成功：空DBから ${recs}録音を完全復元・照合しました${cleanupNote}${how === 'cancelled' ? '' : '（結果JSONを書き出しました）'}`, 8000);
   } catch (e) {
+    // verificationが成立する前の失敗だけを「災害復旧セルフテスト失敗」とする。
     try { if (testDb) testDb.close(); } catch (_) { }
-    try { await deleteStandaloneDb(testDbName); } catch (_) { }
+    testDb = null;
+    // cleanup失敗はここでも本来のfailure原因を上書きしない。
+    try {
+      await new Promise(resolve => setTimeout(resolve, 80));
+      await deleteStandaloneDb(testDbName, { timeoutMs: 1500 });
+    } catch (_) { }
     closeSheet();
     console.error('Disaster recovery self-test failed', e, e && e.detail);
     toast('災害復旧セルフテスト失敗：' + ((e && e.message) || ''), 8000);
