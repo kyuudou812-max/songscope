@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260810-r0-01">
+<link rel="stylesheet" href="styles.css?v=20260810-r0-02">
 <title>SongScope</title>
 </head>
 <body>
@@ -36,11 +36,13 @@
     <div class="card note warn" id="storage-note">
       <p><b>この端末内のデータは長期保存を保証できません。</b>iOSは空き容量不足などで保存領域を削除する場合があります。大切な録音は「ボイスメモ」側に原本を残し、定期的にバックアップを書き出してください。</p>
       <p class="mono small" id="storage-est"></p>
-      <div class="row gap">
+      <div class="row gap wrap">
         <button id="btn-persist" class="mini">永続化を要求</button>
         <button id="btn-backup-all" class="mini">完全バックアップZIP</button>
         <button id="btn-restore-all" class="mini">バックアップを復元</button>
+        <button id="btn-restore-selftest" class="mini">災害復旧セルフテスト</button>
         <input type="file" id="restore-input" accept="application/zip,.zip" hidden>
+        <input type="file" id="restore-selftest-input" accept="application/zip,.zip" hidden>
       </div>
     </div>
 
@@ -350,7 +352,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260810-r0-01"></script>
-<script src="app.js?v=20260810-r0-01"></script>
+<script src="zip.js?v=20260810-r0-02"></script>
+<script src="app.js?v=20260810-r0-02"></script>
 </body>
 </html>

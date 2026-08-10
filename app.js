@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-auditR0';
-const SCHEMA_VERSION = '0.13.1';
-const BUILD_ID = '20260810-r0-01';
+const SCHEMA_VERSION = '0.13.2';
+const BUILD_ID = '20260810-r0-02';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -202,6 +202,43 @@ function isDbBlockedError(e) { return !!(e && e.code === DB_BLOCKED_CODE); }
 function dbBlockedUserMessage() {
   return 'SongScopeの別画面が開いたままの可能性があります。SafariのSongScopeタブとホーム画面版SongScopeをすべて閉じてから、もう一度開いてください。録音データは削除しないでください。';
 }
+
+function ensureSongScopeStores(d, tx) {
+  let recordings;
+  if (!d.objectStoreNames.contains('recordings')) {
+    recordings = d.createObjectStore('recordings', { keyPath: 'recordingId' });
+  } else recordings = tx.objectStore('recordings');
+  if (!recordings.indexNames.contains('byAudioSha256')) recordings.createIndex('byAudioSha256', 'audioSha256', { unique: false });
+  if (!recordings.indexNames.contains('bySongId')) recordings.createIndex('bySongId', 'songId', { unique: false });
+  if (!recordings.indexNames.contains('bySongIdentityKey')) recordings.createIndex('bySongIdentityKey', 'songIdentityKey', { unique: false });
+
+  if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio', { keyPath: 'recordingId' });
+  if (!d.objectStoreNames.contains('analysis')) d.createObjectStore('analysis', { keyPath: 'recordingId' });
+  if (!d.objectStoreNames.contains('analysisHistory')) {
+    const h = d.createObjectStore('analysisHistory', { keyPath: 'analysisId' });
+    h.createIndex('byRec', 'recordingId', { unique: false });
+    h.createIndex('byAudioSha256', 'audioSha256', { unique: false });
+  }
+  if (!d.objectStoreNames.contains('markers')) {
+    d.createObjectStore('markers', { keyPath: 'markerId' }).createIndex('byRec', 'recordingId', { unique: false });
+  }
+  if (!d.objectStoreNames.contains('segments')) {
+    d.createObjectStore('segments', { keyPath: 'segmentId' }).createIndex('byRec', 'recordingId', { unique: false });
+  }
+  if (!d.objectStoreNames.contains('alignmentFeatures')) {
+    const af = d.createObjectStore('alignmentFeatures', { keyPath: 'featureKey' });
+    af.createIndex('byAudioSha256', 'audioSha256', { unique: false });
+  }
+  if (!d.objectStoreNames.contains('alignmentDiagnostics')) {
+    const ad = d.createObjectStore('alignmentDiagnostics', { keyPath: 'diagnosticId' });
+    ad.createIndex('byPairKey', 'pairKey', { unique: false });
+  }
+  if (!d.objectStoreNames.contains('alignmentResults')) {
+    const ar = d.createObjectStore('alignmentResults', { keyPath: 'pairKey' });
+    ar.createIndex('byStatus', 'status', { unique: false });
+    ar.createIndex('byUpdatedAt', 'updatedAt', { unique: false });
+  }
+}
 function db() {
   if (dbp) return dbp;
   dbp = new Promise((res, rej) => {
@@ -209,42 +246,7 @@ function db() {
     let settled = false;
     let blockedTimer = null;
     req.onupgradeneeded = () => {
-      const d = req.result;
-      const tx = req.transaction;
-      let recordings;
-      if (!d.objectStoreNames.contains('recordings')) {
-        recordings = d.createObjectStore('recordings', { keyPath: 'recordingId' });
-      } else recordings = tx.objectStore('recordings');
-      if (!recordings.indexNames.contains('byAudioSha256')) recordings.createIndex('byAudioSha256', 'audioSha256', { unique: false });
-      if (!recordings.indexNames.contains('bySongId')) recordings.createIndex('bySongId', 'songId', { unique: false });
-      if (!recordings.indexNames.contains('bySongIdentityKey')) recordings.createIndex('bySongIdentityKey', 'songIdentityKey', { unique: false });
-
-      if (!d.objectStoreNames.contains('audio')) d.createObjectStore('audio', { keyPath: 'recordingId' });
-      if (!d.objectStoreNames.contains('analysis')) d.createObjectStore('analysis', { keyPath: 'recordingId' }); // latest full analysis (compatibility)
-      if (!d.objectStoreNames.contains('analysisHistory')) {
-        const h = d.createObjectStore('analysisHistory', { keyPath: 'analysisId' });
-        h.createIndex('byRec', 'recordingId', { unique: false });
-        h.createIndex('byAudioSha256', 'audioSha256', { unique: false });
-      }
-      if (!d.objectStoreNames.contains('markers')) {
-        d.createObjectStore('markers', { keyPath: 'markerId' }).createIndex('byRec', 'recordingId', { unique: false });
-      }
-      if (!d.objectStoreNames.contains('segments')) {
-        d.createObjectStore('segments', { keyPath: 'segmentId' }).createIndex('byRec', 'recordingId', { unique: false });
-      }
-      if (!d.objectStoreNames.contains('alignmentFeatures')) {
-        const af = d.createObjectStore('alignmentFeatures', { keyPath: 'featureKey' });
-        af.createIndex('byAudioSha256', 'audioSha256', { unique: false });
-      }
-      if (!d.objectStoreNames.contains('alignmentDiagnostics')) {
-        const ad = d.createObjectStore('alignmentDiagnostics', { keyPath: 'diagnosticId' });
-        ad.createIndex('byPairKey', 'pairKey', { unique: false });
-      }
-      if (!d.objectStoreNames.contains('alignmentResults')) {
-        const ar = d.createObjectStore('alignmentResults', { keyPath: 'pairKey' });
-        ar.createIndex('byStatus', 'status', { unique: false });
-        ar.createIndex('byUpdatedAt', 'updatedAt', { unique: false });
-      }
+      ensureSongScopeStores(req.result, req.transaction);
     };
     req.onblocked = () => {
       if (blockedTimer || settled) return;
@@ -2714,7 +2716,7 @@ async function parseFullBackupFile(file) {
   return { manifest, stores };
 }
 
-async function validateFullBackupEvidence(parsed) {
+async function validateFullBackupEvidence(parsed, opts = {}) {
   const recMap = new Map((parsed.stores.recordings || []).map(r => [r.recordingId, r]));
   for (const asset of parsed.stores.audio || []) {
     if (!asset || !asset.recordingId) throw new Error('audio storeにrecordingIdの無いrecordがあります');
@@ -2731,34 +2733,243 @@ async function validateFullBackupEvidence(parsed) {
     }
     if (asset.evaluationStructured && rec) validateStructuredEvaluationDocument(structuredEvaluationDocument(asset.evaluationStructured), rec, asset.evaluationImageMeta || null);
   }
-  // 同じrecordingIdに異なる既存SHAがある場合だけ、自動mergeを止める。
-  for (const rec of parsed.stores.recordings || []) {
-    const existing = await dbGet('recordings', rec.recordingId).catch(() => null);
-    if (existing && existing.audioSha256 && rec.audioSha256 && String(existing.audioSha256).toLowerCase() !== String(rec.audioSha256).toLowerCase()) {
-      throw new Error(`既存データとrecordingIdが衝突しています: ${rec.recordingId}`);
+  // 通常restoreでは、同じrecordingIdに異なる既存SHAがある場合だけ自動mergeを止める。
+  if (opts.checkExistingConflicts !== false) {
+    for (const rec of parsed.stores.recordings || []) {
+      const existing = await dbGet('recordings', rec.recordingId).catch(() => null);
+      if (existing && existing.audioSha256 && rec.audioSha256 && String(existing.audioSha256).toLowerCase() !== String(rec.audioSha256).toLowerCase()) {
+        throw new Error(`既存データとrecordingIdが衝突しています: ${rec.recordingId}`);
+      }
     }
   }
   return true;
 }
 
-async function restoreFullBackupAtomic(parsed) {
-  const d = await db();
+
+const FULL_BACKUP_KEY_PATHS = {
+  recordings: 'recordingId', audio: 'recordingId', analysis: 'recordingId', analysisHistory: 'analysisId',
+  markers: 'markerId', segments: 'segmentId', alignmentFeatures: 'featureKey',
+  alignmentDiagnostics: 'diagnosticId', alignmentResults: 'pairKey'
+};
+
+function backupRowKey(store, row) {
+  const kp = FULL_BACKUP_KEY_PATHS[store];
+  return kp && row ? row[kp] : undefined;
+}
+function restoreDiagnosticError(prefix, detail, txError) {
+  const parts = [prefix];
+  if (detail) {
+    if (detail.store) parts.push(`store=${detail.store}`);
+    if (detail.key !== undefined && detail.key !== null) parts.push(`key=${String(detail.key)}`);
+    if (detail.errorName) parts.push(`error=${detail.errorName}`);
+    if (detail.errorMessage) parts.push(detail.errorMessage);
+  }
+  if ((!detail || !detail.errorName) && txError && txError.name) parts.push(`transaction=${txError.name}`);
+  if ((!detail || !detail.errorMessage) && txError && txError.message) parts.push(txError.message);
+  const e = new Error(parts.join(' / '));
+  e.code = 'SONGSCOPE_RESTORE_TRANSACTION_FAILED';
+  e.detail = detail || null;
+  e.transactionError = txError || null;
+  return e;
+}
+
+async function restoreBackupStoresToDb(parsed, d) {
   const stores = FULL_BACKUP_STORE_NAMES.filter(n => d.objectStoreNames.contains(n));
   await new Promise((resolve, reject) => {
     const tx = d.transaction(stores, 'readwrite');
+    let firstRequestError = null;
     try {
       for (const store of stores) {
         const os = tx.objectStore(store);
-        for (const row of parsed.stores[store] || []) os.put(row);
+        for (const row of parsed.stores[store] || []) {
+          const key = backupRowKey(store, row);
+          let req;
+          try {
+            req = os.put(row);
+          } catch (err) {
+            firstRequestError = { store, key, errorName: err && err.name || 'SynchronousError', errorMessage: err && err.message || String(err) };
+            try { tx.abort(); } catch (_) { }
+            throw err;
+          }
+          req.onerror = () => {
+            if (!firstRequestError) {
+              const err = req.error;
+              firstRequestError = { store, key, errorName: err && err.name || 'IDBRequestError', errorMessage: err && err.message || '' };
+            }
+          };
+        }
       }
     } catch (e) {
+      if (!firstRequestError) firstRequestError = { store: null, key: null, errorName: e && e.name || 'Error', errorMessage: e && e.message || String(e) };
       try { tx.abort(); } catch (_) { }
-      reject(e); return;
     }
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error('復元トランザクションに失敗しました'));
-    tx.onabort = () => reject(tx.error || new Error('復元トランザクションが中断されました'));
+    tx.onerror = () => reject(restoreDiagnosticError('復元トランザクションに失敗しました', firstRequestError, tx.error));
+    tx.onabort = () => reject(restoreDiagnosticError('復元トランザクションが中断されました', firstRequestError, tx.error));
   });
+}
+
+function openStandaloneSongScopeDb(name) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(name, DB_VER);
+    req.onupgradeneeded = () => ensureSongScopeStores(req.result, req.transaction);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('一時DBを開けませんでした'));
+    req.onblocked = () => reject(new Error('一時DBの作成がblockedになりました'));
+  });
+}
+function deleteStandaloneDb(name) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(name);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error || new Error('一時DBを削除できませんでした'));
+    req.onblocked = () => reject(new Error('一時DBの削除がblockedになりました'));
+  });
+}
+function dbAllFromConnection(d, store) {
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(store, 'readonly');
+    const req = tx.objectStore(store).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error || new Error(`${store}の読出しに失敗しました`));
+  });
+}
+
+async function backupValueMismatch(a, b, path = '$') {
+  if (typeof a === 'number' || typeof b === 'number') {
+    if (typeof a === 'number' && typeof b === 'number' && (Object.is(a, b) || (Number.isNaN(a) && Number.isNaN(b)))) return null;
+    return `${path}: number mismatch`;
+  }
+  if (a === null || b === null || a === undefined || b === undefined || typeof a !== 'object' || typeof b !== 'object') {
+    return Object.is(a, b) ? null : `${path}: value mismatch`;
+  }
+  if (a instanceof Date || b instanceof Date) {
+    if (!(a instanceof Date) || !(b instanceof Date) || a.getTime() !== b.getTime()) return `${path}: Date mismatch`;
+    return null;
+  }
+  if (typeof Blob !== 'undefined' && (a instanceof Blob || b instanceof Blob)) {
+    if (!(a instanceof Blob) || !(b instanceof Blob)) return `${path}: Blob kind mismatch`;
+    if (a.size !== b.size || String(a.type || '') !== String(b.type || '')) return `${path}: Blob metadata mismatch`;
+    const [ha, hb] = await Promise.all([sha256Hex(await a.arrayBuffer()), sha256Hex(await b.arrayBuffer())]);
+    if (ha !== hb) return `${path}: Blob SHA-256 mismatch`;
+    const aIsFile = typeof File !== 'undefined' && a instanceof File;
+    const bIsFile = typeof File !== 'undefined' && b instanceof File;
+    if (aIsFile !== bIsFile) return `${path}: File/Blob mismatch`;
+    if (aIsFile && (a.name !== b.name || Number(a.lastModified) !== Number(b.lastModified))) return `${path}: File metadata mismatch`;
+    return null;
+  }
+  if (a instanceof ArrayBuffer || b instanceof ArrayBuffer) {
+    if (!(a instanceof ArrayBuffer) || !(b instanceof ArrayBuffer) || a.byteLength !== b.byteLength) return `${path}: ArrayBuffer mismatch`;
+    const [ha, hb] = await Promise.all([sha256Hex(a), sha256Hex(b)]);
+    return ha === hb ? null : `${path}: ArrayBuffer SHA-256 mismatch`;
+  }
+  if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
+    if (!ArrayBuffer.isView(a) || !ArrayBuffer.isView(b)) return `${path}: TypedArray kind mismatch`;
+    const ca = a instanceof DataView ? 'DataView' : a.constructor && a.constructor.name;
+    const cb = b instanceof DataView ? 'DataView' : b.constructor && b.constructor.name;
+    if (ca !== cb || a.byteLength !== b.byteLength) return `${path}: TypedArray metadata mismatch`;
+    const aa = a.buffer.slice(a.byteOffset, a.byteOffset + a.byteLength);
+    const bb = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+    const [ha, hb] = await Promise.all([sha256Hex(aa), sha256Hex(bb)]);
+    return ha === hb ? null : `${path}: TypedArray SHA-256 mismatch`;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return `${path}: array length mismatch`;
+    for (let i = 0; i < a.length; i++) {
+      const m = await backupValueMismatch(a[i], b[i], `${path}[${i}]`);
+      if (m) return m;
+    }
+    return null;
+  }
+  const ka = Object.keys(a).sort(), kb = Object.keys(b).sort();
+  if (ka.length !== kb.length || ka.some((k, i) => k !== kb[i])) return `${path}: object keys mismatch`;
+  for (const k of ka) {
+    const m = await backupValueMismatch(a[k], b[k], `${path}.${k}`);
+    if (m) return m;
+  }
+  return null;
+}
+
+async function verifyDbAgainstParsedBackup(d, parsed) {
+  const summary = { stores: {}, checkedRows: 0 };
+  for (const store of FULL_BACKUP_STORE_NAMES) {
+    const expected = parsed.stores[store] || [];
+    const actual = await dbAllFromConnection(d, store);
+    if (actual.length !== expected.length) throw new Error(`${store}: 復元後件数 ${actual.length} / 期待 ${expected.length}`);
+    const byKey = new Map(actual.map(r => [String(backupRowKey(store, r)), r]));
+    for (const row of expected) {
+      const key = String(backupRowKey(store, row));
+      if (!byKey.has(key)) throw new Error(`${store}: 復元後にkey=${key}がありません`);
+      const mismatch = await backupValueMismatch(row, byKey.get(key), `${store}[${key}]`);
+      if (mismatch) throw new Error(`復元後データ不一致: ${mismatch}`);
+      summary.checkedRows++;
+    }
+    summary.stores[store] = actual.length;
+  }
+  return summary;
+}
+
+async function disasterRecoverySelfTest(file) {
+  if (!file) return;
+  const testDbName = `${DB_NAME}_restore_test_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  let testDb = null;
+  try {
+    busy('災害復旧セルフテスト', 'バックアップZIPを検証しています…', 7);
+    const parsed = await parseFullBackupFile(file);
+    $('#busy-msg').textContent = 'raw audio・採点画像のSHA-256を検証しています…';
+    $('#busy-bar').style.width = '28%';
+    await validateFullBackupEvidence(parsed, { checkExistingConflicts: false });
+    $('#busy-msg').textContent = '本番データとは別の空DBを作成しています…';
+    $('#busy-bar').style.width = '43%';
+    await deleteStandaloneDb(testDbName).catch(() => {});
+    testDb = await openStandaloneSongScopeDb(testDbName);
+    $('#busy-msg').textContent = '空DBへ完全復元しています…';
+    $('#busy-bar').style.width = '58%';
+    await restoreBackupStoresToDb(parsed, testDb);
+    $('#busy-msg').textContent = '復元後の全store・binaryを元バックアップと照合しています…';
+    $('#busy-bar').style.width = '76%';
+    const summary = await verifyDbAgainstParsedBackup(testDb, parsed);
+    $('#busy-bar').style.width = '100%';
+    try { testDb.close(); } catch (_) { }
+    testDb = null;
+    await deleteStandaloneDb(testDbName);
+    closeSheet();
+    const recs = Number(summary.stores.recordings || 0);
+    const report = {
+      schemaVersion: 'songscope-disaster-recovery-selftest-v1',
+      status: 'passed',
+      testedAt: nowIso(),
+      app: { name: 'SongScope', version: APP_VERSION, buildId: BUILD_ID, schemaVersion: SCHEMA_VERSION, dbVersion: DB_VER },
+      inputBackup: {
+        fileName: file.name || null, byteLength: Number(file.size || 0),
+        schemaVersion: parsed.manifest.schemaVersion, exportedAt: parsed.manifest.exportedAt || null,
+        sourceAppVersion: parsed.manifest.appVersion || null, sourceBuildId: parsed.manifest.buildId || null,
+        dbVersion: parsed.manifest.dbVersion, stores: parsed.manifest.stores || {}
+      },
+      isolation: { temporaryDatabaseUsed: true, productionDatabaseName: DB_NAME, productionDatabaseModifiedBySelfTest: false, temporaryDatabaseDeletedAfterVerification: true },
+      verification: {
+        zipCrcValidated: true, manifestValidated: true, rawAudioAndScoringImageShaValidated: true,
+        restoredStoreCountsMatched: true, restoredRowsCompared: summary.checkedRows, restoredValuesAndBinaryMatched: true,
+        stores: summary.stores
+      }
+    };
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+    const reportName = `songscope_restore_selftest_${stamp}.json`;
+    const reportBlob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const how = await saveBlob(reportBlob, reportName);
+    toast(`災害復旧セルフテスト成功：空DBから ${recs}録音を完全復元・照合しました${how === 'cancelled' ? '' : '（結果JSONを書き出しました）'}`, 7000);
+  } catch (e) {
+    try { if (testDb) testDb.close(); } catch (_) { }
+    try { await deleteStandaloneDb(testDbName); } catch (_) { }
+    closeSheet();
+    console.error('Disaster recovery self-test failed', e, e && e.detail);
+    toast('災害復旧セルフテスト失敗：' + ((e && e.message) || ''), 8000);
+  }
+}
+
+async function restoreFullBackupAtomic(parsed) {
+  const d = await db();
+  await restoreBackupStoresToDb(parsed, d);
   if (parsed.manifest.settings && typeof parsed.manifest.settings === 'object') {
     settings = Object.assign({}, DEFAULT_SETTINGS, parsed.manifest.settings);
     saveSettings();
@@ -5137,6 +5348,12 @@ function wireHome() {
   $('#btn-settings').addEventListener('click', openSettingsSheet);
   $('#btn-backup-all').addEventListener('click', backupAll);
   $('#btn-restore-all').addEventListener('click', () => $('#restore-input').click());
+  $('#btn-restore-selftest').addEventListener('click', () => $('#restore-selftest-input').click());
+  $('#restore-selftest-input').addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (f) disasterRecoverySelfTest(f);
+  });
   $('#restore-input').addEventListener('change', e => {
     const f = e.target.files && e.target.files[0];
     e.target.value = '';
