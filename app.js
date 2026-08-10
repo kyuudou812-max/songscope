@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase F1  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase F2  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseF1';
-const SCHEMA_VERSION = '0.12.1';
-const BUILD_ID = '20260810-f1-02';
+const APP_VERSION = '0.2.0-phaseF2';
+const SCHEMA_VERSION = '0.13.0';
+const BUILD_ID = '20260810-f2-01';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -4306,6 +4306,201 @@ async function exportF1HistoryPackage() {
   }finally{if(btn)btn.disabled=false;}
 }
 
+
+/* =====================================================================
+ * Phase F2: repeated-direction pattern evidence
+ *
+ * F1で解決したphysical recording / chronology / scoring-condition chainを
+ * そのまま入力証拠として使う。F2は「どの外部評価変化が複数stepで同じ
+ * 方向に観測されたか」を記述するだけで、上達・悪化・原因・練習処方は
+ * 判定しない。3 physical recordings未満ではpatternを作らない。
+ * ===================================================================== */
+function f2DirectionFromDelta(delta) {
+  const n=Number(delta);
+  if(!isFinite(n)) return null;
+  const eps=1e-6;
+  if(n>eps) return 'higher';
+  if(n<-eps) return 'lower';
+  return 'same';
+}
+function f2DirectionCounts(directions) {
+  const out={higher:0,lower:0,same:0,unknown:0};
+  for(const d of directions||[]) {
+    if(d==='higher'||d==='lower'||d==='same') out[d]++;
+    else out.unknown++;
+  }
+  return out;
+}
+function f2LongestDirectionRun(directions) {
+  let best={direction:null,length:0,startStepIndex:null,endStepIndex:null};
+  let cur=null, start=0;
+  const ds=directions||[];
+  for(let i=0;i<ds.length;i++) {
+    const d=ds[i];
+    if(!d) { cur=null; continue; }
+    if(cur!==d) { cur=d; start=i; }
+    const len=i-start+1;
+    if(len>best.length) best={direction:d,length:len,startStepIndex:start+1,endStepIndex:i+1};
+  }
+  return best;
+}
+function f2MetricPattern(series, evidenceTier) {
+  const points=(series&&series.points)||[];
+  const steps=(series&&series.adjacentSteps)||[];
+  const values=points.map(p=>p&&p.value!==undefined?p.value:null);
+  const allValuesPresent=values.length>0 && values.every(v=>v!==null && v!==undefined && isFinite(Number(v)));
+  const directions=steps.map(s=>f2DirectionFromDelta(s&&s.deltaLaterMinusEarlier));
+  const counts=f2DirectionCounts(directions);
+  const longestRun=f2LongestDirectionRun(directions);
+  const completeDirections=directions.length===Math.max(0,points.length-1) && directions.every(Boolean);
+  const uniqueDirections=Array.from(new Set(directions.filter(Boolean)));
+  const allAdjacentSameDirection=completeDirections && directions.length>=2 && uniqueDirections.length===1;
+  let status='not_ready';
+  let repeatedDirection=null;
+  let eligibleForRepeatedSignal=false;
+  if(points.length<3) status='waiting_for_third_physical_recording';
+  else if(!allValuesPresent) status='missing_metric_values';
+  else if(!completeDirections) status='incomplete_adjacent_steps';
+  else if(series.directionality==='non_monotonic') status='descriptive_non_monotonic_sequence';
+  else if(allAdjacentSameDirection) {
+    status='same_direction_observed_across_all_adjacent_steps';
+    repeatedDirection=uniqueDirections[0]||null;
+    eligibleForRepeatedSignal=true;
+  } else status='mixed_adjacent_step_directions';
+  const firstValue=allValuesPresent?Number(values[0]):null;
+  const lastValue=allValuesPresent?Number(values[values.length-1]):null;
+  const netDelta=firstValue!==null&&lastValue!==null?+((lastValue-firstValue).toFixed(6)):null;
+  return {
+    key:series.key,label:series.label,unit:series.unit||null,
+    classification:series.classification,directionality:series.directionality,
+    status,evidenceTier,repeatedDirection,eligibleForRepeatedSignal,
+    physicalRecordingCount:points.length,adjacentStepCount:steps.length,
+    firstValue,lastValue,netDeltaLaterMinusEarlier:netDelta,
+    directionCounts:counts,longestSameDirectionRun:longestRun,
+    points:points.map(p=>({chronologyIndex:p.chronologyIndex,recordingId:p.recordingId,title:p.title||'',value:p.value})),
+    adjacentSteps:steps.map((x,i)=>({
+      stepIndex:i+1,earlierRecordingId:x.earlierRecordingId,laterRecordingId:x.laterRecordingId,
+      earlier:x.earlier,later:x.later,deltaLaterMinusEarlier:x.deltaLaterMinusEarlier,
+      observedDirection:directions[i],scoringConditionComparability:x.scoringConditionComparability
+    })),
+    interpretation: series.directionality==='non_monotonic'
+      ? 'Descriptive sequence only. More or less of this technique quantity is not automatically better or worse.'
+      : 'Repeated direction means the external numeric observation moved in the same direction across every adjacent step in this history. It does not establish durable singing-skill improvement/deterioration, statistical significance, or acoustic cause.'
+  };
+}
+function f2BuildPatternEvidence(historyPkg) {
+  const h=historyPkg||{};
+  const song=h.song||{};
+  const pr=h.patternReadiness||{};
+  const chronology=h.chronology||{};
+  const chain=h.scoringConditionChain||{};
+  const n=Number(song.physicalRecordingCount||song.recordingCount||0);
+  const verified=Number(pr.sourceVerifiedStructuredOutcomeCount||0);
+  let status='waiting_for_third_physical_recording';
+  const blockers=[];
+  let evidenceTier='insufficient';
+  if(n<3) blockers.push('physical_recording_count_below_3');
+  else if(chronology.status!=='fully_ordered') { status='blocked_chronology_not_fully_ordered'; blockers.push('chronology_not_fully_ordered'); }
+  else if(verified<n) { status='blocked_missing_source_verified_outcomes'; blockers.push('not_all_physical_recordings_have_source_verified_structured_outcomes'); }
+  else if(chain.status!=='comparable_chain') { status='blocked_scoring_conditions_not_comparable'; blockers.push('scoring_condition_chain_not_comparable'); }
+  else {
+    evidenceTier=n>=5?'repeated_observation_5_plus':'exploratory_3_to_4_recordings';
+    status=n>=5?'repeated_observation_pattern_evidence_available':'exploratory_pattern_evidence_available';
+  }
+  const ready=status==='exploratory_pattern_evidence_available'||status==='repeated_observation_pattern_evidence_available';
+  const series=(h.outcomeSeries||[]).map(s=>f2MetricPattern(s,ready?evidenceTier:'insufficient'));
+  const repeatedSameDirectionSignals=ready?series.filter(x=>x.eligibleForRepeatedSignal).map(x=>({
+    key:x.key,label:x.label,unit:x.unit,direction:x.repeatedDirection,
+    physicalRecordingCount:x.physicalRecordingCount,adjacentStepCount:x.adjacentStepCount,
+    firstValue:x.firstValue,lastValue:x.lastValue,netDeltaLaterMinusEarlier:x.netDeltaLaterMinusEarlier,
+    evidenceTier:x.evidenceTier,
+    interpretation:'Repeated direction of an external observation only; not an automatic better/worse or causal claim.'
+  })):[];
+  const mixedDirectionSignals=ready?series.filter(x=>x.status==='mixed_adjacent_step_directions').map(x=>({
+    key:x.key,label:x.label,directionCounts:x.directionCounts,longestSameDirectionRun:x.longestSameDirectionRun,
+    netDeltaLaterMinusEarlier:x.netDeltaLaterMinusEarlier,evidenceTier:x.evidenceTier
+  })):[];
+  const descriptiveNonMonotonic=ready?series.filter(x=>x.status==='descriptive_non_monotonic_sequence').map(x=>({
+    key:x.key,label:x.label,directionCounts:x.directionCounts,longestSameDirectionRun:x.longestSameDirectionRun,
+    interpretation:'Non-monotonic technique quantity; sequence is retained descriptively and is excluded from repeated better/worse signal lists.'
+  })):[];
+  return {
+    schemaVersion:'songscope-pattern-evidence-0.1.0',
+    packageType:'same_song_repeated_direction_pattern_evidence',
+    generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
+    song:{
+      songId:song.songId||null,representativeTitle:song.representativeTitle||'',representativeArtist:song.representativeArtist||'',
+      physicalRecordingCount:n,storedRecordingRecordCount:Number(song.storedRecordingRecordCount||0),
+      duplicateAliasRecordCount:Number(song.duplicateAliasRecordCount||0),unresolvedIdentityRecordCount:Number(song.unresolvedIdentityRecordCount||0)
+    },
+    readiness:{
+      status,evidenceTier,blockers,
+      physicalRecordingCount:n,sourceVerifiedStructuredOutcomeCount:verified,
+      chronologyStatus:chronology.status||'unknown',scoringConditionChainStatus:chain.status||'unknown',
+      minimumPhysicalRecordingsForExploratoryPattern:3,minimumPhysicalRecordingsForRepeatedObservationPattern:5,
+      note:n<3?'Two physical recordings preserve a pair difference but F2 deliberately waits for a third before producing repeated-direction pattern evidence.':'Availability means pattern evidence can be described; it is not a claim of durable skill change.'
+    },
+    summary:{
+      repeatedSameDirectionSignalCount:repeatedSameDirectionSignals.length,
+      mixedDirectionSignalCount:mixedDirectionSignals.length,
+      descriptiveNonMonotonicSequenceCount:descriptiveNonMonotonic.length,
+      repeatedSameDirectionSignals,mixedDirectionSignals,descriptiveNonMonotonicSequences:descriptiveNonMonotonic
+    },
+    metricPatterns:series,
+    nextLayerReadiness:{
+      status:!ready?'waiting_for_pattern_evidence':(repeatedSameDirectionSignals.length?'pattern_evidence_available_for_hypothesis_layer':'no_all-step_repeated_direction_signal_yet'),
+      note:'F2 does not prescribe practice. A later hypothesis/practice layer may use repeated outcome evidence together with targeted D2 observations and user-reported experience, while keeping causal claims provisional.'
+    },
+    interpretationGuardrails:[
+      'F2 derives only from F1 physical-recording identity, established chronology, source-verified structured outcomes, and scoring-condition comparability.',
+      'Two recordings are never promoted to a repeated pattern. At least three physical recordings are required.',
+      'same_direction_observed_across_all_adjacent_steps means every adjacent numeric step had the same observed sign; it does not establish statistical significance or durable skill change.',
+      'Technique counts and vibrato quantity remain non-monotonic descriptive sequences and are excluded from better/worse pattern claims.',
+      'No composite singing score is invented. No weighting is applied across metrics.',
+      'F2 does not use mixed-audio F0/RMS observations to explain external-score changes and does not infer causation.',
+      'F2 does not generate a practice prescription; it only prepares evidence for a later hypothesis/practice layer.'
+    ]
+  };
+}
+function f2PatternSeriesCsv(pkg) {
+  const head=['metric_key','label','unit','classification','directionality','status','evidence_tier','repeated_direction','eligible_for_repeated_signal','physical_recording_count','adjacent_step_count','first_value','last_value','net_delta_later_minus_earlier','higher_step_count','lower_step_count','same_step_count','longest_run_direction','longest_run_length'];
+  const rows=[head.join(',')];
+  for(const x of (pkg&&pkg.metricPatterns)||[]) {
+    const c=x.directionCounts||{}, r=x.longestSameDirectionRun||{};
+    const vals=[x.key,x.label,x.unit||'',x.classification||'',x.directionality||'',x.status||'',x.evidenceTier||'',x.repeatedDirection||'',x.eligibleForRepeatedSignal?'true':'false',x.physicalRecordingCount,x.adjacentStepCount,x.firstValue,x.lastValue,x.netDeltaLaterMinusEarlier,c.higher||0,c.lower||0,c.same||0,r.direction||'',r.length||0];
+    rows.push(vals.map(v=>v===null||v===undefined?'':csvEscape(v)).join(','));
+  }
+  return rows.join('\n');
+}
+async function buildF2PatternPackage() {
+  const history=await buildF1HistoryPackage();
+  const pattern=f2BuildPatternEvidence(history);
+  return { history, pattern };
+}
+async function exportF2PatternPackage() {
+  const btn=$('#btn-f2-export'); if(btn)btn.disabled=true;
+  const note=$('#cmp-f2-result');
+  try{
+    if(note)note.innerHTML='<p class="small">F1のphysical recording履歴から、繰り返し方向の証拠を構造化しています…</p>';
+    const built=await buildF2PatternPackage();
+    const history=built.history, pattern=built.pattern;
+    const files=[
+      {name:'pattern_summary.json',data:JSON.stringify(pattern,null,2)},
+      {name:'pattern_series.csv',data:f2PatternSeriesCsv(pattern)},
+      {name:'history_snapshot.json',data:JSON.stringify(history,null,2)}
+    ];
+    const blob=SongScopeZip.createZip(files);
+    const stamp=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
+    const name=`songscope_pattern_${safeName(pattern.song.representativeTitle||'song')}_${stamp}.zip`;
+    const how=await saveBlob(blob,name);
+    const r=pattern.readiness;
+    if(note)note.innerHTML=`<p><b>F2パターン証拠パッケージを書き出しました</b></p><p class="small mono">physical recordings ${r.physicalRecordingCount} / verified outcomes ${r.sourceVerifiedStructuredOutcomeCount}</p><p class="small">readiness: <b>${escapeHtml(r.status)}</b> / repeated same-direction signals ${pattern.summary.repeatedSameDirectionSignalCount}</p><p class="small">3歌唱未満ではpatternを作りません。F2は練習処方や上達判定を行わず、外部評価の繰り返し方向だけを記述します。</p>`;
+    if(how!=='cancelled')toast(`${name}を書き出しました`);
+  }catch(e){
+    console.error(e); if(note)note.innerHTML=`<p class="small">F2生成に失敗しました: ${escapeHtml((e&&e.message)||String(e))}</p>`; toast('F2パターン証拠パッケージを作成できませんでした');
+  }finally{if(btn)btn.disabled=false;}
+}
+
 function d2WindowsCsv(pkg) {
   const head = [
     'window_index','reference_start_sec','reference_end_sec','pair_reference_start_sec','pair_reference_end_sec','pair_available_duration_sec','pair_coverage_ratio','comparison_coverage_status',
@@ -4865,6 +5060,7 @@ function wireCompare() {
   $('#btn-align-apply').addEventListener('click', applyResolvedAlignment);
   $('#btn-d2-export').addEventListener('click', exportD2DiagnosticPackage);
   $('#btn-f1-export').addEventListener('click', exportF1HistoryPackage);
+  $('#btn-f2-export').addEventListener('click', exportF2PatternPackage);
   $('#btn-context-order-a-first').addEventListener('click', () => setE4Chronology('a_first'));
   $('#btn-context-order-b-first').addEventListener('click', () => setE4Chronology('b_first'));
   $('#btn-context-order-clear').addEventListener('click', () => setE4Chronology('clear'));

@@ -1,4 +1,4 @@
-# SongScope v0.2 Phase F1
+# SongScope v0.2 Phase F2
 
 ### D1 build 02 — IndexedDB upgrade待機の修正
 - Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
@@ -18,8 +18,23 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.12.1`
-- Build ID: `20260810-f1-02`
+- Schema Version: `0.13.0`
+- Build ID: `20260810-f2-01`
+
+
+## Phase F2 — Repeated-direction Pattern evidence
+
+### F2 build 01 — 3歌唱目からの保守的pattern抽出
+
+- F1 build 02のphysical-recording正規化、chronology、source-verified outcome、scoring-condition chainをそのまま入力証拠として使います。Identityや順序をF2で再推測しません。
+- 2 physical recordingsでは `waiting_for_third_physical_recording`。pair差は保持してもpatternへ昇格しません。
+- 3〜4件のfully ordered / source-verified / comparable履歴で `exploratory_pattern_evidence_available`、5件以上で `repeated_observation_pattern_evidence_available`。これらは持続的な歌唱力向上/低下の証明ではありません。
+- 各数値項目について隣接stepの `higher / lower / same`、回数、最長連続run、最初→最後のraw deltaを保存します。全隣接stepが同じ方向だった項目だけ `same_direction_observed_across_all_adjacent_steps` としてrepeated-signal候補へ載せます。統計的有意差や実質的意味の閾値は捏造しません。
+- 技法回数・ビブラート量は `non_monotonic` のため、方向回数は記録してもrepeated better/worse signalから除外します。複合歌唱スコアやmetric重み付けも作りません。
+- F2 ZIPは `pattern_summary.json` / `pattern_series.csv` / `history_snapshot.json`。raw音声・採点画像・D2 frame-level acousticsは含めません。
+- F2は練習処方を出しません。将来のHypothesis / Practice層が、F2の繰り返しOutcome証拠と必要なD2区間観測・本人の体感を組み合わせるための入力を作る段階です。
+- DB_VER=5、audio-analysis-worker / alignment-workerは変更なし。
+- App: `0.2.0-phaseF2` / Schema: `0.13.0` / Build: `20260810-f2-01`
 
 
 ## Phase F1 — Same-song History / Progression evidence
