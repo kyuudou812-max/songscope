@@ -1,14 +1,32 @@
-# SongScope v0.2 Audit Remediation R0 build 03
+# SongScope v0.2 Audit Remediation R1 build 01
 
-外部監査後の最優先修正。Phase F2の分析ロジックは変更せず、**データ保全とPWA更新安全性**だけを修正する。
+R0で完全バックアップ/災害復旧を実機検証した後の、**chronology と採点条件の整合性・入力負荷**を直す監査対応。音響workerとD1 matcher自体は変更しない。
 
-- App: `0.2.0-auditR0` / Build: `20260810-r0-03` / schema: `0.13.3` / DB: `5`
-- 「全データJSON」を廃止し、IndexedDB全store・raw audio・採点画像・full analysisを含む `songscope-full-backup-v1` ZIPを作成する。
-- 同ZIPの復元を実装。復元前にZIP CRC32、Blob SHA-256、recording audio SHA-256、採点画像SHA-256、structured evaluation bindingを検証する。
-- 復元は既存データを削除しないmerge方式。同一primary keyは検証済みバックアップ側で更新し、recordingIdとaudio SHAが衝突する場合は停止する。
-- Service Workerのoffline fallbackは `ignoreSearch: true` を使用し、HTMLのcache-busting queryをbuild IDに統一。install時の`skipWaiting()`を廃止して実行中ページとのversion skewを避ける。
-- IndexedDB `VersionError` は「サイトデータを削除しない」専用案内へ変換する。
-- F1/F2/D1/D2/E系の意味論・workerアルゴリズムは変更しない。
+- App: `0.2.0-auditR1` / Build: `20260810-r1-01` / schema: `0.14.0` / DB: `6`
+- `pairContexts` storeを新設。A/Bの本人確認（時間順・採点4条件）をD1 `alignmentResults` から分離し、**sorted raw audio SHA-256 pairだけ**で永続化する。alignment algorithm/versionを変更しても本人確認は失われない。
+- DB5の既存 `alignmentResults.comparisonContext` は起動時に非破壊で `pairContexts` へ移行する。旧alignment resultは監査証拠として残す。
+- R0(DB5)の `songscope-full-backup-v1` はR1でも復旧可能。旧ZIPに存在しない `pairContexts` は空storeとして扱い、復旧後の通常起動でlegacy contextを移行できる。
+- 録音日時は「この録音日時で合っている」を1タップで `user_confirmed` にできる。**user-confirmed recordedAtをchronologyの主経路**にし、A/Bの「Aが先/Bが先」はfallbackとする。両者が矛盾した場合は自動解決しない。
+- AIが採点画像から抽出した `scoringDate` は、画像SHAがsource-verifiedでも `userReview=user_confirmed` になるまではhard chronology evidenceに使わない。
+- 機種・採点モード・キー変更・オクターブを構造化selectへ変更。直近4条件を表示し、「前回と同じ条件」1タップで4項目を本人確認できる。
+- 比較時はper-recordingのuser-confirmed 4条件を優先し、旧E4のpair-level「同じ/違う」はlegacy/fallback evidenceとして維持する。`Original`/`原曲キー`/`0`などはcanonicalizationして比較する。
+- 完全バックアップは10 store（R0の9 store + `pairContexts`）を保存する。
+- `audio-analysis-worker.js` / `alignment-worker.js` はR0/F2から不変。
+
+## R1実機確認の重点
+
+1. DB6 upgrade後も既存の「眠り姫1 → 眠り姫」とpair-level採点条件確認が維持されること（D1再実行不要）。
+2. A/B比較でR1 contextが `pairContexts` 由来として表示・exportされること。
+3. 録音編集で日時を本人確認でき、2録音の日時が異なればpairボタンなしでもchronologyが成立すること。
+4. 採点4条件を録音ごとに確認した場合、pair-level補助確認がなくても `confirmed_match` / `confirmed_difference_present` が成立すること。
+5. R0完全バックアップ `songscope_full_backup_20260810T040901Z.zip` の災害復旧セルフテストがR1でも通ること（旧backup互換）。
+
+---
+
+## Audit R0 build 03 (frozen)
+- `songscope-disaster-recovery-selftest-v2` の実機結果で `status=passed / verificationStatus=passed / cleanupStatus=deleted` を確認済み。
+- empty temporary DB restore、全store件数、raw audio/DAM image SHA、JSON/binary一致まで検証済み。
+- R1はこのR0バックアップ/復旧機構を維持する。
 
 ## Audit R0 build 02
 - 通常の本番DBを変更せず、別名の一時IndexedDBへ完全バックアップを復元して全9 storeとbinaryを照合する「災害復旧セルフテスト」を追加。
@@ -55,8 +73,8 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Current Schema Version: `0.13.3`
-- Current Build ID: `20260810-r0-03`
+- Current Schema Version: `0.14.0`
+- Current Build ID: `20260810-r1-01`
 
 
 ## Phase F2 — Repeated-direction Pattern evidence

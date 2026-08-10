@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260810-r0-03">
+<link rel="stylesheet" href="styles.css?v=20260810-r1-01">
 <title>SongScope</title>
 </head>
 <body>
@@ -231,8 +231,8 @@
       <div id="cmp-align-result" class="note"><p class="small">まだ判定していません。</p></div>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>E4 比較前提の確認</span><span class="mono small">Chronology + scoring context</span></div>
-      <p class="small">A/Bの選択順とは別に「どちらを先に歌ったか」を本人確認として保存できます。採点条件は、機種・採点モード・キー変更・オクターブの4項目がこの2回で同じだったかだけを確認します。録音メタデータ自体は書き換えません。</p>
+      <div class="section-head tight"><span>R1 比較前提</span><span class="mono small">Recorded time + scoring context</span></div>
+      <p class="small">時間順は各録音の<strong>本人確認済み録音日時</strong>を主経路にします。下のA/B順序ボタンは日時が分からない旧データ向けの補助確認です。採点条件も各録音の機種・採点モード・キー変更・オクターブを優先し、pairボタンは旧データ向けfallbackです。</p>
       <div id="cmp-context-status" class="note"><p class="small">A/Bを選ぶと、保存済みの比較前提を確認します。</p></div>
       <p class="small"><b>時間順</b></p>
       <div class="row gap wrap">
@@ -242,17 +242,17 @@
       </div>
       <p class="small"><b>採点条件</b>（機種・採点モード・キー・オクターブ）</p>
       <div class="row gap wrap">
-        <button id="btn-context-cond-same" class="mini">この2回は同じ</button>
-        <button id="btn-context-cond-diff" class="mini">違いがある</button>
-        <button id="btn-context-cond-clear" class="mini">条件を未確定に戻す</button>
+        <button id="btn-context-cond-same" class="mini">補助: この2回は同じ</button>
+        <button id="btn-context-cond-diff" class="mini">補助: 違いがある</button>
+        <button id="btn-context-cond-clear" class="mini">補助確認を解除</button>
       </div>
       <p class="small">「同じ」は部屋・マイク位置・体調などまで同一だったという意味ではありません。分からない場合は未確定のままで構いません。</p>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>D2 + E3 + E4 比較パッケージ</span><span class="mono small">Observation + outcome evidence</span></div>
-      <p class="small">保存済みのresolved D1を使い、同じ曲位置の観測値と証拠量を10秒窓・5秒hopで並べます。両側にsource-verifiedの構造化採点結果があれば、E3の項目別Outcome差も別証拠として同梱します。E4で時間順が確定した場合は、A/B差とは別に「後−前」の外部評価変化も出します。F0 candidateは混合音声の周期候補であり、vocal F0や音程正確性とは扱いません。改善・悪化や原因の判定は行いません。</p>
+      <div class="section-head tight"><span>D2 + E3 + R1 比較パッケージ</span><span class="mono small">Observation + outcome evidence</span></div>
+      <p class="small">保存済みのresolved D1を使い、同じ曲位置の観測値と証拠量を10秒窓・5秒hopで並べます。R1では時間順・採点条件の本人確認はD1から独立して保存します。録音日時の本人確認を時間順の主経路とし、A/Bの順序ボタンは補助経路です。F0 candidateは混合音声の周期候補であり、vocal F0や音程正確性とは扱いません。</p>
       <div class="row gap wrap">
-        <button id="btn-d2-export" class="mini accent">比較パッケージを書き出す（D2+E3+E4）</button>
+        <button id="btn-d2-export" class="mini accent">比較パッケージを書き出す（D2+E3+R1）</button>
       </div>
       <div id="cmp-d2-result" class="note"><p class="small">D1がresolvedになったA/Bで使用できます。E3は評価証拠が片側だけでも安全に出力し、足りない側をmissingのまま残します。</p></div>
     </div>
@@ -316,12 +316,20 @@
       <summary>詳細を追加</summary>
       <label class="field"><span>歌手名</span><input id="f-artist" type="text"></label>
       <label class="field"><span>DAM点数</span><input id="f-score" type="text" inputmode="decimal" placeholder="91.384"></label>
-      <label class="field"><span>キー変更</span><input id="f-key" type="text" placeholder="Original / +2 など"></label>
-      <label class="field"><span>オクターブ</span><input id="f-octave" type="text" placeholder="0 / -1 など"></label>
-      <label class="field"><span>機種</span><input id="f-device" type="text" placeholder="LIVE DAM Ai など"></label>
-      <label class="field"><span>採点モード</span><input id="f-mode" type="text" placeholder="精密採点Ai など"></label>
+      <label class="field"><span>キー変更</span><select id="f-key"><option value="">不明</option><option value="0">原曲キー (0)</option><option value="-12">-12</option><option value="-11">-11</option><option value="-10">-10</option><option value="-9">-9</option><option value="-8">-8</option><option value="-7">-7</option><option value="-6">-6</option><option value="-5">-5</option><option value="-4">-4</option><option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option><option value="+1">+1</option><option value="+2">+2</option><option value="+3">+3</option><option value="+4">+4</option><option value="+5">+5</option><option value="+6">+6</option><option value="+7">+7</option><option value="+8">+8</option><option value="+9">+9</option><option value="+10">+10</option><option value="+11">+11</option><option value="+12">+12</option></select></label>
+      <label class="field"><span>オクターブ</span><select id="f-octave"><option value="">不明</option><option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option><option value="0">0</option><option value="+1">+1</option><option value="+2">+2</option><option value="+3">+3</option></select></label>
+      <label class="field"><span>機種</span><select id="f-device">
+        <option value="">不明</option><option value="DAM WAO!">DAM WAO!</option><option value="LIVE DAM AiR">LIVE DAM AiR</option><option value="LIVE DAM Ai">LIVE DAM Ai</option><option value="LIVE DAM STADIUM">LIVE DAM STADIUM</option><option value="__OTHER__">その他（比較不可）</option>
+      </select></label>
+      <label class="field"><span>採点モード</span><select id="f-mode">
+        <option value="">不明</option><option value="精密採点Ai Heart">精密採点Ai Heart</option><option value="精密採点Ai">精密採点Ai</option><option value="精密採点DX-G">精密採点DX-G</option><option value="精密採点DX">精密採点DX</option><option value="__OTHER__">その他（比較不可）</option>
+      </select></label>
+      <div class="row gap wrap"><button type="button" class="mini" id="f-cond-prev">前回と同じ条件</button><button type="button" class="mini" id="f-cond-confirm">現在の4条件を確認</button></div>
+      <p class="small mono" id="f-cond-confirm-status">採点4条件: 未確認</p>
       <label class="field"><span>録音条件プリセット</span><input id="f-setup" type="text"></label>
       <label class="field"><span>録音日時</span><input id="f-recat" type="datetime-local"></label>
+      <div class="row gap wrap"><button type="button" class="mini" id="f-recat-confirm">この録音日時で合っている</button></div>
+      <p class="small mono" id="f-recat-confirm-status">日時: 未確認</p>
       <label class="field"><span>メモ</span><textarea id="f-memo" rows="3"></textarea></label>
     </details>
     <button class="primary" id="rec-save">保存</button>
@@ -352,7 +360,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260810-r0-03"></script>
-<script src="app.js?v=20260810-r0-03"></script>
+<script src="zip.js?v=20260810-r1-01"></script>
+<script src="app.js?v=20260810-r1-01"></script>
 </body>
 </html>

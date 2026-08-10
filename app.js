@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Audit Remediation R0  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Audit Remediation R1  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,11 +8,11 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-auditR0';
-const SCHEMA_VERSION = '0.13.3';
-const BUILD_ID = '20260810-r0-03';
+const APP_VERSION = '0.2.0-auditR1';
+const SCHEMA_VERSION = '0.14.0';
+const BUILD_ID = '20260810-r1-01';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
-const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v1';
+const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v2';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -43,7 +43,9 @@ const DEFAULT_SETTINGS = {
   spectrogramMaxHz: 8000,
   activeSegmentMinDurSec: 0.12,
   activeSegmentMergeGapSec: 0.15,
-  recordingSetupPreset: 'カラオケ標準（iPhoneをテーブル・画面上向き・本人から約50cm）'
+  recordingSetupPreset: 'カラオケ標準（iPhoneをテーブル・画面上向き・本人から約50cm）',
+  // R1: 次回入力を1タップで確認できるよう、直近の採点4条件を端末内だけに保持する。
+  lastScoringConditions: { device: '', scoringMode: '', keyChange: '', octave: '' }
 };
 
 /* ---------------- 小道具 ---------------- */
@@ -178,7 +180,7 @@ function setFlag(key, val) {
 
 /* ---------------- IndexedDB ---------------- */
 const DB_NAME = 'songscope';
-const DB_VER = 5;
+const DB_VER = 6;
 let dbp = null;
 
 const DB_BLOCKED_CODE = 'SONGSCOPE_DB_UPGRADE_BLOCKED';
@@ -237,6 +239,11 @@ function ensureSongScopeStores(d, tx) {
     const ar = d.createObjectStore('alignmentResults', { keyPath: 'pairKey' });
     ar.createIndex('byStatus', 'status', { unique: false });
     ar.createIndex('byUpdatedAt', 'updatedAt', { unique: false });
+  }
+  // R1: 人間が確認した時間順・採点条件はalignment algorithmのversionから独立して保存する。
+  if (!d.objectStoreNames.contains('pairContexts')) {
+    const pc = d.createObjectStore('pairContexts', { keyPath: 'audioPairKey' });
+    pc.createIndex('byUpdatedAt', 'updatedAt', { unique: false });
   }
 }
 function db() {
@@ -517,6 +524,123 @@ function escapeHtml(s) {
 /* =====================================================================
  * 録音の追加
  * ===================================================================== */
+
+const SCORING_CONDITION_FIELDS = ['device','scoringMode','keyChange','octave'];
+function scoringConditionDefaults() {
+  const x = settings && settings.lastScoringConditions && typeof settings.lastScoringConditions === 'object' ? settings.lastScoringConditions : {};
+  return {
+    device: String(x.device || ''), scoringMode: String(x.scoringMode || ''),
+    keyChange: String(x.keyChange || ''), octave: String(x.octave || '')
+  };
+}
+function normalizeKeyChangeValue(v) {
+  let x = String(v == null ? '' : v).normalize('NFKC').trim();
+  if (!x) return '';
+  const low = x.toLowerCase().replace(/\s+/g,'');
+  if (['original','orig','原曲','原曲キー','±0','+0','-0','0'].includes(low)) return '0';
+  const m = low.match(/^([+-]?)(\d{1,2})$/);
+  if (!m) return x;
+  let n = Number((m[1] || '') + m[2]);
+  if (!isFinite(n) || Math.abs(n) > 12) return x;
+  if (Object.is(n, -0) || n === 0) return '0';
+  return n > 0 ? '+' + n : String(n);
+}
+function normalizeOctaveValue(v) {
+  let x = String(v == null ? '' : v).normalize('NFKC').trim();
+  if (!x) return '';
+  const m = x.replace(/\s+/g,'').match(/^([+-]?)(\d)$/);
+  if (!m) return x;
+  const n = Number((m[1] || '') + m[2]);
+  if (!isFinite(n) || Math.abs(n) > 3) return x;
+  if (Object.is(n, -0) || n === 0) return '0';
+  return n > 0 ? '+' + n : String(n);
+}
+function normalizeScoringText(v) {
+  return String(v == null ? '' : v).normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+function canonicalScoringConditionValue(field, value) {
+  if (field === 'keyChange') return normalizeKeyChangeValue(value);
+  if (field === 'octave') return normalizeOctaveValue(value);
+  const raw = String(value == null ? '' : value).normalize('NFKC').trim();
+  if (!raw || raw === '__OTHER__') return '';
+  const n = normalizeScoringText(raw);
+  if (field === 'device') {
+    const compact = n.replace(/\s+/g,'');
+    if (compact === 'damwao!' || compact === 'damwao') return 'DAM WAO!';
+    if (compact === 'livedamair') return 'LIVE DAM AiR';
+    if (compact === 'livedamai') return 'LIVE DAM Ai';
+    if (compact === 'livedamstadium') return 'LIVE DAM STADIUM';
+  }
+  if (field === 'scoringMode') {
+    const compact = n.replace(/\s+/g,'');
+    if (compact === '精密採点aiheart') return '精密採点Ai Heart';
+    if (compact === '精密採点ai') return '精密採点Ai';
+    if (compact === '精密採点dx-g') return '精密採点DX-G';
+    if (compact === '精密採点dx') return '精密採点DX';
+  }
+  return raw;
+}
+function scoringConditionComparableValue(field, value) {
+  const x = canonicalScoringConditionValue(field, value);
+  if (!x || x === '__OTHER__' || x === 'その他' || x === '不明') return '';
+  return field === 'device' || field === 'scoringMode' ? normalizeScoringText(x) : x;
+}
+function setStructuredSelectValue(id, value, field) {
+  const el = $(id);
+  if (!el) return;
+  const canonical = canonicalScoringConditionValue(field, value);
+  for (const o of Array.from(el.querySelectorAll('option[data-legacy="1"]'))) o.remove();
+  const target = canonical || '';
+  if (Array.from(el.options).some(o => o.value === target)) { el.value = target; return; }
+  if (target) {
+    const o = document.createElement('option'); o.value = target; o.textContent = `旧入力: ${target}`; o.dataset.legacy = '1';
+    el.appendChild(o); el.value = target;
+  } else el.value = '';
+}
+function updateRecConfirmationUi() {
+  const ctx = state.recFormContext || {};
+  const at = $('#f-recat-confirm-status');
+  if (at) at.textContent = ctx.recordedAtExplicitConfirm ? '日時: 本人確認済み' : '日時: 未確認';
+  const sc = $('#f-cond-confirm-status');
+  if (sc) sc.textContent = ctx.scoringConditionsExplicitConfirm ? '採点4条件: 本人確認済み' : (ctx.scoringConditionsDefaulted ? '採点4条件: 前回値（未確認）' : '採点4条件: 未確認');
+}
+function confirmRecordedAtInForm() {
+  if (!state.recFormContext) state.recFormContext = {};
+  if (!$('#f-recat').value) { toast('録音日時を入力してください'); return; }
+  state.recFormContext.recordedAtExplicitConfirm = true;
+  updateRecConfirmationUi();
+  toast('この録音日時を本人確認済みにしました');
+}
+function confirmScoringConditionsFromPrevious() {
+  if (!state.recFormContext) state.recFormContext = {};
+  const defs = scoringConditionDefaults();
+  if (!SCORING_CONDITION_FIELDS.every(f => defs[f] && defs[f] !== '__OTHER__')) { toast('前回の採点4条件が揃っていません'); return; }
+  setStructuredSelectValue('#f-device', defs.device, 'device');
+  setStructuredSelectValue('#f-mode', defs.scoringMode, 'scoringMode');
+  setStructuredSelectValue('#f-key', defs.keyChange, 'keyChange');
+  setStructuredSelectValue('#f-octave', defs.octave, 'octave');
+  state.recFormContext.scoringConditionsExplicitConfirm = true;
+  state.recFormContext.scoringConditionsDefaulted = true;
+  updateRecConfirmationUi();
+  toast('前回と同じ採点4条件として確認しました');
+}
+function confirmCurrentScoringConditions() {
+  if (!state.recFormContext) state.recFormContext = {};
+  const vals = [$('#f-device').value, $('#f-mode').value, $('#f-key').value, $('#f-octave').value];
+  if (vals.some(v => !String(v || '').trim() || v === '__OTHER__')) { toast('4条件すべてを具体的に選んでください'); return; }
+  state.recFormContext.scoringConditionsExplicitConfirm = true;
+  updateRecConfirmationUi();
+  toast('現在の採点4条件を本人確認済みにしました');
+}
+function persistLastScoringConditions(form) {
+  if (!form) return;
+  const x = {};
+  for (const f of SCORING_CONDITION_FIELDS) x[f] = canonicalScoringConditionValue(f, form[f]);
+  if (Object.values(x).some(Boolean)) {
+    settings.lastScoringConditions = x;
+    saveSettings();
+  }
+}
 function openAddSheet(file) {
   state.pendingFile = file;
   state.editingRec = false;
@@ -524,16 +648,24 @@ function openAddSheet(file) {
   $('#f-title').value = file ? file.name.replace(/\.[^.]+$/, '') : '';
   $('#f-artist').value = '';
   $('#f-score').value = '';
-  $('#f-key').value = '';
-  $('#f-octave').value = '';
-  $('#f-device').value = '';
-  $('#f-mode').value = '';
+  const scDefaults = scoringConditionDefaults();
+  setStructuredSelectValue('#f-key', scDefaults.keyChange, 'keyChange');
+  setStructuredSelectValue('#f-octave', scDefaults.octave, 'octave');
+  setStructuredSelectValue('#f-device', scDefaults.device, 'device');
+  setStructuredSelectValue('#f-mode', scDefaults.scoringMode, 'scoringMode');
   $('#f-memo').value = '';
   $('#f-setup').value = settings.recordingSetupPreset;
   const hasFileModified = !!(file && file.lastModified && isFinite(file.lastModified));
   const d = hasFileModified ? new Date(file.lastModified) : new Date();
   $('#f-recat').value = toLocalInput(d);
-  state.recFormContext = { mode: 'add', initial: recFormSnapshot(), previousProvenance: {}, recordedAtDefaultSource: hasFileModified ? 'file_last_modified_unverified' : 'import_time_default' };
+  state.recFormContext = {
+    mode: 'add', initial: recFormSnapshot(), previousProvenance: {},
+    recordedAtDefaultSource: hasFileModified ? 'file_last_modified_unverified' : 'import_time_default',
+    recordedAtExplicitConfirm: false,
+    scoringConditionsDefaulted: Object.values(scDefaults).some(Boolean),
+    scoringConditionsExplicitConfirm: false
+  };
+  updateRecConfirmationUi();
   const det = $('#sheet-rec .details');
   if (det) det.open = false;   // 任意項目は毎回入力させない
   openSheet('sheet-rec');
@@ -548,8 +680,11 @@ function recFormSnapshot() {
   const at = $('#f-recat').value;
   return {
     title: $('#f-title').value.trim(), artist: $('#f-artist').value.trim(), damScore: $('#f-score').value.trim(),
-    keyChange: $('#f-key').value.trim(), octave: $('#f-octave').value.trim(), device: $('#f-device').value.trim(),
-    scoringMode: $('#f-mode').value.trim(), memo: $('#f-memo').value.trim(), recordingSetupPreset: $('#f-setup').value.trim(),
+    keyChange: canonicalScoringConditionValue('keyChange', $('#f-key').value),
+    octave: canonicalScoringConditionValue('octave', $('#f-octave').value),
+    device: canonicalScoringConditionValue('device', $('#f-device').value),
+    scoringMode: canonicalScoringConditionValue('scoringMode', $('#f-mode').value),
+    memo: $('#f-memo').value.trim(), recordingSetupPreset: $('#f-setup').value.trim(),
     recordedAt: at ? new Date(at).toISOString() : null
   };
 }
@@ -575,10 +710,17 @@ function buildMetadataProvenance(form) {
     const value = form[k];
     if (!value) { if (ctx.mode === 'edit' && !same(value, initial[k])) delete out[k]; continue; }
     if (ctx.mode === 'add') {
-      if (k === 'recordedAt' && same(value, initial[k])) out[k] = provenanceEntry(ctx.recordedAtDefaultSource || 'import_time_default', 'unverified');
+      if (k === 'recordedAt' && ctx.recordedAtExplicitConfirm) out[k] = provenanceEntry('user_confirmed_recorded_at', 'user_confirmed');
+      else if (k === 'recordedAt' && same(value, initial[k])) out[k] = provenanceEntry(ctx.recordedAtDefaultSource || 'import_time_default', 'unverified');
+      else if (SCORING_CONDITION_FIELDS.includes(k) && ctx.scoringConditionsExplicitConfirm) out[k] = provenanceEntry('user_confirmed_scoring_conditions', 'user_confirmed');
+      else if (SCORING_CONDITION_FIELDS.includes(k) && ctx.scoringConditionsDefaulted && same(value, initial[k])) out[k] = provenanceEntry('previous_recording_default', 'unverified');
       else if (k === 'recordingSetupPreset' && same(value, initial[k])) out[k] = provenanceEntry('default_preset', 'unverified');
       else if (k === 'title' && same(value, initial[k])) out[k] = provenanceEntry('file_name_default', 'unverified');
       else out[k] = provenanceEntry('user_input', 'user_confirmed');
+    } else if (k === 'recordedAt' && ctx.recordedAtExplicitConfirm) {
+      out[k] = provenanceEntry('user_confirmed_recorded_at', 'user_confirmed');
+    } else if (SCORING_CONDITION_FIELDS.includes(k) && ctx.scoringConditionsExplicitConfirm) {
+      out[k] = provenanceEntry('user_confirmed_scoring_conditions', 'user_confirmed');
     } else if (!same(value, initial[k])) {
       out[k] = provenanceEntry('user_edited', 'user_confirmed');
     } else if (!out[k] || !out[k].source) {
@@ -733,14 +875,21 @@ function openEditSheet(rec) {
   $('#f-title').value = rec.title || '';
   $('#f-artist').value = rec.artist || '';
   $('#f-score').value = rec.damScore || '';
-  $('#f-key').value = rec.keyChange || '';
-  $('#f-octave').value = rec.octave || '';
-  $('#f-device').value = rec.device || '';
-  $('#f-mode').value = rec.scoringMode || '';
+  setStructuredSelectValue('#f-key', rec.keyChange || '', 'keyChange');
+  setStructuredSelectValue('#f-octave', rec.octave || '', 'octave');
+  setStructuredSelectValue('#f-device', rec.device || '', 'device');
+  setStructuredSelectValue('#f-mode', rec.scoringMode || '', 'scoringMode');
   $('#f-memo').value = rec.memo || '';
   $('#f-setup').value = rec.recordingSetupPreset || settings.recordingSetupPreset;
   $('#f-recat').value = rec.recordedAt ? toLocalInput(new Date(rec.recordedAt)) : '';
-  state.recFormContext = { mode: 'edit', initial: recFormSnapshot(), previousProvenance: normalizedMetadataProvenance(rec) };
+  const existingProv = normalizedMetadataProvenance(rec);
+  state.recFormContext = {
+    mode: 'edit', initial: recFormSnapshot(), previousProvenance: existingProv,
+    recordedAtExplicitConfirm: !!(existingProv.recordedAt && existingProv.recordedAt.confirmation === 'user_confirmed'),
+    scoringConditionsDefaulted: false,
+    scoringConditionsExplicitConfirm: SCORING_CONDITION_FIELDS.every(k => existingProv[k] && existingProv[k].confirmation === 'user_confirmed')
+  };
+  updateRecConfirmationUi();
   const det = $('#sheet-rec .details');
   if (det) det.open = true;
   openSheet('sheet-rec');
@@ -754,10 +903,10 @@ function readRecForm() {
     title: t,
     artist: $('#f-artist').value.trim(),
     damScore: $('#f-score').value.trim(),
-    keyChange: $('#f-key').value.trim(),
-    octave: $('#f-octave').value.trim(),
-    device: $('#f-device').value.trim(),
-    scoringMode: $('#f-mode').value.trim(),
+    keyChange: canonicalScoringConditionValue('keyChange', $('#f-key').value),
+    octave: canonicalScoringConditionValue('octave', $('#f-octave').value),
+    device: canonicalScoringConditionValue('device', $('#f-device').value),
+    scoringMode: canonicalScoringConditionValue('scoringMode', $('#f-mode').value),
     memo: $('#f-memo').value.trim(),
     recordingSetupPreset: $('#f-setup').value.trim(),
     recordedAt: at ? new Date(at).toISOString() : nowIso()
@@ -769,6 +918,7 @@ function readRecForm() {
 async function onRecSave() {
   const form = readRecForm();
   if (!form) return;
+  persistLastScoringConditions(form);
 
   if (state.editingRec && state.rec) {
     let identity = null;
@@ -2502,7 +2652,7 @@ const FULL_BACKUP_SCHEMA = 'songscope-full-backup-v1';
 const FULL_BACKUP_BINARY_TAG = '__songscopeBackupBinaryV1';
 const FULL_BACKUP_STORE_NAMES = [
   'recordings', 'audio', 'analysis', 'analysisHistory', 'markers', 'segments',
-  'alignmentFeatures', 'alignmentDiagnostics', 'alignmentResults'
+  'alignmentFeatures', 'alignmentDiagnostics', 'alignmentResults', 'pairContexts'
 ];
 
 function backupPathToken(v) {
@@ -2705,11 +2855,18 @@ async function parseFullBackupFile(file) {
   const stores = {};
   for (const store of FULL_BACKUP_STORE_NAMES) {
     const raw = entries.get(`stores/${store}.json`);
+    // R0(DB5)完全バックアップにはpairContexts storeがまだ存在しない。
+    // そのバックアップをR1以降でも災害復旧に使えるよう、DB6導入storeだけ空配列として扱う。
+    if (!raw && store === 'pairContexts' && Number(manifest.dbVersion || 0) < 6) {
+      stores[store] = [];
+      continue;
+    }
     if (!raw) throw new Error(`stores/${store}.json がありません`);
     const encoded = JSON.parse(td.decode(raw));
     const decoded = await backupDecodeValue(encoded, entries);
     if (!Array.isArray(decoded)) throw new Error(`${store} の形式が不正です`);
-    const expected = manifest.stores && Number(manifest.stores[store]);
+    const expectedRaw = manifest.stores && manifest.stores[store];
+    const expected = expectedRaw === undefined ? NaN : Number(expectedRaw);
     if (isFinite(expected) && decoded.length !== expected) throw new Error(`${store} の件数がmanifestと一致しません`);
     stores[store] = decoded;
   }
@@ -2749,7 +2906,7 @@ async function validateFullBackupEvidence(parsed, opts = {}) {
 const FULL_BACKUP_KEY_PATHS = {
   recordings: 'recordingId', audio: 'recordingId', analysis: 'recordingId', analysisHistory: 'analysisId',
   markers: 'markerId', segments: 'segmentId', alignmentFeatures: 'featureKey',
-  alignmentDiagnostics: 'diagnosticId', alignmentResults: 'pairKey'
+  alignmentDiagnostics: 'diagnosticId', alignmentResults: 'pairKey', pairContexts: 'audioPairKey'
 };
 
 function backupRowKey(store, row) {
@@ -3051,6 +3208,8 @@ async function disasterRecoverySelfTest(file) {
 async function restoreFullBackupAtomic(parsed) {
   const d = await db();
   await restoreBackupStoresToDb(parsed, d);
+  // R0(DB5) backupはpairContextsを持たないため、restore直後にもlegacy alignment contextを移行する。
+  await migrateR1PairContexts().catch(e => console.warn('R1 pair-context migration after restore skipped:', e));
   if (parsed.manifest.settings && typeof parsed.manifest.settings === 'object') {
     settings = Object.assign({}, DEFAULT_SETTINGS, parsed.manifest.settings);
     saveSettings();
@@ -3470,10 +3629,7 @@ async function diagnoseAlignment() {
     cmp.lastAlignmentDiagnostic = diag;
     await dbPut('alignmentDiagnostics', diag).catch(() => { });
     const result = buildCanonicalAlignmentResult(diag);
-    if (result) {
-      const prior = await dbGet('alignmentResults', result.pairKey).catch(() => null);
-      if (prior && prior.comparisonContext) result.comparisonContext = prior.comparisonContext;
-    }
+    // R1: human comparison context is stored in pairContexts, never copied into new alignment results.
     cmp.lastAlignmentResult = result;
     if (result) await dbPut('alignmentResults', result).catch(() => { });
     renderAlignmentDiagnostic(diag);
@@ -3632,11 +3788,15 @@ function d2SideWindowStats(side, requestedReferenceStartSec, requestedReferenceE
   };
 }
 /* =====================================================================
- * Phase E4: pair-level comparison context (chronology + scoring conditions)
+ * R1: pair-level comparison context (chronology + scoring conditions)
  *
- * D1のalignment結果と同じpairKeyに小さなcontextを添付して保存する。
- * DB schemaは増やさない。recording metadataそのものも上書きしない。
+ * 人間が確認した事実はalignment結果から独立した pairContexts store に保存する。
+ * keyはraw audio SHA-256のsorted pairだけで、alignment algorithm/versionを含めない。
  * ===================================================================== */
+function comparisonAudioPairKey(hashA, hashB) {
+  if (!hashA || !hashB) return null;
+  return [String(hashA).toLowerCase(), String(hashB).toLowerCase()].sort().join(':');
+}
 function currentComparisonAudioIdentity() {
   const a = cmp.a && cmp.a.rec, b = cmp.b && cmp.b.rec;
   if (!a || !b) return null;
@@ -3644,7 +3804,8 @@ function currentComparisonAudioIdentity() {
   const bHash = b.audioSha256 || (cmp.b.an && cmp.b.an.audioSha256) || null;
   if (!aHash || !bHash) return null;
   return {
-    pairKey: alignmentPairKey(aHash, bHash),
+    audioPairKey: comparisonAudioPairKey(aHash, bHash),
+    pairKey: alignmentPairKey(aHash, bHash), // D1 result lookup用。contextのidentityではない。
     a: { recordingId: a.recordingId || null, audioSha256: aHash, title: a.title || '' },
     b: { recordingId: b.recordingId || null, audioSha256: bHash, title: b.title || '' }
   };
@@ -3652,10 +3813,12 @@ function currentComparisonAudioIdentity() {
 function blankComparisonContext(identity) {
   return {
     schemaVersion: COMPARISON_CONTEXT_SCHEMA,
+    audioPairKey: identity && identity.audioPairKey || null,
+    // pairKeyは過去export互換と診断用。storage identityはaudioPairKeyのみ。
     pairKey: identity && identity.pairKey || null,
-    audioPair: identity ? [identity.a.audioSha256, identity.b.audioSha256].sort() : [],
+    audioPair: identity ? [identity.a.audioSha256, identity.b.audioSha256].map(x => String(x).toLowerCase()).sort() : [],
     chronology: { status: 'unknown' },
-    scoringConditions: { status: 'unknown', coveredFields: ['device','scoringMode','keyChange','octave'] },
+    scoringConditions: { status: 'unknown', coveredFields: SCORING_CONDITION_FIELDS.slice() },
     history: [],
     updatedAt: null
   };
@@ -3663,17 +3826,20 @@ function blankComparisonContext(identity) {
 function normalizeComparisonContext(raw, identity) {
   const base = blankComparisonContext(identity);
   if (!raw || typeof raw !== 'object') return base;
-  const pair = Array.isArray(raw.audioPair) ? raw.audioPair.slice().sort() : [];
+  const pair = Array.isArray(raw.audioPair) ? raw.audioPair.map(x => String(x).toLowerCase()).sort() : [];
   const expected = base.audioPair.slice().sort();
-  if (raw.pairKey && identity && raw.pairKey !== identity.pairKey) return base;
+  // R1ではalignment pairKeyのversion差は無視し、raw audio pairだけをidentityとして検証する。
   if (pair.length === 2 && expected.length === 2 && (pair[0] !== expected[0] || pair[1] !== expected[1])) return base;
   return {
     schemaVersion: COMPARISON_CONTEXT_SCHEMA,
+    audioPairKey: identity && identity.audioPairKey || raw.audioPairKey || (pair.length === 2 ? comparisonAudioPairKey(pair[0], pair[1]) : null),
     pairKey: identity && identity.pairKey || raw.pairKey || null,
+    legacyAlignmentPairKey: raw.legacyAlignmentPairKey || (raw.schemaVersion === 'songscope-comparison-context-v1' ? raw.pairKey || null : null),
     audioPair: expected.length ? expected : pair,
     chronology: raw.chronology && typeof raw.chronology === 'object' ? raw.chronology : { status: 'unknown' },
     scoringConditions: raw.scoringConditions && typeof raw.scoringConditions === 'object' ? raw.scoringConditions : base.scoringConditions,
     history: Array.isArray(raw.history) ? raw.history.slice(-50) : [],
+    migratedFromAlignmentResult: !!raw.migratedFromAlignmentResult,
     updatedAt: raw.updatedAt || null
   };
 }
@@ -3683,46 +3849,105 @@ function e4HistoryPush(ctx, field, action) {
   ctx.history = h;
   ctx.updatedAt = nowIso();
 }
-async function getCurrentAlignmentResultAnyStatus() {
-  const identity = currentComparisonAudioIdentity();
-  if (!identity) throw new Error('A/BのaudioSha256が不足しています');
-  const result = await dbGet('alignmentResults', identity.pairKey).catch(() => null);
-  return { identity, result };
+async function legacyComparisonContextForIdentity(identity) {
+  if (!identity) return null;
+  let best = null, bestAt = -1, bestPairKey = null;
+  const all = await dbAll('alignmentResults').catch(() => []);
+  const want = identity.audioPairKey;
+  for (const ar of all) {
+    const pc = ar && ar.comparisonContext;
+    const ap = pc && Array.isArray(pc.audioPair) && pc.audioPair.length === 2 ? comparisonAudioPairKey(pc.audioPair[0], pc.audioPair[1]) : null;
+    if (!pc || ap !== want) continue;
+    const at = Date.parse(pc.updatedAt || (pc.chronology && pc.chronology.confirmedAt) || ar.updatedAt || ar.createdAt || '') || 0;
+    if (at >= bestAt) { best = pc; bestAt = at; bestPairKey = ar.pairKey || null; }
+  }
+  if (!best) return null;
+  const ctx = normalizeComparisonContext(best, identity);
+  ctx.legacyAlignmentPairKey = bestPairKey || ctx.legacyAlignmentPairKey || null;
+  ctx.migratedFromAlignmentResult = true;
+  return ctx;
+}
+async function getComparisonContextForIdentity(identity) {
+  if (!identity || !identity.audioPairKey) return blankComparisonContext(identity);
+  let row = await dbGet('pairContexts', identity.audioPairKey).catch(() => null);
+  if (row) return normalizeComparisonContext(row, identity);
+  // DB6移行直後や古いバックアップ復元直後のfallback。見つけたら新storeへ非破壊移行する。
+  const legacy = await legacyComparisonContextForIdentity(identity);
+  if (legacy) {
+    legacy.audioPairKey = identity.audioPairKey;
+    await dbPut('pairContexts', legacy).catch(() => {});
+    return legacy;
+  }
+  return blankComparisonContext(identity);
+}
+async function putComparisonContextForIdentity(identity, ctx) {
+  if (!identity || !identity.audioPairKey) throw new Error('A/BのaudioSha256が不足しています');
+  const row = normalizeComparisonContext(ctx, identity);
+  row.audioPairKey = identity.audioPairKey;
+  row.updatedAt = row.updatedAt || nowIso();
+  await dbPut('pairContexts', row);
+  return row;
+}
+async function migrateR1PairContexts() {
+  const results = await dbAll('alignmentResults').catch(() => []);
+  const latest = new Map();
+  for (const ar of results) {
+    const pc = ar && ar.comparisonContext;
+    if (!pc || !Array.isArray(pc.audioPair) || pc.audioPair.length !== 2) continue;
+    const audioPairKey = comparisonAudioPairKey(pc.audioPair[0], pc.audioPair[1]);
+    if (!audioPairKey) continue;
+    const at = Date.parse(pc.updatedAt || (pc.chronology && pc.chronology.confirmedAt) || ar.updatedAt || ar.createdAt || '') || 0;
+    const prev = latest.get(audioPairKey);
+    if (!prev || at >= prev.at) latest.set(audioPairKey, { pc, ar, at });
+  }
+  for (const [audioPairKey, x] of latest) {
+    const existing = await dbGet('pairContexts', audioPairKey).catch(() => null);
+    const existingAt = Date.parse(existing && existing.updatedAt || '') || 0;
+    if (existing && existingAt > x.at) continue;
+    const pair = x.pc.audioPair.map(v => String(v).toLowerCase()).sort();
+    const identity = {
+      audioPairKey,
+      pairKey: x.ar && x.ar.pairKey || null,
+      a: { recordingId: null, audioSha256: pair[0], title: '' },
+      b: { recordingId: null, audioSha256: pair[1], title: '' }
+    };
+    const row = normalizeComparisonContext(x.pc, identity);
+    row.audioPairKey = audioPairKey;
+    row.legacyAlignmentPairKey = x.ar && x.ar.pairKey || row.legacyAlignmentPairKey || null;
+    row.migratedFromAlignmentResult = true;
+    await dbPut('pairContexts', row);
+  }
 }
 async function setE4Chronology(choice) {
   try {
-    const { identity, result } = await getCurrentAlignmentResultAnyStatus();
-    if (!result) throw new Error('先にD1の位置合わせ結果を保存してください');
-    const ctx = normalizeComparisonContext(result.comparisonContext, identity);
+    const identity = currentComparisonAudioIdentity();
+    if (!identity) throw new Error('A/BのaudioSha256が不足しています');
+    const ctx = await getComparisonContextForIdentity(identity);
     if (choice === 'a_first' || choice === 'b_first') {
       const earlier = choice === 'a_first' ? identity.a : identity.b;
       const later = choice === 'a_first' ? identity.b : identity.a;
       ctx.chronology = {
-        status: 'user_confirmed_order',
-        source: 'user_pair_confirmation',
-        earlierRecordingId: earlier.recordingId,
-        earlierAudioSha256: earlier.audioSha256,
-        laterRecordingId: later.recordingId,
-        laterAudioSha256: later.audioSha256,
+        status: 'user_confirmed_order', source: 'user_pair_confirmation',
+        earlierRecordingId: earlier.recordingId, earlierAudioSha256: earlier.audioSha256,
+        laterRecordingId: later.recordingId, laterAudioSha256: later.audioSha256,
         confirmedAt: nowIso()
       };
     } else {
       ctx.chronology = { status: 'unknown', source: 'user_cleared_pair_confirmation', updatedAt: nowIso() };
     }
     e4HistoryPush(ctx, 'chronology', choice);
-    result.comparisonContext = ctx;
-    await dbPut('alignmentResults', result);
-    cmp.comparisonContext = ctx;
+    const saved = await putComparisonContextForIdentity(identity, ctx);
+    cmp.comparisonContext = saved;
     await refreshE4ContextUi();
-    toast(choice === 'clear' ? '時間順の確認を解除しました' : '時間順を本人確認として保存しました');
+    toast(choice === 'clear' ? '補助の時間順確認を解除しました' : '時間順を補助確認として保存しました');
   } catch (e) { toast((e && e.message) || '時間順を保存できませんでした'); }
 }
 async function setE4ScoringConditions(choice) {
   try {
-    const { identity, result } = await getCurrentAlignmentResultAnyStatus();
-    if (!result) throw new Error('先にD1の位置合わせ結果を保存してください');
-    const ctx = normalizeComparisonContext(result.comparisonContext, identity);
-    const covered = ['device','scoringMode','keyChange','octave'];
+    const identity = currentComparisonAudioIdentity();
+    if (!identity) throw new Error('A/BのaudioSha256が不足しています');
+    const ctx = await getComparisonContextForIdentity(identity);
+    const covered = SCORING_CONDITION_FIELDS.slice();
     if (choice === 'same') {
       ctx.scoringConditions = { status: 'user_confirmed_same', source: 'user_pair_confirmation', coveredFields: covered, meaning: 'all_covered_fields_same', confirmedAt: nowIso() };
     } else if (choice === 'different') {
@@ -3731,11 +3956,10 @@ async function setE4ScoringConditions(choice) {
       ctx.scoringConditions = { status: 'unknown', source: 'user_cleared_pair_confirmation', coveredFields: covered, updatedAt: nowIso() };
     }
     e4HistoryPush(ctx, 'scoringConditions', choice);
-    result.comparisonContext = ctx;
-    await dbPut('alignmentResults', result);
-    cmp.comparisonContext = ctx;
+    const saved = await putComparisonContextForIdentity(identity, ctx);
+    cmp.comparisonContext = saved;
     await refreshE4ContextUi();
-    toast(choice === 'clear' ? '採点条件の確認を解除しました' : '採点条件を本人確認として保存しました');
+    toast(choice === 'clear' ? '補助の採点条件確認を解除しました' : '採点条件を補助確認として保存しました');
   } catch (e) { toast((e && e.message) || '採点条件を保存できませんでした'); }
 }
 function e4SourceVerifiedResult(desc) {
@@ -3750,48 +3974,70 @@ function e4ReadableScoringDate(result) {
   const t = Date.parse(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
   return isFinite(t) ? { value: `${m[1]}-${m[2]}-${m[3]}`, epochDay: Math.floor(t / 86400000) } : null;
 }
+function e4ConfirmedScoringDate(desc) {
+  const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult;
+  if (!e3StructuredIsSourceVerified(st)) return null;
+  if (!st.extraction || st.extraction.userReview !== 'user_confirmed') return null;
+  return e4ReadableScoringDate(st.result);
+}
 function e4ResolveChronology(descA, descB, ctx) {
   const c = ctx && ctx.chronology || {};
   const pairIds = new Set([descA && descA.recordingId, descB && descB.recordingId].filter(Boolean));
+  let pairOrder = null;
   if (c.status === 'user_confirmed_order' && pairIds.has(c.earlierRecordingId) && pairIds.has(c.laterRecordingId) && c.earlierRecordingId !== c.laterRecordingId) {
-    return {
-      status: 'established', source: 'user_pair_confirmation', resolution: 'explicit_order',
-      earlierRecordingId: c.earlierRecordingId, laterRecordingId: c.laterRecordingId,
-      earlierSide: c.earlierRecordingId === descA.recordingId ? 'A' : 'B',
-      laterSide: c.laterRecordingId === descA.recordingId ? 'A' : 'B',
-      confirmedAt: c.confirmedAt || null
-    };
+    pairOrder = { earlierRecordingId: c.earlierRecordingId, laterRecordingId: c.laterRecordingId, confirmedAt: c.confirmedAt || null };
   }
   const pa = descA && descA.metadataProvenance && descA.metadataProvenance.recordedAt || {};
   const pb = descB && descB.metadataProvenance && descB.metadataProvenance.recordedAt || {};
   const ta = Date.parse(descA && descA.recordedAt || ''), tb = Date.parse(descB && descB.recordedAt || '');
+  let timeOrder = null;
   if (pa.confirmation === 'user_confirmed' && pb.confirmation === 'user_confirmed' && isFinite(ta) && isFinite(tb) && ta !== tb) {
     const aFirst = ta < tb;
-    return {
-      status: 'established', source: 'user_confirmed_recorded_at', resolution: 'timestamp',
+    timeOrder = {
       earlierRecordingId: aFirst ? descA.recordingId : descB.recordingId,
       laterRecordingId: aFirst ? descB.recordingId : descA.recordingId,
-      earlierSide: aFirst ? 'A' : 'B', laterSide: aFirst ? 'B' : 'A',
       aRecordedAt: descA.recordedAt, bRecordedAt: descB.recordedAt
     };
   }
-  const da = e4ReadableScoringDate(e4SourceVerifiedResult(descA));
-  const db2 = e4ReadableScoringDate(e4SourceVerifiedResult(descB));
+  if (timeOrder && pairOrder && (timeOrder.earlierRecordingId !== pairOrder.earlierRecordingId || timeOrder.laterRecordingId !== pairOrder.laterRecordingId)) {
+    return {
+      status: 'conflict', source: 'conflict_user_confirmed_recorded_at_vs_pair_confirmation', resolution: null,
+      earlierRecordingId: null, laterRecordingId: null, earlierSide: null, laterSide: null,
+      recordedAtEvidence: timeOrder, pairConfirmationEvidence: pairOrder,
+      note: 'Two user-confirmed chronology sources disagree. SongScope does not choose one automatically.'
+    };
+  }
+  const selected = timeOrder || pairOrder;
+  if (selected) {
+    const source = timeOrder ? 'user_confirmed_recorded_at' : 'user_pair_confirmation';
+    return {
+      status: 'established', source, resolution: timeOrder ? 'timestamp' : 'explicit_order',
+      earlierRecordingId: selected.earlierRecordingId, laterRecordingId: selected.laterRecordingId,
+      earlierSide: selected.earlierRecordingId === descA.recordingId ? 'A' : 'B',
+      laterSide: selected.laterRecordingId === descA.recordingId ? 'A' : 'B',
+      aRecordedAt: timeOrder && timeOrder.aRecordedAt || null,
+      bRecordedAt: timeOrder && timeOrder.bRecordedAt || null,
+      confirmedAt: pairOrder && pairOrder.confirmedAt || null
+    };
+  }
+  // 外部AI抽出日付は、画像SHA bindingだけでは値そのものの本人確認にならない。
+  // userReview=user_confirmed の場合だけ補助chronology evidenceとして利用する。
+  const da = e4ConfirmedScoringDate(descA), db2 = e4ConfirmedScoringDate(descB);
   if (da && db2 && da.epochDay !== db2.epochDay) {
     const aFirst = da.epochDay < db2.epochDay;
     return {
-      status: 'established', source: 'source_verified_scoring_date', resolution: 'day',
+      status: 'established', source: 'user_reviewed_scoring_date', resolution: 'day',
       earlierRecordingId: aFirst ? descA.recordingId : descB.recordingId,
       laterRecordingId: aFirst ? descB.recordingId : descA.recordingId,
       earlierSide: aFirst ? 'A' : 'B', laterSide: aFirst ? 'B' : 'A',
       aScoringDate: da.value, bScoringDate: db2.value,
-      note: 'Order is established only at calendar-day resolution from source-verified scoring images.'
+      note: 'Order is established at calendar-day resolution only after the extracted scoring dates were user-reviewed.'
     };
   }
   return {
     status: 'not_established', source: 'insufficient_order_evidence', resolution: null,
     earlierRecordingId: null, laterRecordingId: null, earlierSide: null, laterSide: null,
-    note: 'SongScope does not infer order from title suffixes, selection order, equal legacy timestamps, or same-day scoring dates.'
+    note: 'SongScope does not infer order from title suffixes, A/B selection order, equal legacy timestamps, or unreviewed AI-extracted scoring dates.'
   };
 }
 function e4ScoringConditionPairReport(ctx) {
@@ -3800,7 +4046,7 @@ function e4ScoringConditionPairReport(ctx) {
   return {
     status: s.status,
     source: s.source || 'user_pair_confirmation',
-    coveredFields: Array.isArray(s.coveredFields) ? s.coveredFields : ['device','scoringMode','keyChange','octave'],
+    coveredFields: Array.isArray(s.coveredFields) ? s.coveredFields : SCORING_CONDITION_FIELDS.slice(),
     confirmedAt: s.confirmedAt || null,
     meaning: s.meaning || (s.status === 'user_confirmed_same' ? 'all_covered_fields_same' : 'at_least_one_covered_field_differs')
   };
@@ -3808,19 +4054,25 @@ function e4ScoringConditionPairReport(ctx) {
 function e4ContextExport(descA, descB, ctx, chronology, conditions) {
   return {
     schemaVersion: COMPARISON_CONTEXT_SCHEMA,
-    pairKey: ctx && ctx.pairKey || null,
+    pairKey: ctx && ctx.pairKey || null, // backward-compatible alias for alignmentPairKey
+    audioPairKey: ctx && ctx.audioPairKey || null,
+    alignmentPairKey: ctx && ctx.pairKey || null,
     storedPairContext: ctx || null,
     resolvedChronology: chronology,
     scoringConditionComparability: conditions,
     principles: [
       'Chronology is separate evidence from A/B selection order.',
       'SongScope never infers chronology from a title suffix such as 1, 2, take2, or similar naming.',
-      'A pair-level condition confirmation covers machine, scoring mode, key change, and octave only; it does not prove identical room, microphone placement, singer state, or all acoustic conditions.',
+      'R1 stores pair-level human context independently from alignment algorithm/version.',
+      'User-confirmed recordedAt is the primary chronology route; pair order confirmation is a fallback and conflicts are surfaced.',
+      'AI-extracted scoring dates are not hard chronology evidence until userReview is user_confirmed.',
+      'Per-recording machine/mode/key/octave values are preferred for comparability; pair-level condition confirmation is a fallback.',
       'Pair-level context does not overwrite per-recording metadata or its provenance.'
     ]
   };
 }
 function e4ChronologyText(ch, descA, descB) {
+  if (ch && ch.status === 'conflict') return '時間順: 本人確認どうしが矛盾しています';
   if (!ch || ch.status !== 'established') return '時間順: 未確定';
   const aTitle = descA && descA.title || 'A', bTitle = descB && descB.title || 'B';
   const early = ch.earlierSide === 'A' ? `A「${aTitle}」` : `B「${bTitle}」`;
@@ -3829,8 +4081,10 @@ function e4ChronologyText(ch, descA, descB) {
 }
 function e4ConditionText(c) {
   if (!c) return '採点条件: 未確定';
-  if (c.overallStatus === 'confirmed_match_by_pair_report' || c.overallStatus === 'confirmed_match') return '採点条件: 同じと確認済み';
-  if (c.overallStatus === 'confirmed_difference_present_by_pair_report' || c.overallStatus === 'confirmed_difference_present') return '採点条件: 違いありと確認済み';
+  if (c.overallStatus === 'confirmed_match') return '採点条件: 同じ（録音別の4条件で確認）';
+  if (c.overallStatus === 'confirmed_match_by_pair_report') return '採点条件: 同じ（補助pair確認）';
+  if (c.overallStatus === 'confirmed_difference_present') return '採点条件: 違いあり（録音別の4条件）';
+  if (c.overallStatus === 'confirmed_difference_present_by_pair_report') return '採点条件: 違いあり（補助pair確認）';
   if (c.overallStatus === 'conflict_pair_report_vs_recording_metadata') return '採点条件: 証拠が矛盾しています';
   return '採点条件: 未確定';
 }
@@ -3841,13 +4095,14 @@ async function refreshE4ContextUi() {
   const identity = currentComparisonAudioIdentity();
   if (!identity) { el.innerHTML = '<p class="small">A/BのaudioSha256が不足しています。</p>'; return; }
   const result = await dbGet('alignmentResults', identity.pairKey).catch(() => null);
-  const ctx = normalizeComparisonContext(result && result.comparisonContext, identity);
+  const ctx = await getComparisonContextForIdentity(identity);
   cmp.comparisonContext = ctx;
   const descA = d2RecordingDescriptor('a'), descB = d2RecordingDescriptor('b');
   const chronology = e4ResolveChronology(descA, descB, ctx);
   const conditions = e3StrictScoringConditionComparability(descA, descB, ctx);
   const d1 = result ? `D1: ${result.status}` : 'D1: 未保存';
-  el.innerHTML = `<p class="small"><b>${escapeHtml(e4ChronologyText(chronology, descA, descB))}</b></p><p class="small"><b>${escapeHtml(e4ConditionText(conditions))}</b></p><p class="small mono">${escapeHtml(d1)} / pair ${escapeHtml(identity.pairKey.slice(-16))}</p>`;
+  const primary = chronology && chronology.source === 'user_confirmed_recorded_at' ? '日時確認が主経路' : 'A/B順序は補助経路';
+  el.innerHTML = `<p class="small"><b>${escapeHtml(e4ChronologyText(chronology, descA, descB))}</b></p><p class="small"><b>${escapeHtml(e4ConditionText(conditions))}</b></p><p class="small mono">${escapeHtml(primary)} / ${escapeHtml(d1)} / audio pair ${escapeHtml(identity.audioPairKey.slice(-16))}</p>`;
 }
 
 function d2RecordingDescriptor(side) {
@@ -3903,11 +4158,13 @@ function d2MapUserSegments(rows, side, offsetSec) {
   }));
 }
 function d2ReportedFieldComparison(field, aValue, bValue) {
-  const norm = v => String(v === null || v === undefined ? '' : v).trim();
-  const a = norm(aValue), b = norm(bValue);
+  const raw = v => String(v === null || v === undefined ? '' : v).trim();
+  const aRaw = raw(aValue), bRaw = raw(bValue);
+  const a = SCORING_CONDITION_FIELDS.includes(field) ? scoringConditionComparableValue(field, aRaw) : aRaw;
+  const b = SCORING_CONDITION_FIELDS.includes(field) ? scoringConditionComparableValue(field, bRaw) : bRaw;
   let status = 'unknown';
   if (a && b) status = a === b ? 'same_stored_metadata' : 'different_stored_metadata';
-  return { field, status, a: a || null, b: b || null, provenance: 'recording_metadata' };
+  return { field, status, a: aRaw || null, b: bRaw || null, aCanonical: a || null, bCanonical: b || null, provenance: 'recording_metadata' };
 }
 function d2ConditionComparison(descA, descB) {
   const a = (descA && descA.userMetadata) || {}, b = (descB && descB.userMetadata) || {};
@@ -4133,21 +4390,22 @@ function e3UnionKeys(aMap, bMap) {
   return Array.from(new Set([...aMap.keys(), ...bMap.keys()])).sort();
 }
 function e3StrictScoringConditionComparability(descA, descB, pairContext = null) {
-  const fields = ['device', 'scoringMode', 'keyChange', 'octave'];
+  const fields = SCORING_CONDITION_FIELDS.slice();
   const a = descA && descA.userMetadata || {}, b = descB && descB.userMetadata || {};
   const pa = descA && descA.metadataProvenance || {}, pb = descB && descB.metadataProvenance || {};
   const rows = fields.map(field => {
-    const av = String(a[field] === null || a[field] === undefined ? '' : a[field]).trim();
-    const bv = String(b[field] === null || b[field] === undefined ? '' : b[field]).trim();
+    const avRaw = String(a[field] === null || a[field] === undefined ? '' : a[field]).trim();
+    const bvRaw = String(b[field] === null || b[field] === undefined ? '' : b[field]).trim();
+    const av = scoringConditionComparableValue(field, avRaw);
+    const bv = scoringConditionComparableValue(field, bvRaw);
     const ac = !!(pa[field] && pa[field].confirmation === 'user_confirmed');
     const bc = !!(pb[field] && pb[field].confirmation === 'user_confirmed');
     let status = 'not_established';
     if (av && bv && ac && bc) status = av === bv ? 'confirmed_same' : 'confirmed_different';
     return {
-      field,
-      status,
-      a: av || null,
-      b: bv || null,
+      field, status,
+      a: avRaw || null, b: bvRaw || null,
+      aCanonical: av || null, bCanonical: bv || null,
       aConfirmation: pa[field] && pa[field].confirmation || 'unknown',
       bConfirmation: pb[field] && pb[field].confirmation || 'unknown'
     };
@@ -4156,18 +4414,24 @@ function e3StrictScoringConditionComparability(descA, descB, pairContext = null)
   const metadataDifferent = rows.some(r => r.status === 'confirmed_different');
   const metadataAllSame = rows.every(r => r.status === 'confirmed_same');
   let overallStatus = 'not_established';
-  if (pairReport && pairReport.status === 'user_confirmed_same') {
-    overallStatus = metadataDifferent ? 'conflict_pair_report_vs_recording_metadata' : 'confirmed_match_by_pair_report';
+  if (metadataDifferent) {
+    overallStatus = pairReport && pairReport.status === 'user_confirmed_same'
+      ? 'conflict_pair_report_vs_recording_metadata' : 'confirmed_difference_present';
+  } else if (metadataAllSame) {
+    overallStatus = pairReport && pairReport.status === 'user_confirmed_different'
+      ? 'conflict_pair_report_vs_recording_metadata' : 'confirmed_match';
+  } else if (pairReport && pairReport.status === 'user_confirmed_same') {
+    overallStatus = 'confirmed_match_by_pair_report';
   } else if (pairReport && pairReport.status === 'user_confirmed_different') {
-    overallStatus = metadataAllSame ? 'conflict_pair_report_vs_recording_metadata' : 'confirmed_difference_present_by_pair_report';
-  } else if (metadataDifferent) overallStatus = 'confirmed_difference_present';
-  else if (metadataAllSame) overallStatus = 'confirmed_match';
+    overallStatus = 'confirmed_difference_present_by_pair_report';
+  }
   return {
     overallStatus,
     requiredFields: fields,
     fields: rows,
     pairReport,
-    note: 'Comparability can be established either by user-confirmed per-recording values or by an explicit pair-level user report covering machine/mode/key/octave. Conflicting confirmed evidence is surfaced rather than reconciled automatically.'
+    preferredEvidence: metadataAllSame || metadataDifferent ? 'per_recording_user_confirmed_values' : (pairReport ? 'pair_report_fallback' : 'none'),
+    note: 'R1 prefers user-confirmed per-recording machine/mode/key/octave values. Pair-level reports remain a fallback for legacy data. Values are canonicalized before equality checks; unknown/other values do not establish comparability.'
   };
 }
 function e4ProgressionObservation(descA, descB, resultA, resultB, verifiedA, verifiedB, chronology, conditions) {
@@ -4562,29 +4826,15 @@ async function f1ChronologyConstraints(descs, aliasToCanonical) {
   const ids = new Set(descs.map(d => d.recordingId).filter(Boolean));
   const canonicalId = id => (aliasToCanonical && aliasToCanonical.get(id)) || id;
   const edgeMap = new Map();
-  const results = await dbAll('alignmentResults').catch(() => []);
-  // 同一raw音声pairに複数algorithm-versionのresultが残っても、最新contextだけを採用する。
-  // これにより「以前Aが先→後で解除/変更」の古い確認がhistoryへ復活しない。
-  const latestPairContext = new Map();
-  for (const ar of results) {
-    const pc = ar && ar.comparisonContext;
-    if (!pc || typeof pc !== 'object') continue;
-    const ap = Array.isArray(pc.audioPair) ? pc.audioPair.slice().sort() : [];
-    const key = ap.length === 2 ? ap.join('|') : (ar.pairKey || '');
-    if (!key) continue;
-    const at = Date.parse(pc.updatedAt || (pc.chronology && pc.chronology.confirmedAt) || ar.updatedAt || ar.createdAt || '') || 0;
-    const prev = latestPairContext.get(key);
-    if (!prev || at >= prev.at) latestPairContext.set(key, { ar, pc, at });
-  }
-  for (const x of latestPairContext.values()) {
-    const ar=x.ar, c=x.pc && x.pc.chronology;
+  // R1: pair-level human context is independent from alignmentResults.
+  const contexts = await dbAll('pairContexts').catch(() => []);
+  for (const pc of contexts) {
+    const c = pc && pc.chronology;
     if (!c || c.status !== 'user_confirmed_order') continue;
     const earlierId = canonicalId(c.earlierRecordingId), laterId = canonicalId(c.laterRecordingId);
-    if (!ids.has(earlierId) || !ids.has(laterId)) continue;
-    // alias→canonical化で同一physical recording内に畳み込まれた順序制約は、歌唱間chronologyではないため無視する。
-    if (earlierId === laterId) continue;
+    if (!ids.has(earlierId) || !ids.has(laterId) || earlierId === laterId) continue;
     f1PushOrderConstraint(edgeMap, earlierId, laterId, {
-      source: 'user_pair_confirmation', pairKey: ar.pairKey || null, confirmedAt: c.confirmedAt || null,
+      source: 'user_pair_confirmation', audioPairKey: pc.audioPairKey || null, confirmedAt: c.confirmedAt || null,
       originalEarlierRecordingId: c.earlierRecordingId || null,
       originalLaterRecordingId: c.laterRecordingId || null,
       identityCanonicalized: earlierId !== c.earlierRecordingId || laterId !== c.laterRecordingId
@@ -4600,10 +4850,11 @@ async function f1ChronologyConstraints(descs, aliasToCanonical) {
         source: 'user_confirmed_recorded_at', aRecordedAt: a.recordedAt, bRecordedAt: b.recordedAt
       });
     }
-    const da=e4ReadableScoringDate(f1VerifiedResult(a)), db2=e4ReadableScoringDate(f1VerifiedResult(b));
+    // AI extractionの日付は、source bindingだけでは値の確認にならない。
+    const da=e4ConfirmedScoringDate(a), db2=e4ConfirmedScoringDate(b);
     if (da && db2 && da.epochDay !== db2.epochDay) {
       f1PushOrderConstraint(edgeMap, da.epochDay < db2.epochDay ? a.recordingId : b.recordingId, da.epochDay < db2.epochDay ? b.recordingId : a.recordingId, {
-        source: 'source_verified_scoring_date', aScoringDate: da.value, bScoringDate: db2.value,
+        source: 'user_reviewed_scoring_date', aScoringDate: da.value, bScoringDate: db2.value,
         resolution: 'calendar_day'
       });
     }
@@ -4654,23 +4905,14 @@ function f1ResolveOrder(descs, constraints) {
 async function f1PairContextFor(descA, descB) {
   const ha=descA && descA.audioSha256, hb=descB && descB.audioSha256;
   if (!ha || !hb) return null;
-  const key=alignmentPairKey(ha,hb);
-  let ar=await dbGet('alignmentResults', key).catch(() => null);
-  if (!ar) {
-    const want=[ha,hb].sort().join('|');
-    const all=await dbAll('alignmentResults').catch(() => []);
-    let best=null, bestAt=-1;
-    for(const x of all){
-      const pc=x&&x.comparisonContext, ap=pc&&Array.isArray(pc.audioPair)?pc.audioPair.slice().sort().join('|'):'';
-      if(ap!==want) continue;
-      const at=Date.parse(pc.updatedAt || x.updatedAt || x.createdAt || '') || 0;
-      if(at>=bestAt){best=x;bestAt=at;}
-    }
-    ar=best;
-  }
-  if (!ar) return null;
-  const identity={ pairKey:ar.pairKey||key, a:{recordingId:descA.recordingId,audioSha256:ha,title:descA.title||''}, b:{recordingId:descB.recordingId,audioSha256:hb,title:descB.title||''} };
-  return normalizeComparisonContext(ar.comparisonContext, identity);
+  const audioPairKey = comparisonAudioPairKey(ha, hb);
+  const identity={
+    audioPairKey,
+    pairKey:alignmentPairKey(ha,hb),
+    a:{recordingId:descA.recordingId,audioSha256:ha,title:descA.title||''},
+    b:{recordingId:descB.recordingId,audioSha256:hb,title:descB.title||''}
+  };
+  return getComparisonContextForIdentity(identity);
 }
 async function f1ScoringConditionChain(orderedDescs) {
   if (!orderedDescs || orderedDescs.length < 2) return { status: 'not_applicable', adjacentPairs: [] };
@@ -4810,7 +5052,7 @@ async function buildF1HistoryPackage() {
   else if(descs.length>=3 && verifiedCount===descs.length) readiness='exploratory_pattern_available';
   const series=chronology.status==='fully_ordered'?f1BuildSeries(recordings,conditionChain):[];
   return {
-    schemaVersion:'songscope-history-0.2.0',
+    schemaVersion:'songscope-history-0.3.0',
     packageType:'same_song_compact_history_evidence',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
@@ -4996,7 +5238,7 @@ function f2BuildPatternEvidence(historyPkg) {
     interpretation:'Non-monotonic technique quantity; sequence is retained descriptively and is excluded from repeated better/worse signal lists.'
   })):[];
   return {
-    schemaVersion:'songscope-pattern-evidence-0.1.0',
+    schemaVersion:'songscope-pattern-evidence-0.1.1',
     packageType:'same_song_repeated_direction_pattern_evidence',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
@@ -5135,7 +5377,8 @@ async function buildD2DiagnosticPackage() {
   const zeroPair = windows.filter(w => w.pairCoverageRatio === 0).length;
   const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
   const descA = d2RecordingDescriptor('a'), descB = d2RecordingDescriptor('b');
-  const pairContext = normalizeComparisonContext(resolved.result.comparisonContext, currentComparisonAudioIdentity());
+  const pairIdentity = currentComparisonAudioIdentity();
+  const pairContext = await getComparisonContextForIdentity(pairIdentity);
   const chronology = e4ResolveChronology(descA, descB, pairContext);
   const strictConditions = e3StrictScoringConditionComparability(descA, descB, pairContext);
   const evalAnchors = d2EvaluationAnchors(descA, descB, strictConditions);
@@ -5143,7 +5386,7 @@ async function buildD2DiagnosticPackage() {
   const outcomeComparison = e3OutcomeComparison(descA, descB, pairContext, chronology, strictConditions);
   const hasOutcomeAnchor = evalAnchors.damScore.status !== 'unavailable' || evalAnchors.scoringResultImages.status !== 'unavailable' || evalAnchors.structuredScoringResults.status !== 'unavailable';
   return {
-    schemaVersion: 'songscope-d2-0.6.0',
+    schemaVersion: 'songscope-d2-0.7.0',
     packageType: 'pairwise_observation_and_outcome_evidence',
     status: 'aligned_observation_comparison_ready',
     generatedAt: nowIso(),
@@ -5463,6 +5706,19 @@ function wireSheets() {
     closeSheet();
   }));
   $('#rec-save').addEventListener('click', onRecSave);
+  $('#f-recat-confirm').addEventListener('click', confirmRecordedAtInForm);
+  $('#f-cond-prev').addEventListener('click', confirmScoringConditionsFromPrevious);
+  $('#f-cond-confirm').addEventListener('click', confirmCurrentScoringConditions);
+  $('#f-recat').addEventListener('input', () => {
+    if (state.recFormContext) state.recFormContext.recordedAtExplicitConfirm = false;
+    updateRecConfirmationUi();
+  });
+  for (const id of ['#f-device','#f-mode','#f-key','#f-octave']) {
+    $(id).addEventListener('change', () => {
+      if (state.recFormContext) state.recFormContext.scoringConditionsExplicitConfirm = false;
+      updateRecConfirmationUi();
+    });
+  }
   $('#tag-save').addEventListener('click', saveMarkerDraft);
   $('#settings-save').addEventListener('click', () => {
     const g = (id, def) => {
@@ -5696,6 +5952,17 @@ async function init() {
   state.confMin = settings.minimumConfidence;
   wireHome(); wireSheets(); wireReview(); wireCompare(); wireGlobal();
   $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
+  // R1はDB6へupgradeする。upgrade blocked/version mismatchをgeneric errorに落とさず、
+  // 『データを消す』誤対処を誘発しない専用案内にする。
+  try { await db(); }
+  catch (e) {
+    console.error('SongScope DB open failed during R1 migration', e);
+    if (isDbBlockedError(e)) toast(dbBlockedUserMessage(), 8000);
+    else if (isDbVersionError(e)) toast(dbVersionUserMessage(), 8000);
+    else toast('端末内データベースを開けませんでした。サイトデータは削除しないでください。', 8000);
+    return;
+  }
+  await migrateR1PairContexts().catch(e => console.warn('R1 pair-context migration skipped:', e));
   await migrateBliteIdentityData().catch(e => console.warn('B-lite migration skipped:', e));
   await loadRecordings();
   refreshStorageEstimate();
