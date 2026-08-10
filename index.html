@@ -253,6 +253,14 @@
       <div id="cmp-d2-result" class="note"><p class="small">D1がresolvedになったA/Bで使用できます。E3は評価証拠が片側だけでも安全に出力し、足りない側をmissingのまま残します。</p></div>
     </div>
     <div class="card">
+      <div class="section-head tight"><span>F1 曲履歴パッケージ</span><span class="mono small">History / progression evidence</span></div>
+      <p class="small">A/Bと同じ <code>songId</code> に属する<strong>別録音</strong>をまとめ、E4で確認した時間順やsource-verifiedの採点結果をcompactな履歴にします。再解析runは別歌唱として数えません。2録音の差はtrendと呼ばず、3件以上で初めて探索的な反復パターンを扱います。</p>
+      <div class="row gap wrap">
+        <button id="btn-f1-export" class="mini accent">この曲の履歴を書き出す（F1）</button>
+      </div>
+      <div id="cmp-f1-result" class="note"><p class="small">音声・採点画像・frame単位D2データは入れないcompact exportです。chronologyが曖昧/矛盾する場合は無理に順序を作りません。</p></div>
+    </div>
+    <div class="card">
       <div class="section-head tight"><span>共有ループ（A基準時間）</span><span class="mono small" id="cmp-ab-readout">開始: — / 終了: —</span></div>
       <div class="row gap wrap">
         <button id="cmp-set-a" class="mini">開始地点</button>

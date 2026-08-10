@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase E4  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase F1  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseE4';
-const SCHEMA_VERSION = '0.11.0';
-const BUILD_ID = '20260810-e4-01';
+const APP_VERSION = '0.2.0-phaseF1';
+const SCHEMA_VERSION = '0.12.0';
+const BUILD_ID = '20260810-f1-01';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v1';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -3767,6 +3767,395 @@ function e3OutcomeComparison(descA, descB, pairContext = null, chronology = null
   };
 }
 
+
+/* =====================================================================
+ * Phase F1: same-song history / progression evidence
+ *
+ * 同じsongIdのrecordingだけを履歴単位として束ねる。
+ * analysisHistoryの再解析runは「別歌唱」として数えない。
+ * chronological orderは証拠制約から解き、曖昧/矛盾時は無理に並べない。
+ * ===================================================================== */
+function f1DescriptorFromStored(rec, an, asset) {
+  rec = rec || {}; an = an || {}; asset = asset || {};
+  return {
+    recordingId: rec.recordingId || null,
+    audioSha256: rec.audioSha256 || an.audioSha256 || null,
+    songId: rec.songId || null,
+    songIdentityKey: rec.songIdentityKey || null,
+    songIdentityBasis: rec.songIdentityBasis || null,
+    title: rec.title || '',
+    artist: rec.artist || '',
+    recordedAt: rec.recordedAt || rec.createdAt || null,
+    durationSec: isFinite(Number(rec.durationSec)) ? Number(rec.durationSec) : null,
+    analysisId: an.analysisId || rec.latestAnalysisId || null,
+    analysisCount: isFinite(Number(rec.analysisCount)) ? Number(rec.analysisCount) : null,
+    userMetadata: {
+      damScore: rec.damScore || null,
+      keyChange: rec.keyChange || null,
+      octave: rec.octave || null,
+      device: rec.device || null,
+      scoringMode: rec.scoringMode || null,
+      recordingSetupPreset: rec.recordingSetupPreset || null,
+      source: 'recording_metadata'
+    },
+    metadataProvenance: normalizedMetadataProvenance(rec),
+    evaluationEvidence: {
+      scoringResultImage: evaluationImageDescriptor(rec, asset.evaluationImageMeta || null),
+      structuredScoringResult: structuredEvaluationDescriptor(rec, asset.evaluationImageMeta || null, asset.evaluationStructured || null)
+    }
+  };
+}
+async function f1LoadDescriptorsForSong(songId) {
+  const recs = await findRecordingsBySongId(songId);
+  const out = [];
+  for (const rec of recs) {
+    const an = await dbGet('analysis', rec.recordingId).catch(() => null);
+    const asset = await dbGet('audio', rec.recordingId).catch(() => null);
+    out.push(f1DescriptorFromStored(rec, an, asset));
+  }
+  // このsortは表示/JSON安定化だけ。chronologyの証拠には使わない。
+  out.sort((a,b) => String(a.recordingId || '').localeCompare(String(b.recordingId || '')));
+  return out;
+}
+function f1VerifiedResult(desc) {
+  const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult;
+  return e3StructuredIsSourceVerified(st) && st.result && typeof st.result === 'object' ? st.result : null;
+}
+function f1OutcomeObservation(desc) {
+  const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult || { status: 'unavailable' };
+  const result = f1VerifiedResult(desc);
+  const metrics = {};
+  const techniques = {};
+  if (result) {
+    for (const [key,row] of e3ArrayMap(result, 'metrics', 'value')) metrics[key] = { key, label: row.label, value: e3Number(row.value), unit: row.unit || null };
+    for (const [key,row] of e3ArrayMap(result, 'techniques', 'count')) techniques[key] = { key, label: row.label, count: e3Number(row.value), unit: 'count' };
+  }
+  const vib = result && result.vibrato && result.vibrato.status === 'readable' ? result.vibrato : null;
+  const rank = result && result.ranking && result.ranking.status === 'readable' ? result.ranking : null;
+  return {
+    status: result ? 'source_verified_structured_outcome' : 'unavailable_or_unverified',
+    sourceVerification: st.verification && st.verification.status || 'unavailable',
+    sourceImageSha256: st.sourceEvidence && st.sourceEvidence.sha256 || null,
+    userReview: st.extraction && st.extraction.userReview || 'unknown',
+    scoringDate: result && result.scoringDate && result.scoringDate.status === 'readable' ? result.scoringDate.value || null : null,
+    overallScore: result ? e3ReadableNumber(result.overallScore) : null,
+    nationalAverage: result ? e3ReadableNumber(result.nationalAverage) : null,
+    heartBonus: result ? e3ReadableNumber(result.heartBonus) : null,
+    ranking: rank ? { position: Number(rank.position), total: Number(rank.total) } : null,
+    metrics,
+    techniques,
+    vibrato: vib ? {
+      totalDurationSec: isFinite(Number(vib.totalDurationSec)) ? Number(vib.totalDurationSec) : null,
+      count: isFinite(Number(vib.count)) ? Number(vib.count) : null,
+      type: vib.type ? String(vib.type) : null
+    } : null
+  };
+}
+function f1PushOrderConstraint(map, earlierId, laterId, evidence) {
+  if (!earlierId || !laterId || earlierId === laterId) return;
+  const key = earlierId + '>' + laterId;
+  if (!map.has(key)) map.set(key, { earlierRecordingId: earlierId, laterRecordingId: laterId, evidence: [] });
+  map.get(key).evidence.push(evidence);
+}
+async function f1ChronologyConstraints(descs) {
+  const ids = new Set(descs.map(d => d.recordingId).filter(Boolean));
+  const edgeMap = new Map();
+  const results = await dbAll('alignmentResults').catch(() => []);
+  // 同一raw音声pairに複数algorithm-versionのresultが残っても、最新contextだけを採用する。
+  // これにより「以前Aが先→後で解除/変更」の古い確認がhistoryへ復活しない。
+  const latestPairContext = new Map();
+  for (const ar of results) {
+    const pc = ar && ar.comparisonContext;
+    if (!pc || typeof pc !== 'object') continue;
+    const ap = Array.isArray(pc.audioPair) ? pc.audioPair.slice().sort() : [];
+    const key = ap.length === 2 ? ap.join('|') : (ar.pairKey || '');
+    if (!key) continue;
+    const at = Date.parse(pc.updatedAt || (pc.chronology && pc.chronology.confirmedAt) || ar.updatedAt || ar.createdAt || '') || 0;
+    const prev = latestPairContext.get(key);
+    if (!prev || at >= prev.at) latestPairContext.set(key, { ar, pc, at });
+  }
+  for (const x of latestPairContext.values()) {
+    const ar=x.ar, c=x.pc && x.pc.chronology;
+    if (!c || c.status !== 'user_confirmed_order') continue;
+    if (!ids.has(c.earlierRecordingId) || !ids.has(c.laterRecordingId)) continue;
+    f1PushOrderConstraint(edgeMap, c.earlierRecordingId, c.laterRecordingId, {
+      source: 'user_pair_confirmation', pairKey: ar.pairKey || null, confirmedAt: c.confirmedAt || null
+    });
+  }
+  for (let i=0; i<descs.length; i++) for (let j=i+1; j<descs.length; j++) {
+    const a=descs[i], b=descs[j];
+    const pa=a.metadataProvenance && a.metadataProvenance.recordedAt || {};
+    const pb=b.metadataProvenance && b.metadataProvenance.recordedAt || {};
+    const ta=Date.parse(a.recordedAt || ''), tb=Date.parse(b.recordedAt || '');
+    if (pa.confirmation === 'user_confirmed' && pb.confirmation === 'user_confirmed' && isFinite(ta) && isFinite(tb) && ta !== tb) {
+      f1PushOrderConstraint(edgeMap, ta < tb ? a.recordingId : b.recordingId, ta < tb ? b.recordingId : a.recordingId, {
+        source: 'user_confirmed_recorded_at', aRecordedAt: a.recordedAt, bRecordedAt: b.recordedAt
+      });
+    }
+    const da=e4ReadableScoringDate(f1VerifiedResult(a)), db2=e4ReadableScoringDate(f1VerifiedResult(b));
+    if (da && db2 && da.epochDay !== db2.epochDay) {
+      f1PushOrderConstraint(edgeMap, da.epochDay < db2.epochDay ? a.recordingId : b.recordingId, da.epochDay < db2.epochDay ? b.recordingId : a.recordingId, {
+        source: 'source_verified_scoring_date', aScoringDate: da.value, bScoringDate: db2.value,
+        resolution: 'calendar_day'
+      });
+    }
+  }
+  return Array.from(edgeMap.values());
+}
+function f1ResolveOrder(descs, constraints) {
+  const ids = descs.map(d => d.recordingId).filter(Boolean);
+  if (ids.length === 0) return { status: 'no_recordings', uniqueOrder: false, orderedRecordingIds: [], layers: [], constraints };
+  if (ids.length === 1) return { status: 'single_recording', uniqueOrder: true, orderedRecordingIds: ids.slice(), layers: [ids.slice()], constraints };
+  const out = new Map(ids.map(id => [id, new Set()]));
+  const indeg = new Map(ids.map(id => [id, 0]));
+  for (const e of constraints) {
+    if (!out.has(e.earlierRecordingId) || !out.has(e.laterRecordingId)) continue;
+    const s = out.get(e.earlierRecordingId);
+    if (!s.has(e.laterRecordingId)) { s.add(e.laterRecordingId); indeg.set(e.laterRecordingId, indeg.get(e.laterRecordingId)+1); }
+  }
+  const indegWork = new Map(indeg);
+  const remaining = new Set(ids);
+  const order = [], layers = [];
+  let unique = true;
+  while (remaining.size) {
+    const zeros = Array.from(remaining).filter(id => indegWork.get(id) === 0).sort();
+    if (!zeros.length) {
+      return {
+        status: 'chronology_evidence_conflict_cycle', uniqueOrder: false, orderedRecordingIds: [], layers,
+        unresolvedRecordingIds: Array.from(remaining).sort(), constraints,
+        note: 'Chronology evidence contains a cycle/conflict. SongScope does not choose which confirmed source to override.'
+      };
+    }
+    layers.push(zeros.slice());
+    if (zeros.length !== 1) unique = false;
+    for (const id of zeros) {
+      order.push(id); remaining.delete(id);
+      for (const to of out.get(id)) indegWork.set(to, indegWork.get(to)-1);
+    }
+  }
+  return {
+    status: unique ? 'fully_ordered' : 'partially_ordered',
+    uniqueOrder: unique,
+    orderedRecordingIds: unique ? order : [],
+    topologicalCandidateOrder: order,
+    layers,
+    constraints,
+    note: unique ? 'A unique evidence-compatible total order exists.' : 'Multiple evidence-compatible orders remain; no single chronology is asserted.'
+  };
+}
+async function f1PairContextFor(descA, descB) {
+  const ha=descA && descA.audioSha256, hb=descB && descB.audioSha256;
+  if (!ha || !hb) return null;
+  const key=alignmentPairKey(ha,hb);
+  let ar=await dbGet('alignmentResults', key).catch(() => null);
+  if (!ar) {
+    const want=[ha,hb].sort().join('|');
+    const all=await dbAll('alignmentResults').catch(() => []);
+    let best=null, bestAt=-1;
+    for(const x of all){
+      const pc=x&&x.comparisonContext, ap=pc&&Array.isArray(pc.audioPair)?pc.audioPair.slice().sort().join('|'):'';
+      if(ap!==want) continue;
+      const at=Date.parse(pc.updatedAt || x.updatedAt || x.createdAt || '') || 0;
+      if(at>=bestAt){best=x;bestAt=at;}
+    }
+    ar=best;
+  }
+  if (!ar) return null;
+  const identity={ pairKey:ar.pairKey||key, a:{recordingId:descA.recordingId,audioSha256:ha,title:descA.title||''}, b:{recordingId:descB.recordingId,audioSha256:hb,title:descB.title||''} };
+  return normalizeComparisonContext(ar.comparisonContext, identity);
+}
+async function f1ScoringConditionChain(orderedDescs) {
+  if (!orderedDescs || orderedDescs.length < 2) return { status: 'not_applicable', adjacentPairs: [] };
+  const adjacentPairs=[];
+  for (let i=0;i<orderedDescs.length-1;i++) {
+    const earlier=orderedDescs[i], later=orderedDescs[i+1];
+    const ctx=await f1PairContextFor(earlier,later);
+    const cmp=e3StrictScoringConditionComparability(earlier,later,ctx);
+    adjacentPairs.push({ earlierRecordingId: earlier.recordingId, laterRecordingId: later.recordingId, comparability: cmp });
+  }
+  const sts=adjacentPairs.map(x=>x.comparability.overallStatus);
+  let status='not_established';
+  if (sts.some(x=>x==='conflict_pair_report_vs_recording_metadata')) status='evidence_conflict';
+  else if (sts.some(x=>x==='confirmed_difference_present'||x==='confirmed_difference_present_by_pair_report')) status='conditions_differ_in_chain';
+  else if (sts.every(x=>x==='confirmed_match'||x==='confirmed_match_by_pair_report')) status='comparable_chain';
+  return {
+    status,
+    coveredFields:['device','scoringMode','keyChange','octave'],
+    adjacentPairs,
+    note:'History-wide comparability requires every adjacent step in the established chronology to have matching confirmed scoring conditions. This does not assert identical room, microphone placement, or singer state.'
+  };
+}
+function f1FlatNumericOutcome(obs) {
+  const out = new Map();
+  const add=(key,label,value,unit,classification,directionality)=>{
+    const n=Number(value); if(!isFinite(n)) return;
+    out.set(key,{key,label,value:+n.toFixed(6),unit:unit||null,classification,directionality});
+  };
+  if (!obs || obs.status !== 'source_verified_structured_outcome') return out;
+  add('overall_score','総合点',obs.overallScore,'points','overall_external_score','higher_external_outcome_only');
+  add('heart_bonus','ハートボーナス',obs.heartBonus,'points','external_score_component','descriptive_only');
+  for (const key of Object.keys(obs.metrics||{})) {
+    const x=obs.metrics[key]; add('metric:'+key,x.label||key,x.value,x.unit||null,'external_scoring_metric','metric_specific_not_assumed');
+  }
+  for (const key of Object.keys(obs.techniques||{})) {
+    const x=obs.techniques[key]; add('technique:'+key,x.label||key,x.count,'count','technique_occurrence_count','non_monotonic');
+  }
+  if (obs.vibrato) {
+    add('vibrato:duration','ビブラート合計時間',obs.vibrato.totalDurationSec,'seconds','technique_measurement','non_monotonic');
+    add('vibrato:count','ビブラート回数',obs.vibrato.count,'count','technique_occurrence_count','non_monotonic');
+  }
+  return out;
+}
+function f1SeriesForMetric(key, label, unit, classification, directionality, orderedRows, conditionChain) {
+  const points=orderedRows.map((r,i)=>{
+    const m=f1FlatNumericOutcome(r.outcome).get(key);
+    return { chronologyIndex:i+1, recordingId:r.recording.recordingId, title:r.recording.title||'', value:m?m.value:null };
+  });
+  const steps=[];
+  for(let i=0;i<points.length-1;i++) {
+    const a=points[i], b=points[i+1];
+    const pairCmp=conditionChain && conditionChain.adjacentPairs && conditionChain.adjacentPairs[i] ? conditionChain.adjacentPairs[i].comparability.overallStatus : 'not_established';
+    steps.push({
+      earlierRecordingId:a.recordingId,laterRecordingId:b.recordingId,
+      earlier:a.value,later:b.value,
+      deltaLaterMinusEarlier:a.value!==null&&b.value!==null?+((b.value-a.value).toFixed(6)):null,
+      scoringConditionComparability:pairCmp
+    });
+  }
+  const nonNull=points.filter(p=>p.value!==null);
+  let patternStatus='insufficient_history_for_pattern', observedDirectionPattern=null, evidenceTier='insufficient';
+  const allValuesPresent = nonNull.length===points.length;
+  if (points.length>=3 && allValuesPresent && conditionChain && conditionChain.status==='comparable_chain') {
+    const ds=steps.map(s=>s.deltaLaterMinusEarlier).filter(x=>x!==null);
+    const eps=1e-6;
+    if (ds.length===points.length-1) {
+      if (directionality === 'non_monotonic') {
+        patternStatus='non_monotonic_descriptive_sequence';
+        evidenceTier=points.length>=5?'repeated_observation_5_plus':'exploratory_3_to_4_recordings';
+      } else {
+        if (ds.every(x=>x>eps)) observedDirectionPattern='all_observed_steps_higher';
+        else if (ds.every(x=>x<-eps)) observedDirectionPattern='all_observed_steps_lower';
+        else if (ds.every(x=>Math.abs(x)<=eps)) observedDirectionPattern='all_observed_steps_same';
+        else observedDirectionPattern='mixed_direction';
+        evidenceTier=points.length>=5?'repeated_observation_5_plus':'exploratory_3_to_4_recordings';
+        patternStatus=points.length>=5?'repeated_observation_pattern_available':'exploratory_pattern_available';
+      }
+    }
+  } else if (points.length>=3 && (!conditionChain || conditionChain.status!=='comparable_chain')) {
+    patternStatus='scoring_conditions_not_comparable_across_history';
+  } else if (points.length>=3 && !allValuesPresent) patternStatus='missing_metric_values_in_history';
+  return {
+    key,label,unit,classification,directionality,points,adjacentSteps:steps,
+    patternStatus,observedDirectionPattern,evidenceTier,
+    interpretation:'History of external outcome observations only. Direction consistency does not by itself establish durable singing-skill improvement or deterioration.'
+  };
+}
+function f1BuildSeries(orderedRows, conditionChain) {
+  const union=new Map();
+  for(const r of orderedRows) for(const [key,m] of f1FlatNumericOutcome(r.outcome)) if(!union.has(key)) union.set(key,m);
+  return Array.from(union.values()).sort((a,b)=>a.key.localeCompare(b.key)).map(m=>f1SeriesForMetric(m.key,m.label,m.unit,m.classification,m.directionality,orderedRows,conditionChain));
+}
+function f1HistoryCsv(pkg) {
+  const rows=pkg.recordings || [];
+  const metricKeys=new Set(), techKeys=new Set();
+  for(const r of rows){
+    Object.keys((r.outcome&&r.outcome.metrics)||{}).forEach(k=>metricKeys.add(k));
+    Object.keys((r.outcome&&r.outcome.techniques)||{}).forEach(k=>techKeys.add(k));
+  }
+  const mks=Array.from(metricKeys).sort(), tks=Array.from(techKeys).sort();
+  const head=['chronology_index','recording_id','title','recorded_at','recorded_at_confirmation','structured_outcome_status','scoring_date','overall_score','national_average','heart_bonus',...mks.map(k=>'metric_'+k),...tks.map(k=>'technique_'+k+'_count'),'vibrato_duration_sec','vibrato_count','vibrato_type'];
+  const out=[head.join(',')];
+  for(const row of rows){
+    const o=row.outcome||{}, p=row.recording.metadataProvenance&&row.recording.metadataProvenance.recordedAt||{};
+    const vals=[row.chronologyIndex||'',row.recording.recordingId,row.recording.title,row.recording.recordedAt||'',p.confirmation||'unknown',o.status,o.scoringDate||'',o.overallScore,o.nationalAverage,o.heartBonus,
+      ...mks.map(k=>o.metrics&&o.metrics[k]?o.metrics[k].value:''),...tks.map(k=>o.techniques&&o.techniques[k]?o.techniques[k].count:''),
+      o.vibrato&&o.vibrato.totalDurationSec,o.vibrato&&o.vibrato.count,o.vibrato&&o.vibrato.type];
+    out.push(vals.map(v=>v===null||v===undefined?'':csvEscape(v)).join(','));
+  }
+  return out.join('\n');
+}
+async function buildF1HistoryPackage() {
+  const a=cmp.a&&cmp.a.rec, b=cmp.b&&cmp.b.rec;
+  const base=a||b;
+  if(!base) throw new Error('AまたはBに履歴対象の録音を選択してください');
+  if(!base.songId) throw new Error('選択録音にsongIdがありません');
+  if(a&&b&&a.songId&&b.songId&&a.songId!==b.songId) throw new Error('A/BのsongIdが異なります。履歴は同じ曲グループだけを対象にします');
+  const descs=await f1LoadDescriptorsForSong(base.songId);
+  if(!descs.length) throw new Error('このsongIdの録音が見つかりません');
+  const constraints=await f1ChronologyConstraints(descs);
+  const chronology=f1ResolveOrder(descs,constraints);
+  const byId=new Map(descs.map(d=>[d.recordingId,d]));
+  const stable=descs.slice();
+  const orderedDescs=chronology.status==='fully_ordered'?chronology.orderedRecordingIds.map(id=>byId.get(id)).filter(Boolean):[];
+  const conditionChain=chronology.status==='fully_ordered'?await f1ScoringConditionChain(orderedDescs):{status:'chronology_not_fully_ordered',adjacentPairs:[]};
+  const rowOrder=chronology.status==='fully_ordered'?orderedDescs:stable;
+  const recordings=rowOrder.map((d,i)=>({ chronologyIndex:chronology.status==='fully_ordered'?i+1:null, recording:d, outcome:f1OutcomeObservation(d) }));
+  const verifiedCount=recordings.filter(r=>r.outcome.status==='source_verified_structured_outcome').length;
+  let readiness='insufficient_history_for_pattern';
+  if(chronology.status!=='fully_ordered') readiness='chronology_not_fully_ordered';
+  else if(descs.length>=3 && verifiedCount<3) readiness='insufficient_source_verified_outcomes';
+  else if(descs.length>=3 && conditionChain.status!=='comparable_chain') readiness='scoring_conditions_not_comparable_across_history';
+  else if(descs.length>=5 && verifiedCount===descs.length) readiness='repeated_observation_pattern_available';
+  else if(descs.length>=3 && verifiedCount===descs.length) readiness='exploratory_pattern_available';
+  const series=chronology.status==='fully_ordered'?f1BuildSeries(recordings,conditionChain):[];
+  return {
+    schemaVersion:'songscope-history-0.1.0',
+    packageType:'same_song_compact_history_evidence',
+    generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
+    song:{
+      songId:base.songId,
+      representativeTitle:base.title||'',representativeArtist:base.artist||'',
+      recordingCount:descs.length,
+      note:'songId is the persistent grouping key. Different display titles may still belong to this manually/explicitly grouped song.'
+    },
+    chronology,
+    scoringConditionChain:conditionChain,
+    patternReadiness:{
+      status:readiness,
+      recordingCount:descs.length,
+      sourceVerifiedStructuredOutcomeCount:verifiedCount,
+      minimumOrderedComparableRecordingsForExploratoryPattern:3,
+      minimumOrderedComparableRecordingsForRepeatedObservationPattern:5,
+      note:descs.length<3?'Two recordings can show a pair difference but cannot separate a repeated pattern from take-to-take variation.': 'Pattern labels remain descriptive evidence, not proof of durable skill improvement.'
+    },
+    recordings,
+    outcomeSeries:series,
+    exportPolicy:{
+      compactHistory:true,includesAudio:false,includesScoringImages:false,includesFrameLevelAcoustics:false,
+      note:'F1 is a compact history package. Source image SHA/provenance is retained, while raw images/audio and D2 frame windows stay in single-recording/pair packages for targeted audit.'
+    },
+    interpretationGuardrails:[
+      'One recordingId represents one raw recording/performance identity; analysisHistory re-runs are not counted as new singing performances.',
+      'No chronology is inferred from title suffixes, A/B selection order, or unverified timestamps.',
+      'A two-take difference is not a trend. At least three fully ordered, source-verified, scoring-condition-comparable recordings are required even for an exploratory direction pattern.',
+      'Five or more such recordings permit a repeated-observation pattern label, but still do not prove durable singing skill change or causation.',
+      'Technique counts and vibrato quantity are non-monotonic observations; more or less is not automatically better.',
+      'F1 does not aggregate mixed-audio D2/F0 observations yet; those remain separate evidence.'
+    ]
+  };
+}
+async function exportF1HistoryPackage() {
+  const btn=$('#btn-f1-export'); if(btn)btn.disabled=true;
+  const note=$('#cmp-f1-result');
+  try{
+    if(note)note.innerHTML='<p class="small">同じsongIdの録音・評価証拠・E4 chronology制約を集約しています…</p>';
+    const pkg=await buildF1HistoryPackage();
+    const files=[
+      {name:'song_history.json',data:JSON.stringify(pkg,null,2)},
+      {name:'history_chronology.json',data:JSON.stringify({song:pkg.song,chronology:pkg.chronology,scoringConditionChain:pkg.scoringConditionChain,patternReadiness:pkg.patternReadiness},null,2)},
+      {name:'history_outcomes.csv',data:f1HistoryCsv(pkg)}
+    ];
+    const blob=SongScopeZip.createZip(files);
+    const stamp=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
+    const name=`songscope_history_${safeName(pkg.song.representativeTitle||'song')}_${stamp}.zip`;
+    const how=await saveBlob(blob,name);
+    if(note)note.innerHTML=`<p><b>F1曲履歴パッケージを書き出しました</b></p><p class="small mono">recordings ${pkg.song.recordingCount} / chronology ${escapeHtml(pkg.chronology.status)} / verified outcomes ${pkg.patternReadiness.sourceVerifiedStructuredOutcomeCount}</p><p class="small">pattern readiness: <b>${escapeHtml(pkg.patternReadiness.status)}</b>。2録音の差をtrendとは呼びません。画像・音声・frame単位データは含めないcompact exportです。</p>`;
+    if(how!=='cancelled')toast(`${name}を書き出しました`);
+  }catch(e){
+    console.error(e); if(note)note.innerHTML=`<p class="small">F1生成に失敗しました: ${escapeHtml((e&&e.message)||String(e))}</p>`; toast('F1曲履歴パッケージを作成できませんでした');
+  }finally{if(btn)btn.disabled=false;}
+}
+
 function d2WindowsCsv(pkg) {
   const head = [
     'window_index','reference_start_sec','reference_end_sec','pair_reference_start_sec','pair_reference_end_sec','pair_available_duration_sec','pair_coverage_ratio','comparison_coverage_status',
@@ -4325,6 +4714,7 @@ function wireCompare() {
   $('#btn-align-export').addEventListener('click', exportAlignmentDiagnostic);
   $('#btn-align-apply').addEventListener('click', applyResolvedAlignment);
   $('#btn-d2-export').addEventListener('click', exportD2DiagnosticPackage);
+  $('#btn-f1-export').addEventListener('click', exportF1HistoryPackage);
   $('#btn-context-order-a-first').addEventListener('click', () => setE4Chronology('a_first'));
   $('#btn-context-order-b-first').addEventListener('click', () => setE4Chronology('b_first'));
   $('#btn-context-order-clear').addEventListener('click', () => setE4Chronology('clear'));

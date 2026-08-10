@@ -1,4 +1,4 @@
-# SongScope v0.2 Phase E3
+# SongScope v0.2 Phase F1
 
 ### D1 build 02 — IndexedDB upgrade待機の修正
 - Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
@@ -18,8 +18,22 @@
 - Phase A-3までのF0/RMS/スペクトル計算ロジックは変更していません。
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
-- Schema Version: `0.10.0`
-- Build ID: `20260810-e3-01`
+- Schema Version: `0.12.0`
+- Build ID: `20260810-f1-01`
+
+
+## Phase F1 — Same-song History / Progression evidence
+
+### F1 build 01 — compact history package
+
+- 同じ `songId` の**別recording**だけを履歴として束ねる `song_history.json` を追加。`analysisHistory` の再解析runは別歌唱として数えません。
+- chronologyはE4のpair-level本人確認、user-confirmed recordedAt、日付が異なるsource-verified採点画像の日付を制約として集約します。複数の順序が可能なら `partially_ordered`、矛盾cycleがあれば `chronology_evidence_conflict_cycle` とし、無理に一列へ並べません。
+- 完全に順序が定まった場合だけ、隣接録音間の採点条件comparabilityを連鎖として確認します。全stepがconfirmed sameの場合だけ `comparable_chain`。
+- 2録音の差をtrendとは呼びません。3件以上のfully ordered / source-verified / comparableな履歴で初めて `exploratory_pattern_available`、5件以上で `repeated_observation_pattern_available` を許可します。これらも持続的な歌唱力改善の証明ではありません。
+- `history_outcomes.csv` と `history_chronology.json` を同梱します。compact exportなのでraw音声・採点画像・frame単位D2は含めません。必要な監査は単体ZIP/比較ZIPに戻れます。
+- 技法回数・ビブラート量はnon-monotonicのまま。F1ではD2のmixed-audio F0/RMSを履歴trendへ混ぜません。
+- DB_VER=5のまま。`audio-analysis-worker.js` / `alignment-worker.js` は変更しません。
+- App: `0.2.0-phaseF1` / Schema: `0.12.0` / Build: `20260810-f1-01`
 
 ## Phase E3 — pairwise outcome evidence
 
