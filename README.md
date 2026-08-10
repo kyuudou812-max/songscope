@@ -1,4 +1,4 @@
-# SongScope v0.2 Phase D2 Diagnostic
+# SongScope v0.2 Phase D2
 
 ### D1 build 02 — IndexedDB upgrade待機の修正
 - Phase D1でDB version 4→5へ更新する際、旧SongScopeのSafariタブ/PWAがDB接続を保持していると、`indexedDB.open()` が `blocked` のまま無期限待機し、「識別中 / 音声の同一性を確認しています…」で止まって見えるケースがあった。
@@ -19,9 +19,21 @@
 - D1は同じ`songId`・別raw音声のA/Bについてchromaからglobal offsetを推定し、`resolved / ambiguous / unresolved` を返します。`resolved` のときだけユーザー操作でoffsetへ反映できます。
 - `songId`が誤って分かれた場合は、A/B比較画面の「BをAと同じ曲にまとめる」で明示的に統合できます。
 - Schema Version: `0.6.2`
-- Build ID: `20260810-d2diag-03`
+- Build ID: `20260810-d2-01`
 
-## Phase D2 Diagnostic
+## Phase D2 — aligned observation comparison
+
+
+### D2 build 01 — metric semantics / interpretation guardrails
+
+- D1で揃えた同一区間・同一証拠量のwindowingを正式なD2基盤として採用。
+- `metric_catalog.json` を比較ZIPへ追加し、各指標の signal scope / allowed interpretation / prohibited interpretation を機械可読で保存。
+- `f0_candidate_hz` は **mixed-audio periodicity candidate** と明記し、true vocal F0 / vocal range / pitch accuracy としての解釈を禁止。
+- F0 candidate ratioはvoiced ratio/歌唱時間ではなくestimator evidence。ambiguity=noneも正しさを意味しない。
+- `rms_relative_db` は録音内相対値で、絶対音量・歌声の声量差としての解釈を禁止。
+- 録音条件のstored metadata一致/不一致/unknownを `recordingConditionComparison` に保存。
+- DAM score等の外部結果は `evaluationAnchors` として分離し、音響差の原因とはみなさない。
+- DB_VERは5のまま。audio-analysis-worker / alignment-workerは変更しない。
 
 ### D2 Diagnostic build 03 — Float32 frame-boundary fix
 - build 02で共通alignment区間そのものは正しくなったが、実機出力では6窓でA/BのframeCountが1 frame（0.02秒）ずれるケースが残った。

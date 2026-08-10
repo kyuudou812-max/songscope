@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Phase D2 Diagnostic  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Phase D2  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-phaseD2diag';
-const SCHEMA_VERSION = '0.6.2';
-const BUILD_ID = '20260810-d2diag-03';
+const APP_VERSION = '0.2.0-phaseD2';
+const SCHEMA_VERSION = '0.7.0';
+const BUILD_ID = '20260810-d2-01';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
 const ALIGN_MATCH_VERSION = 'global-offset-coarse-refine-v2';
@@ -2775,6 +2775,140 @@ function d2MapUserSegments(rows, side, offsetSec) {
     evidenceType: 'user_reported_segment'
   }));
 }
+function d2ReportedFieldComparison(field, aValue, bValue) {
+  const norm = v => String(v === null || v === undefined ? '' : v).trim();
+  const a = norm(aValue), b = norm(bValue);
+  let status = 'unknown';
+  if (a && b) status = a === b ? 'same_stored_metadata' : 'different_stored_metadata';
+  return { field, status, a: a || null, b: b || null, provenance: 'recording_metadata' };
+}
+function d2ConditionComparison(descA, descB) {
+  const a = (descA && descA.userMetadata) || {}, b = (descB && descB.userMetadata) || {};
+  const fields = [
+    d2ReportedFieldComparison('recordingSetupPreset', a.recordingSetupPreset, b.recordingSetupPreset),
+    d2ReportedFieldComparison('device', a.device, b.device),
+    d2ReportedFieldComparison('scoringMode', a.scoringMode, b.scoringMode),
+    d2ReportedFieldComparison('keyChange', a.keyChange, b.keyChange),
+    d2ReportedFieldComparison('octave', a.octave, b.octave)
+  ];
+  const known = fields.filter(x => x.status !== 'unknown');
+  const different = known.filter(x => x.status === 'different_stored_metadata');
+  let overallStatus = 'unknown';
+  if (different.length) overallStatus = 'stored_metadata_difference_present';
+  else if (known.length === fields.length) overallStatus = 'all_listed_fields_same_stored_metadata';
+  else if (known.length) overallStatus = 'partially_known_no_stored_difference';
+  return {
+    overallStatus,
+    fields,
+    note: 'This is metadata compatibility only. matching stored metadata does not prove identical acoustic conditions or user confirmation; unknown fields must remain unknown.'
+  };
+}
+function d2MetricCatalog() {
+  return {
+    schemaVersion: 'songscope-d2-metric-semantics-v1',
+    packageRole: 'interpretation_guardrails',
+    metrics: {
+      pairCoverage: {
+        source: 'alignment_and_recording_duration',
+        signalScope: 'time_mapping',
+        interpretationClass: 'structural_evidence',
+        allowedInterpretation: [
+          'How much common aligned time exists inside a nominal comparison window.',
+          'Whether A/B statistics were computed over full, partial, or no common interval.'
+        ],
+        prohibitedInterpretation: ['Singing quality', 'Pitch accuracy', 'Vocal stability']
+      },
+      rmsRelativeDb: {
+        source: 'audio_derived_mixed_signal',
+        signalScope: 'voice_plus_accompaniment_plus_room',
+        vocalSpecific: false,
+        normalization: "rms_db minus that recording's finite-RMS p95 reference; not a shared calibrated SPL scale",
+        interpretationClass: 'descriptive_only',
+        allowedInterpretation: [
+          'Describe the within-recording relative level distribution in the same aligned song interval.',
+          'Compare distribution shape cautiously when recording conditions are sufficiently similar.'
+        ],
+        prohibitedInterpretation: [
+          'Absolute loudness difference between recordings',
+          'Singer vocal volume or vocal power',
+          'Improvement or deterioration by itself'
+        ]
+      },
+      f0CandidateHz: {
+        source: 'audio_derived_mixed_signal_yin_candidate',
+        signalScope: 'voice_plus_accompaniment_plus_room',
+        vocalSpecific: false,
+        interpretationClass: 'diagnostic_only',
+        safeLabel: 'mixed_audio_periodicity_candidate_hz',
+        allowedInterpretation: [
+          'Describe the distribution of retained periodicity candidates produced by the current estimator.',
+          'Use together with candidate amount, ambiguity evidence, alignment, and other anchors for diagnostic reasoning.'
+        ],
+        prohibitedInterpretation: [
+          'True vocal F0',
+          'Vocal range',
+          'Pitch accuracy',
+          'The singer sang higher or lower',
+          'Improvement or deterioration by itself'
+        ]
+      },
+      f0CandidateRatio: {
+        source: 'estimator_evidence',
+        interpretationClass: 'diagnostic_only',
+        safeLabel: 'mixed_audio_periodicity_candidate_ratio',
+        allowedInterpretation: ['Fraction of available analysis frames that produced a retained F0 candidate under the current estimator settings.'],
+        prohibitedInterpretation: ['Voiced ratio', 'Singing duration', 'Correct-pitch ratio', 'Vocal activity probability']
+      },
+      f0Ambiguity: {
+        source: 'heuristic_estimator_diagnostic',
+        interpretationClass: 'diagnostic_only',
+        allowedInterpretation: ['How often the retained candidate was accompanied by a currently detected harmonic/integer-ratio ambiguity pattern.'],
+        prohibitedInterpretation: [
+          'Probability that F0 is wrong',
+          'ambiguity=none means correct',
+          'A direct singing-quality score'
+        ]
+      },
+      userReportedMarkersAndSegments: {
+        source: 'user_reported',
+        interpretationClass: 'evaluation_anchor',
+        allowedInterpretation: ['Use as user-reported locations of good/concern/other observations after alignment.'],
+        prohibitedInterpretation: ['Objective acoustic ground truth']
+      },
+      damScore: {
+        source: 'recording_metadata_when_present',
+        interpretationClass: 'outcome_anchor',
+        allowedInterpretation: ['Use as an external scoring outcome when present, while checking machine/mode/key and other provenance.'],
+        prohibitedInterpretation: ['Direct acoustic explanation of why the score changed']
+      }
+    }
+  };
+}
+function d2EvaluationAnchors(descA, descB) {
+  const a = (descA && descA.userMetadata) || {}, b = (descB && descB.userMetadata) || {};
+  const parseScore = v => {
+    if (v === null || v === undefined || String(v).trim() === '') return null;
+    const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isFinite(n) ? +n.toFixed(3) : null;
+  };
+  const scoreA = parseScore(a.damScore), scoreB = parseScore(b.damScore);
+  let scoreStatus = 'unavailable';
+  if (scoreA !== null && scoreB !== null) {
+    const sameKnown = key => a[key] && b[key] && String(a[key]).trim() === String(b[key]).trim();
+    const requiredReportedSame = ['device', 'scoringMode', 'keyChange', 'octave'];
+    scoreStatus = requiredReportedSame.every(sameKnown) ? 'available_stored_metadata_conditions_match' : 'available_comparability_not_established';
+  }
+  return {
+    damScore: {
+      status: scoreStatus,
+      a: scoreA,
+      b: scoreB,
+      deltaBminusA: scoreA !== null && scoreB !== null ? +(scoreB - scoreA).toFixed(3) : null,
+      provenance: { source: 'recording_metadata', confirmation: 'unknown' },
+      note: 'Score delta is an outcome observation only. It does not identify the acoustic cause of a change.'
+    }
+  };
+}
 function d2WindowsCsv(pkg) {
   const head = [
     'window_index','reference_start_sec','reference_end_sec','pair_reference_start_sec','pair_reference_end_sec','pair_available_duration_sec','pair_coverage_ratio','comparison_coverage_status',
@@ -2838,17 +2972,19 @@ async function buildD2DiagnosticPackage() {
   const zeroPair = windows.filter(w => w.pairCoverageRatio === 0).length;
   const candidateBoth = windows.filter(w => w.a.f0CandidateEvidence.candidateFrameCount > 0 && w.b.f0CandidateEvidence.candidateFrameCount > 0 && w.pairCoverageRatio > 0).length;
   return {
-    schemaVersion: 'songscope-d2diag-0.1.2',
+    schemaVersion: 'songscope-d2-0.2.0',
     packageType: 'pairwise_observation_comparison',
-    status: 'diagnostic_only',
+    status: 'aligned_observation_comparison_ready',
     generatedAt: nowIso(),
     appVersion: APP_VERSION,
     buildId: BUILD_ID,
     comparisonPrinciples: [
       'This package reports aligned observations and evidence quantity; it does not label improvement.',
       'Per-window A/B observations are aggregated only over the common aligned interval shared by both recordings.',
-      'F0 candidate values are not corrected or deleted because of ambiguity flags; ambiguity is reported separately as evidence.',
-      'rms_relative_db is normalized within each recording and must not be interpreted as absolute loudness difference.',
+      'f0_candidate_hz is a mixed-audio periodicity candidate, not true vocal F0, vocal range, or pitch accuracy.',
+      'F0 ambiguity flags are heuristic diagnostics: ambiguity=none does not mean correct, and ambiguity does not provide an error probability.',
+      'F0 candidate ratio is estimator evidence, not voiced ratio or singing duration.',
+      'rms_relative_db is normalized within each recording and must not be interpreted as absolute loudness or singer vocal volume difference.',
       'Missing or weak evidence remains missing/weak rather than being imputed.'
     ],
     alignment: {
@@ -2878,6 +3014,16 @@ async function buildD2DiagnosticPackage() {
     },
     recordingA: d2RecordingDescriptor('a'),
     recordingB: d2RecordingDescriptor('b'),
+    metricCatalog: d2MetricCatalog(),
+    recordingConditionComparison: d2ConditionComparison(d2RecordingDescriptor('a'), d2RecordingDescriptor('b')),
+    evaluationAnchors: d2EvaluationAnchors(d2RecordingDescriptor('a'), d2RecordingDescriptor('b')),
+    comparisonReadiness: {
+      temporalAlignment: 'resolved',
+      temporalWindowing: 'validated_same_aligned_interval',
+      vocalSpecificAcousticMetrics: 'not_available',
+      outcomeEvaluation: 'requires_external_anchor',
+      overall: 'observation_comparison_only'
+    },
     overlap: {
       referenceStartSec: +overlapStartSec.toFixed(3),
       referenceEndSec: +overlapEndSec.toFixed(3),
@@ -2909,6 +3055,7 @@ async function exportD2DiagnosticPackage() {
     if (note) note.innerHTML = '<p class="small">resolved D1を読み込み、10秒窓 / 5秒hopで同一区間の観測証拠を集計しています…</p>';
     const pkg = await buildD2DiagnosticPackage();
     const files = [
+      { name: 'metric_catalog.json', data: JSON.stringify(pkg.metricCatalog, null, 2) },
       { name: 'comparison_summary.json', data: JSON.stringify(pkg, null, 2) },
       { name: 'comparison_windows.csv', data: d2WindowsCsv(pkg) }
     ];
@@ -2916,7 +3063,7 @@ async function exportD2DiagnosticPackage() {
     const stamp = new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
     const name = `songscope_compare_${safeName(pkg.recordingA.title)}_vs_${safeName(pkg.recordingB.title)}_${stamp}.zip`;
     const how = await saveBlob(blob, name);
-    if (note) note.innerHTML = `<p><b>D2 Diagnosticを書き出しました</b></p><p class="small mono">offset ${pkg.alignment.offsetSec >= 0 ? '+' : ''}${pkg.alignment.offsetSec.toFixed(1)} s / overlap ${pkg.overlap.durationSec.toFixed(1)} s / windows ${pkg.evidenceSummary.windowCount} / full pair ${pkg.evidenceSummary.fullPairCoverageWindowCount}</p><p class="small">まだ改善判定はしません。F0 ambiguityを含む候補値は訂正せず、証拠量と別に保持しています。</p>`;
+    if (note) note.innerHTML = `<p><b>D2比較パッケージを書き出しました</b></p><p class="small mono">offset ${pkg.alignment.offsetSec >= 0 ? '+' : ''}${pkg.alignment.offsetSec.toFixed(1)} s / overlap ${pkg.overlap.durationSec.toFixed(1)} s / windows ${pkg.evidenceSummary.windowCount} / full pair ${pkg.evidenceSummary.fullPairCoverageWindowCount}</p><p class="small">改善判定はしません。F0 candidateは混合音声の周期候補として扱い、metric_catalog.jsonに解釈禁止事項を明記しています。</p>`;
     if (how !== 'cancelled') toast(`${name}を書き出しました`);
   } catch (e) {
     console.error(e);
