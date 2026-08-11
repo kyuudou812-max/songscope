@@ -641,3 +641,10 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - 各画像を `Blob -> ArrayBuffer -> Uint8Array` に変換し、保存済みfileSize / SHA-256と再照合してからZIP entryを生成。
 - `zip.js` は string / ArrayBuffer / TypedArray 以外を拒否し、Blob等の未対応型がheader size=0の不正ZIPを黙って生成する経路を遮断。
 - BUILD_ID: `20260811-g0-05`。
+
+
+## G0 build07
+- iPhone-first DAM scoring evidence layout.
+- Audit-critical evidenceSetId, binding status, source verification, and user review are no longer ellipsized.
+- Evidence actions use a responsive 2-column grid (1 column on very narrow screens).
+- No evidence model, binding semantics, or scoring extraction semantics changed.

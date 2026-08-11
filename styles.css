@@ -263,3 +263,51 @@ input[type=range]::-webkit-slider-thumb{
 @media (prefers-color-scheme: dark){.toast{background:rgba(80,80,84,.95)}}
 
 [hidden]{display:none !important;}
+
+/* G0 build07: iPhone-first layout for standalone DAM scoring evidence.
+   Audit-critical states must remain readable on narrow screens. */
+.scoring-evidence-item{
+  display:block;
+  padding:14px;
+}
+.scoring-evidence-main{
+  width:100%;
+  min-width:0;
+}
+.scoring-evidence-id{
+  white-space:normal;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  line-height:1.25;
+}
+.scoring-evidence-meta,
+.scoring-evidence-status{
+  white-space:normal;
+  overflow:visible;
+  text-overflow:clip;
+  overflow-wrap:anywhere;
+  line-height:1.45;
+  margin-top:5px;
+}
+.scoring-evidence-status{
+  color:var(--label);
+  font-weight:600;
+}
+.scoring-evidence-actions{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+  margin-top:12px;
+  width:100%;
+}
+.scoring-evidence-actions .mini{
+  width:100%;
+  min-width:0;
+  min-height:44px;
+  white-space:normal;
+  line-height:1.2;
+  padding:9px 8px;
+}
+@media (max-width:380px){
+  .scoring-evidence-actions{grid-template-columns:1fr;}
+}

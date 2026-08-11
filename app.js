@@ -10,7 +10,7 @@
 
 const APP_VERSION = '0.2.0-g0';
 const SCHEMA_VERSION = '0.16.3';
-const BUILD_ID = '20260811-g0-06';
+const BUILD_ID = '20260811-g0-07';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -2982,7 +2982,7 @@ async function renderStandaloneEvidenceSets() {
     const p=standaloneEvidenceSetPublic(r); const sd=standaloneStructuredDescriptor(r);
     const structuredText=sd.status==='available' ? `構造化: ${sd.verification.status} ／ 内容確認: ${sd.userReview&&sd.userReview.status||'unreviewed'}` : '構造化: 未登録';
     const reviewBtn=sd.status==='available' && sd.verification.status==='source_verified' && (!sd.userReview || sd.userReview.status!=='user_confirmed') ? `<button class="mini" data-ev-confirm="${escapeHtml(p.evidenceSetId)}">抽出内容を確認済み</button>` : '';
-    return `<div class="item"><div class="item-main"><div class="item-title">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub">${p.imageCount}枚 ／ ${escapeHtml(p.bindingStatus)} ／ ${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub">${escapeHtml(structuredText)}</div></div><div class="item-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">抽出ZIP</button><button class="mini" data-ev-structured="${escapeHtml(p.evidenceSetId)}">構造化JSON</button>${reviewBtn}<button class="mini danger" data-ev-delete="${escapeHtml(p.evidenceSetId)}">削除</button></div></div>`;
+    return `<div class="item scoring-evidence-item"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${p.imageCount}枚 ／ binding: ${escapeHtml(p.bindingStatus)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div></div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">抽出ZIP</button><button class="mini" data-ev-structured="${escapeHtml(p.evidenceSetId)}">構造化JSON</button>${reviewBtn}<button class="mini danger" data-ev-delete="${escapeHtml(p.evidenceSetId)}">削除</button></div></div>`;
   }).join('');
   $$('[data-ev-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.evExport)));
   $$('[data-ev-structured]').forEach(b=>b.addEventListener('click',()=>{ const inp=$('#scoring-structured-input'); inp.dataset.evidenceSetId=b.dataset.evStructured; inp.click(); }));
