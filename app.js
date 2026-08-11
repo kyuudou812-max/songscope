@@ -9,12 +9,22 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.16.3';
-const BUILD_ID = '20260811-g0-07';
+const SCHEMA_VERSION = '0.16.4';
+const BUILD_ID = '20260811-g0-08';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
-const STANDALONE_SCORING_RESULT_SCHEMA = 'songscope-external-scoring-result-v1';
+const STANDALONE_SCORING_RESULT_SCHEMA_LEGACY = 'songscope-external-scoring-result-v1';
+const STANDALONE_SCORING_RESULT_SCHEMA = 'songscope-external-scoring-result-v2';
+const STANDALONE_SCORING_FIELD_KEYS = [
+  'title','artist','scoringMode','scoringPerformedAt','overallScore','personalBest','nationalAverage','ranking','heartType',
+  'pitchAccuracy','expressionScore','dynamicsScore','listeningScore','bonus','techniques','vibrato',
+  'longToneSkillDiscrete','vibratoSkillDiscrete','stabilityDiscrete','rhythmDiscrete',
+  'vocalRange','pitchGraphVisibleMarkers','analysisReportText'
+];
+const STANDALONE_SCORING_FIELD_STATUSES = new Set([
+  'extracted','not_visible_in_images','unreadable','visible_not_extracted','not_applicable'
+]);
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v2';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
 const ALIGN_FEATURE_VERSION = 'stft-chroma-log-l2-smooth-v1';
@@ -418,6 +428,7 @@ function openSheet(id) {
 function closeSheet() {
   $('#sheet-wrap').hidden = true;
   $$('.sheet').forEach(s => { s.hidden = true; });
+  if (typeof clearStandaloneReviewImageUrls === 'function') clearStandaloneReviewImageUrls();
 }
 function busy(title, msg, pct) {
   $('#busy-title').textContent = title;
@@ -1501,11 +1512,12 @@ function renderEvaluationAnchor() {
     const v = structured.verification && structured.verification.status === 'source_verified' ? '画像SHA一致' : `要確認:${structured.verification && structured.verification.status || 'unverified'}`;
     parts.push(`構造化評価: あり (${v}${s})`);
   }
-  box.innerHTML = `<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small">G0はDAMデンモクの採点履歴スクリーンショットを1採点結果=1証拠セットとして扱います。複数枚可。SongScopeはOCRせず、外部JSONは録音IDと全画像SHA-256集合が一致した場合だけ検証済みにします。</p>`;
-  const rm = $('#btn-eval-image-remove'); if (rm) rm.hidden = imageSet.status !== 'available';
-  const srm = $('#btn-eval-json-remove'); if (srm) srm.hidden = structured.status !== 'available';
+  box.innerHTML = `<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small"><b>旧方式（移行待ち）:</b> 録音への直接添付はbuild08で停止しました。既存証拠は削除せず、build09で独立scoringEvidenceSetsへ非破壊移行します。</p>`;
+  const rm = $('#btn-eval-image-remove'); if (rm) rm.hidden = true;
+  const srm = $('#btn-eval-json-remove'); if (srm) srm.hidden = true;
 }
 async function saveEvaluationImages(files) {
+  throw new Error('build08では録音への採点証拠の直接追加・変更を停止しています。ホームのDAMデンモク採点履歴を使用してください。');
   if (!state.rec || !files || !files.length) return;
   try {
     busy('評価アンカー', 'DAMデンモク採点履歴を保存しています…', 20);
@@ -1539,6 +1551,7 @@ async function saveEvaluationImages(files) {
   } catch (e) { closeSheet(); console.error(e); toast((e&&e.message)||'採点履歴画像を保存できませんでした'); }
 }
 async function removeEvaluationImage() {
+  throw new Error('build08では録音への採点証拠の直接追加・変更を停止しています。ホームのDAMデンモク採点履歴を使用してください。');
   if (!state.rec || !(state.evaluationEvidenceImages||[]).length) return;
   if (!confirm('この録音に紐づけたDAMデンモク採点履歴画像をすべて外しますか？')) return;
   try {
@@ -1549,6 +1562,7 @@ async function removeEvaluationImage() {
 }
 
 async function saveStructuredEvaluation(file) {
+  throw new Error('build08では録音への採点証拠の直接追加・変更を停止しています。ホームのDAMデンモク採点履歴を使用してください。');
   if (!state.rec || !file) return;
   if (file.size > 1024 * 1024) { toast('評価JSONが大きすぎます（1MB以下）'); return; }
   try {
@@ -1578,6 +1592,7 @@ async function saveStructuredEvaluation(file) {
   }
 }
 async function removeStructuredEvaluation() {
+  throw new Error('build08では録音への採点証拠の直接追加・変更を停止しています。ホームのDAMデンモク採点履歴を使用してください。');
   if (!state.rec || !state.evaluationStructured) return;
   if (!confirm('この録音に紐づけた構造化評価JSONを外しますか？')) return;
   try {
@@ -2818,6 +2833,9 @@ async function standaloneEvidenceSetId(images) {
   const h = await sha256Hex(bytes.buffer);
   return 'evs_' + h.slice(0, 24);
 }
+function standaloneLifecycleStatus(set) {
+  return set && set.lifecycleStatus === 'archived' ? 'archived' : 'active';
+}
 function standaloneEvidenceSetPublic(set) {
   if (!set) return null;
   return {
@@ -2826,16 +2844,34 @@ function standaloneEvidenceSetPublic(set) {
     source: set.source,
     bindingStatus: set.bindingStatus || 'unbound',
     boundRecordingId: set.boundRecordingId || null,
+    lifecycleStatus: standaloneLifecycleStatus(set),
+    archivedAt: set.archivedAt || null,
     createdAt: set.createdAt,
     imageCount: (set.images || []).length,
     images: (set.images || []).map(x => ({ imageId:x.imageId, meta:x.meta })),
     interpretation: 'A DAMデンモク scoring-history evidence set is an independent primary evidence object. It is not a recording and must not be treated as the same performance until an explicit binding is confirmed.'
   };
 }
+function standaloneFieldStatusTemplate() {
+  const out={};
+  for (const key of STANDALONE_SCORING_FIELD_KEYS) out[key]=null;
+  return out;
+}
+function standaloneResultTemplate() {
+  return {
+    title:null, artist:null, scoringMode:null,
+    scoringPerformedAt:null,
+    overallScore:null, personalBest:null, nationalAverage:null, ranking:null, heartType:null,
+    pitchAccuracy:null, expressionScore:null, dynamicsScore:null, listeningScore:null,
+    bonus:null, techniques:null, vibrato:null, longToneSkillDiscrete:null,
+    vibratoSkillDiscrete:null, stabilityDiscrete:null, rhythmDiscrete:null,
+    vocalRange:null, pitchGraphVisibleMarkers:null, analysisReportText:null
+  };
+}
 function standaloneExtractionRequest(set) {
   const pub = standaloneEvidenceSetPublic(set);
   return {
-    schemaVersion: 'songscope-evaluation-extraction-request-v4',
+    schemaVersion: 'songscope-evaluation-extraction-request-v5',
     evidenceSet: pub,
     requestedOutputSchema: STANDALONE_SCORING_RESULT_SCHEMA,
     requestedOutputTemplate: {
@@ -2848,13 +2884,18 @@ function standaloneExtractionRequest(set) {
         images: pub.images.map(x => ({ imageId:x.imageId, sha256:x.meta && x.meta.sha256 || null }))
       },
       extraction: { extractedBy:null, extractedAt:null, notes:null },
-      result: {
-        title:null, artist:null, scoringMode:null, scoringPerformedAt:null,
-        overallScore:null, personalBest:null, nationalAverage:null, ranking:null, heartType:null,
-        pitchAccuracy:null, expressionScore:null, dynamicsScore:null, listeningScore:null,
-        bonus:null, techniques:null, vibrato:null, longToneSkillDiscrete:null,
-        vibratoSkillDiscrete:null, stabilityDiscrete:null, rhythmDiscrete:null,
-        vocalRange:null, pitchGraphVisibleMarkers:null, analysisReportText:null
+      fieldStatus: standaloneFieldStatusTemplate(),
+      result: standaloneResultTemplate()
+    },
+    fieldStatusPolicy: {
+      requiredForEveryRequestedField: true,
+      allowed: Array.from(STANDALONE_SCORING_FIELD_STATUSES),
+      meanings: {
+        extracted:'Value/state was explicitly visible and was transcribed into result.',
+        not_visible_in_images:'The requested field is not visible in any supplied screenshot.',
+        unreadable:'The field is visible but cannot be read reliably.',
+        visible_not_extracted:'The field is visibly present but was intentionally or accidentally not structured; this is a known extraction gap.',
+        not_applicable:'The field does not apply to this scoring mode/result.'
       }
     },
     bindingPolicy: {
@@ -2865,43 +2906,78 @@ function standaloneExtractionRequest(set) {
     },
     extractionRules: [
       'Treat all images as DAMデンモク screenshots belonging to one scoring result.',
-      'Extract only explicitly readable text, numeric values, counts, discrete lit/star states, and visibly selected discrete positions.',
+      'Return every sourceEvidence.images item with the supplied imageId AND its matching SHA-256. Do not swap imageId/SHA pairs.',
+      'For every requested field, set exactly one fieldStatus value. Never use null alone to hide whether a field was absent, unreadable, or missed.',
+      'Extract only explicitly readable text, numeric values, counts, discrete lit/unlit states, and visibly selected discrete positions.',
+      'Discrete lit/unlit counts (for example 安定性, ロングトーンの上手さ, ビブラートの上手さ, リズム position) are countable observed states, not inferred hidden geometry. Store observed counts/positions without converting them to percentages or invented scores.',
       'Do not infer hidden numeric values from bars, radar charts, scales, or graphical geometry.',
+      'If scoringPerformedAt is visible, store it as {localDateTime,timeZone,precision,source}. localDateTime is the displayed local clock value; timeZone must be null unless a time zone/offset is explicitly displayed. Never infer JST or an offset from context.',
       'Keep scoringPerformedAt separate from iPhone recordedAt.',
       'Separate overallScore from personalBest when both are visible.',
       'Preserve DAM analysis-report text as external-system text, not as SongScope diagnosis.',
       'Do not map pitch-graph x-position to audio seconds.',
       'Do not make cross-take judgments, causal claims, or practice recommendations.'
     ],
-    requestedFields: {
-      title:null, artist:null, scoringMode:null, scoringPerformedAt:null,
-      overallScore:null, personalBest:null, nationalAverage:null, ranking:null,
-      pitchAccuracy:null, expressionScore:null, dynamicsScore:null, listeningScore:null,
-      bonus:null, techniques:null, vibrato:null, longToneSkillDiscrete:null,
-      vibratoSkillDiscrete:null, stabilityDiscrete:null, rhythmDiscrete:null,
-      vocalRange:null, pitchGraphVisibleMarkers:null, analysisReportText:null
-    }
+    requestedFields: standaloneFieldStatusTemplate()
   };
 }
+function standaloneCurrentImageBindings(set) {
+  return (set && set.images || []).map(x => ({
+    imageId:String(x && x.imageId || ''),
+    sha256:String(x && x.meta && x.meta.sha256 || '').toLowerCase()
+  })).filter(x=>x.imageId && x.sha256);
+}
+function standaloneDocImageBindings(doc) {
+  return (doc && doc.sourceEvidence && Array.isArray(doc.sourceEvidence.images) ? doc.sourceEvidence.images : [])
+    .map(x => ({imageId:String(x && x.imageId || ''),sha256:String(x && x.sha256 || '').toLowerCase()}))
+    .filter(x=>x.imageId && x.sha256);
+}
+function imageBindingKey(x) { return String(x.imageId)+'\u0000'+String(x.sha256).toLowerCase(); }
+function sameImageBindingSet(a,b) {
+  const aa=(a||[]).map(imageBindingKey).sort();
+  const bb=(b||[]).map(imageBindingKey).sort();
+  return aa.length===bb.length && new Set(aa).size===aa.length && new Set(bb).size===bb.length && aa.every((x,i)=>x===bb[i]);
+}
+// compatibility helpers used in older exports/descriptors
 function standaloneCurrentShaList(set) {
-  return (set && set.images || []).map(x => String(x && x.meta && x.meta.sha256 || '').toLowerCase()).filter(Boolean);
+  return standaloneCurrentImageBindings(set).map(x=>x.sha256);
 }
 function standaloneDocShaList(doc) {
-  return (doc && doc.sourceEvidence && Array.isArray(doc.sourceEvidence.images) ? doc.sourceEvidence.images : [])
-    .map(x => String(x && x.sha256 || '').toLowerCase()).filter(Boolean);
+  return standaloneDocImageBindings(doc).map(x=>x.sha256);
+}
+function validateScoringPerformedAtObservation(value) {
+  if (!value || typeof value!=='object' || Array.isArray(value)) throw new Error('scoringPerformedAtは構造化された観測日時である必要があります');
+  const local=String(value.localDateTime||'');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(local)) throw new Error('scoringPerformedAt.localDateTimeの形式が正しくありません');
+  if (!['second','minute'].includes(String(value.precision||''))) throw new Error('scoringPerformedAt.precisionが未対応です');
+  if (String(value.source||'')!=='displayed_by_dam_denmoku') throw new Error('scoringPerformedAt.sourceが正しくありません');
+  if (value.timeZone !== null && value.timeZone !== undefined && typeof value.timeZone !== 'string') throw new Error('scoringPerformedAt.timeZoneの形式が正しくありません');
 }
 function validateStandaloneStructuredScoringResult(doc, set) {
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new Error('構造化採点JSONの形式が正しくありません');
-  if (doc.schemaVersion !== STANDALONE_SCORING_RESULT_SCHEMA) throw new Error('未対応の構造化採点JSON schemaです');
+  if (doc.schemaVersion !== STANDALONE_SCORING_RESULT_SCHEMA) throw new Error('build08ではstructured scoring schema v2が必要です');
   if (!set || !set.evidenceSetId || doc.evidenceSetId !== set.evidenceSetId) throw new Error('この採点証拠セット用のJSONではありません');
   if (doc.recordingId) throw new Error('未紐付け採点結果にrecordingIdを含めることはできません');
   const src=doc.sourceEvidence;
   if (!src || src.type !== 'scoring_evidence_set' || src.evidenceSetId !== set.evidenceSetId) throw new Error('sourceEvidenceのevidenceSetIdが一致しません');
   if (src.sourceApp && src.sourceApp !== 'dam_denmoku') throw new Error('G0で対応するsourceはdam_denmokuのみです');
-  const current=standaloneCurrentShaList(set);
-  const supplied=standaloneDocShaList(doc);
-  if (!current.length || !sameStringSet(current,supplied)) throw new Error('元画像SHA-256集合が現在の採点証拠セットと一致しません');
+  const current=standaloneCurrentImageBindings(set);
+  const supplied=standaloneDocImageBindings(doc);
+  if (!current.length || !sameImageBindingSet(current,supplied)) throw new Error('元画像のimageId↔SHA-256対応が現在の採点証拠セットと一致しません');
   if (!doc.result || typeof doc.result !== 'object' || Array.isArray(doc.result)) throw new Error('構造化採点JSONにresultがありません');
+  if (!doc.fieldStatus || typeof doc.fieldStatus!=='object' || Array.isArray(doc.fieldStatus)) throw new Error('fieldStatusがありません');
+  const allowedKeys=new Set(STANDALONE_SCORING_FIELD_KEYS);
+  for (const key of Object.keys(doc.result)) if (!allowedKeys.has(key)) throw new Error(`result.${key}はschema v2のrequested fieldではありません`);
+  for (const key of Object.keys(doc.fieldStatus)) if (!allowedKeys.has(key)) throw new Error(`fieldStatus.${key}はschema v2のrequested fieldではありません`);
+  for (const key of STANDALONE_SCORING_FIELD_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(doc.fieldStatus,key)) throw new Error(`fieldStatus.${key}がありません`);
+    const st=String(doc.fieldStatus[key]||'');
+    if (!STANDALONE_SCORING_FIELD_STATUSES.has(st)) throw new Error(`fieldStatus.${key}が未対応です`);
+    const value=doc.result[key];
+    if (st==='extracted' && (value===null || value===undefined)) throw new Error(`${key}はextractedですがresultが空です`);
+    if (st!=='extracted' && value!==null && value!==undefined) throw new Error(`${key}は${st}ですがresultに値があります`);
+  }
+  if (doc.fieldStatus.scoringPerformedAt==='extracted') validateScoringPerformedAtObservation(doc.result.scoringPerformedAt);
   return true;
 }
 function standaloneStructuredDescriptor(set) {
@@ -2909,14 +2985,20 @@ function standaloneStructuredDescriptor(set) {
   const doc=structuredEvaluationDocument(stored);
   if (!doc) return {status:'unavailable',verification:{status:'unavailable'},userReview:(set&&set.structuredScoringUserReview)||{status:'unreviewed'}};
   const evidenceSetIdMatch=doc.evidenceSetId===set.evidenceSetId && doc.sourceEvidence && doc.sourceEvidence.evidenceSetId===set.evidenceSetId;
-  const sourceEvidenceMatch=sameStringSet(standaloneCurrentShaList(set),standaloneDocShaList(doc));
+  const sourceEvidenceMatch=sameImageBindingSet(standaloneCurrentImageBindings(set),standaloneDocImageBindings(doc));
   const sourceAppMatch=!doc.sourceEvidence || !doc.sourceEvidence.sourceApp || doc.sourceEvidence.sourceApp==='dam_denmoku';
   const verificationStatus=(evidenceSetIdMatch && sourceEvidenceMatch && sourceAppMatch) ? 'source_verified' : 'source_mismatch';
+  const schemaCurrent=doc.schemaVersion===STANDALONE_SCORING_RESULT_SCHEMA;
+  let review=(set&&set.structuredScoringUserReview)||{status:'unreviewed'};
+  if (!schemaCurrent && review.status && review.status!=='unreviewed') review=Object.assign({},review,{legacyStatus:review.status,status:'legacy_review_needs_reverification'});
+  const fs=doc.fieldStatus && typeof doc.fieldStatus==='object' ? doc.fieldStatus : null;
+  const knownGapFields=fs ? STANDALONE_SCORING_FIELD_KEYS.filter(k=>fs[k]==='visible_not_extracted') : [];
   return {
-    status:'available', schemaVersion:doc.schemaVersion||null, evidenceSetId:doc.evidenceSetId||null,
-    sourceEvidence:doc.sourceEvidence||null, extraction:doc.extraction||null, result:doc.result||null,
-    verification:{status:verificationStatus,evidenceSetIdMatch,sourceEvidenceMatch,sourceAppMatch,currentImageSha256s:standaloneCurrentShaList(set)},
-    userReview:set.structuredScoringUserReview||{status:'unreviewed'}, importMeta:stored&&stored.importMeta||null
+    status:'available', schemaVersion:doc.schemaVersion||null, schemaCurrent,
+    evidenceSetId:doc.evidenceSetId||null, sourceEvidence:doc.sourceEvidence||null,
+    extraction:doc.extraction||null, fieldStatus:fs, result:doc.result||null,
+    verification:{status:verificationStatus,evidenceSetIdMatch,sourceEvidenceMatch,sourceAppMatch,currentImageBindings:standaloneCurrentImageBindings(set)},
+    userReview:review, knownGapFields, importMeta:stored&&stored.importMeta||null
   };
 }
 async function importStandaloneStructuredResult(evidenceSetId,file) {
@@ -2940,7 +3022,17 @@ async function confirmStandaloneStructuredResult(evidenceSetId) {
   if (!set || !set.structuredScoringResult) throw new Error('先に構造化採点JSONを読み込んでください');
   const desc=standaloneStructuredDescriptor(set);
   if (desc.verification.status!=='source_verified') throw new Error('元画像とのsource verificationが通っていません');
-  set.structuredScoringUserReview={status:'user_confirmed',confirmedAt:nowIso(),source:'explicit_user_review',appVersion:APP_VERSION,buildId:BUILD_ID};
+  if (!desc.schemaCurrent || !desc.fieldStatus) throw new Error('schema v2で再抽出してから確認してください');
+  const knownGapFields=STANDALONE_SCORING_FIELD_KEYS.filter(k=>desc.fieldStatus[k]==='visible_not_extracted');
+  set.structuredScoringUserReview={
+    status:knownGapFields.length?'user_confirmed_with_known_gaps':'user_confirmed',
+    valueReviewStatus:'user_confirmed',
+    coverageReviewStatus:knownGapFields.length?'known_visible_gaps':'no_known_visible_gaps',
+    reviewedFieldCount:STANDALONE_SCORING_FIELD_KEYS.length,
+    knownGapFields,
+    confirmedAt:nowIso(),source:'explicit_user_review_after_field_by_field_display',
+    appVersion:APP_VERSION,buildId:BUILD_ID
+  };
   set.updatedAt=nowIso();
   await dbPut('scoringEvidenceSets',set);
 }
@@ -2967,27 +3059,117 @@ async function importStandaloneScoringEvidence(files) {
     schemaVersion:'songscope-scoring-evidence-set-v1',
     source:{provider:'DAM',application:'DAMデンモク',sourceKey:'dam_denmoku'},
     bindingStatus:'unbound', boundRecordingId:null,
+    lifecycleStatus:'active',
     createdAt:nowIso(), updatedAt:nowIso(), images:arr,
     note:'Imported independently from recordings. Explicit binding is required before treating this scoring result as the outcome of a recording.'
   };
   await dbPut('scoringEvidenceSets',set);
   return {set,duplicate:false};
 }
+let showArchivedScoringEvidence=false;
+const STANDALONE_FIELD_LABELS={
+  title:'曲名',artist:'歌手名',scoringMode:'採点モード',scoringPerformedAt:'DAM表示の採点日時',
+  overallScore:'総合点',personalBest:'自己ベスト/最高点',nationalAverage:'全国平均',ranking:'順位',heartType:'Heartタイプ',
+  pitchAccuracy:'音程正確率',expressionScore:'表現力',dynamicsScore:'抑揚',listeningScore:'聴感',
+  bonus:'ボーナス',techniques:'テクニック',vibrato:'ビブラート',
+  longToneSkillDiscrete:'ロングトーン上手さ',vibratoSkillDiscrete:'ビブラート上手さ',
+  stabilityDiscrete:'安定性',rhythmDiscrete:'リズム',vocalRange:'声域',
+  pitchGraphVisibleMarkers:'音程グラフ可視マーカー',analysisReportText:'DAM分析レポート'
+};
+const FIELD_STATUS_LABELS={
+  extracted:'抽出済み',not_visible_in_images:'画像に表示なし',unreadable:'表示あり・判読不能',
+  visible_not_extracted:'表示あり・未抽出',not_applicable:'対象外'
+};
+function standaloneReviewValueText(value) {
+  if (value===null || value===undefined) return '—';
+  if (typeof value==='string' || typeof value==='number' || typeof value==='boolean') return String(value);
+  try { return JSON.stringify(value,null,2); } catch(e) { return String(value); }
+}
+let standaloneReviewImageUrls=[];
+function clearStandaloneReviewImageUrls() {
+  for (const url of standaloneReviewImageUrls) { try { URL.revokeObjectURL(url); } catch(e){} }
+  standaloneReviewImageUrls=[];
+  const box=$('#scoring-review-images'); if (box) box.innerHTML='';
+}
+async function openStandaloneStructuredReview(evidenceSetId) {
+  const set=await dbGet('scoringEvidenceSets',evidenceSetId);
+  if (!set) throw new Error('採点証拠セットが見つかりません');
+  const desc=standaloneStructuredDescriptor(set);
+  if (desc.verification.status!=='source_verified') throw new Error('元画像とのsource verificationが通っていません');
+  if (!desc.schemaCurrent || !desc.fieldStatus) throw new Error('この結果は旧schemaです。build08用JSONを読み込み直してください');
+  clearStandaloneReviewImageUrls();
+  const imageBox=$('#scoring-review-images');
+  for (const x of (set.images||[])) {
+    if (!x || !x.blob) continue;
+    const url=URL.createObjectURL(x.blob); standaloneReviewImageUrls.push(url);
+    const wrap=document.createElement('div'); wrap.className='scoring-review-image';
+    const label=document.createElement('div'); label.className='small mono'; label.textContent=`${x.imageId} / ${String(x.meta&&x.meta.sha256||'').slice(0,12)}…`;
+    const img=document.createElement('img'); img.src=url; img.alt=`DAMデンモク証拠 ${x.imageId}`; img.loading='eager';
+    wrap.append(label,img); imageBox.appendChild(wrap);
+  }
+  const box=$('#scoring-review-fields');
+  const gaps=[];
+  box.innerHTML=STANDALONE_SCORING_FIELD_KEYS.map(key=>{
+    const status=desc.fieldStatus[key];
+    if (status==='visible_not_extracted') gaps.push(key);
+    const value=desc.result ? desc.result[key] : null;
+    const cls=status==='visible_not_extracted'?' review-gap':'';
+    return `<div class="scoring-review-row${cls}"><div class="scoring-review-head"><b>${escapeHtml(STANDALONE_FIELD_LABELS[key]||key)}</b><span class="pill ${status==='extracted'?'ok':status==='visible_not_extracted'?'err':'wait'}">${escapeHtml(FIELD_STATUS_LABELS[status]||status)}</span></div><pre class="scoring-review-value">${escapeHtml(standaloneReviewValueText(value))}</pre></div>`;
+  }).join('');
+  $('#scoring-review-summary').innerHTML=gaps.length
+    ? `<p class="small warn-text"><b>未抽出の可視項目が${gaps.length}件あります。</b>確認しても「既知の未抽出あり」として保存されます。</p>`
+    : '<p class="small"><b>全requested fieldの状態が明示されています。</b>下の一覧を確認してから確定してください。</p>';
+  const btn=$('#scoring-review-confirm');
+  btn.dataset.evidenceSetId=evidenceSetId;
+  btn.textContent=gaps.length?'確認する（既知の未抽出あり）':'この抽出内容を確認する';
+  openSheet('sheet-scoring-review');
+}
+async function archiveStandaloneEvidenceSet(id) {
+  const set=await dbGet('scoringEvidenceSets',id);
+  if (!set) return;
+  if (!confirm(`この採点証拠セットをアーカイブしますか？\n画像${(set.images||[]).length}枚のraw bytesは削除せず保持します。`)) return;
+  set.lifecycleStatus='archived'; set.archivedAt=nowIso(); set.updatedAt=nowIso();
+  await dbPut('scoringEvidenceSets',set);
+  await renderStandaloneEvidenceSets();
+}
+async function restoreStandaloneEvidenceSet(id) {
+  const set=await dbGet('scoringEvidenceSets',id);
+  if (!set) return;
+  set.lifecycleStatus='active'; set.restoredAt=nowIso(); set.updatedAt=nowIso();
+  await dbPut('scoringEvidenceSets',set);
+  await renderStandaloneEvidenceSets();
+}
 async function renderStandaloneEvidenceSets() {
   const box=$('#scoring-evidence-list');
   if (!box) return;
-  const rows=(await dbAll('scoringEvidenceSets').catch(()=>[])).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
-  if (!rows.length) { box.innerHTML='<p class="small">未紐付けのDAMデンモク採点履歴はありません。</p>'; return; }
+  const all=(await dbAll('scoringEvidenceSets').catch(()=>[])).sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  const archivedCount=all.filter(r=>standaloneLifecycleStatus(r)==='archived').length;
+  const toggle=$('#btn-scoring-archive-toggle');
+  if (toggle) {
+    toggle.hidden=archivedCount===0;
+    toggle.textContent=showArchivedScoringEvidence ? 'アーカイブ済みを隠す' : `アーカイブ済みを表示（${archivedCount}）`;
+  }
+  const rows=all.filter(r=>showArchivedScoringEvidence || standaloneLifecycleStatus(r)!=='archived');
+  if (!rows.length) { box.innerHTML='<p class="small">表示するDAMデンモク採点履歴はありません。</p>'; return; }
   box.innerHTML=rows.map(r=>{
     const p=standaloneEvidenceSetPublic(r); const sd=standaloneStructuredDescriptor(r);
-    const structuredText=sd.status==='available' ? `構造化: ${sd.verification.status} ／ 内容確認: ${sd.userReview&&sd.userReview.status||'unreviewed'}` : '構造化: 未登録';
-    const reviewBtn=sd.status==='available' && sd.verification.status==='source_verified' && (!sd.userReview || sd.userReview.status!=='user_confirmed') ? `<button class="mini" data-ev-confirm="${escapeHtml(p.evidenceSetId)}">抽出内容を確認済み</button>` : '';
-    return `<div class="item scoring-evidence-item"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${p.imageCount}枚 ／ binding: ${escapeHtml(p.bindingStatus)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div></div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">抽出ZIP</button><button class="mini" data-ev-structured="${escapeHtml(p.evidenceSetId)}">構造化JSON</button>${reviewBtn}<button class="mini danger" data-ev-delete="${escapeHtml(p.evidenceSetId)}">削除</button></div></div>`;
+    const lifecycle=standaloneLifecycleStatus(r);
+    let reviewStatus=sd.userReview&&sd.userReview.status||'unreviewed';
+    const schemaNote=sd.status==='available' && !sd.schemaCurrent ? ' ／ schema: v1→再抽出必要' : '';
+    const structuredText=sd.status==='available' ? `構造化: ${sd.verification.status} ／ 内容確認: ${reviewStatus}${schemaNote}` : '構造化: 未登録';
+    const reviewBtn=sd.status==='available' && sd.verification.status==='source_verified' && sd.schemaCurrent
+      ? `<button class="mini" data-ev-review="${escapeHtml(p.evidenceSetId)}">${reviewStatus==='unreviewed'?'抽出内容をレビュー':'レビューを再確認'}</button>` : '';
+    const lifecycleBtn=lifecycle==='archived'
+      ? `<button class="mini" data-ev-restore="${escapeHtml(p.evidenceSetId)}">アーカイブから戻す</button>`
+      : `<button class="mini danger" data-ev-archive="${escapeHtml(p.evidenceSetId)}">アーカイブ</button>`;
+    const structuredBtn=lifecycle==='archived' ? '' : `<button class="mini" data-ev-structured="${escapeHtml(p.evidenceSetId)}">構造化JSON</button>`;
+    return `<div class="item scoring-evidence-item${lifecycle==='archived'?' is-archived':''}"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${p.imageCount}枚 ／ binding: ${escapeHtml(p.bindingStatus)} ／ ${escapeHtml(lifecycle)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div></div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">抽出ZIP</button>${structuredBtn}${reviewBtn}${lifecycleBtn}</div></div>`;
   }).join('');
   $$('[data-ev-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.evExport)));
   $$('[data-ev-structured]').forEach(b=>b.addEventListener('click',()=>{ const inp=$('#scoring-structured-input'); inp.dataset.evidenceSetId=b.dataset.evStructured; inp.click(); }));
-  $$('[data-ev-confirm]').forEach(b=>b.addEventListener('click',async()=>{ try { await confirmStandaloneStructuredResult(b.dataset.evConfirm); await renderStandaloneEvidenceSets(); toast('構造化採点の抽出内容を確認済みにしました'); } catch(e){ toast((e&&e.message)||'確認状態を保存できませんでした'); } }));
-  $$('[data-ev-delete]').forEach(b=>b.addEventListener('click',()=>deleteStandaloneEvidenceSet(b.dataset.evDelete)));
+  $$('[data-ev-review]').forEach(b=>b.addEventListener('click',async()=>{ try { await openStandaloneStructuredReview(b.dataset.evReview); } catch(e){ toast((e&&e.message)||'レビューを開けませんでした'); } }));
+  $$('[data-ev-archive]').forEach(b=>b.addEventListener('click',()=>archiveStandaloneEvidenceSet(b.dataset.evArchive)));
+  $$('[data-ev-restore]').forEach(b=>b.addEventListener('click',()=>restoreStandaloneEvidenceSet(b.dataset.evRestore)));
 }
 async function exportStandaloneEvidenceSet(id) {
   try {
@@ -3019,11 +3201,6 @@ async function exportStandaloneEvidenceSet(id) {
     const stamp=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
     await saveBlob(blob,`songscope_scoring_evidence_${id}_${stamp}.zip`);
   } catch(e) { console.error(e); toast('採点証拠の書き出しに失敗しました：'+((e&&e.message)||'')); }
-}
-async function deleteStandaloneEvidenceSet(id) {
-  if (!confirm('この未紐付け採点証拠セットを削除しますか？録音データには影響しません。')) return;
-  await dbDel('scoringEvidenceSets',id);
-  await renderStandaloneEvidenceSets();
 }
 async function onStandaloneEvidenceInput(fileList) {
   try {
@@ -4251,6 +4428,11 @@ function normalizeComparisonContext(raw, identity) {
     scoringConditions: raw.scoringConditions && typeof raw.scoringConditions === 'object' ? raw.scoringConditions : base.scoringConditions,
     history: Array.isArray(raw.history) ? raw.history.slice(-50) : [],
     migratedFromAlignmentResult: !!raw.migratedFromAlignmentResult,
+    invalidatedAt: raw.invalidatedAt || raw.lastInvalidatedAt || null,
+    lastInvalidatedAt: raw.lastInvalidatedAt || raw.invalidatedAt || null,
+    invalidatedByRecordingDeletion: !!raw.invalidatedByRecordingDeletion,
+    invalidatedRecordingId: raw.invalidatedRecordingId || null,
+    invalidatedAudioSha256: raw.invalidatedAudioSha256 || null,
     updatedAt: raw.updatedAt || null
   };
 }
@@ -6142,6 +6324,7 @@ function cmpTick() {
 function wireHome() {
   $('#btn-add').addEventListener('click', () => $('#file-input').click());
   $('#btn-scoring-evidence-add').addEventListener('click', () => $('#scoring-evidence-input').click());
+  $('#btn-scoring-archive-toggle').addEventListener('click', async () => { showArchivedScoringEvidence=!showArchivedScoringEvidence; await renderStandaloneEvidenceSets(); });
   $('#scoring-evidence-input').addEventListener('change', e => {
     // iOS Safariではinput.valueを空にするとFileList自体も空になる場合がある。
     // 非同期処理へ渡す前に通常Arrayへsnapshotしてからinputをresetする。
@@ -6201,6 +6384,18 @@ function wireSheets() {
     closeSheet();
   }));
   $('#rec-save').addEventListener('click', onRecSave);
+  $('#scoring-review-confirm').addEventListener('click', async e => {
+    const id=e.currentTarget.dataset.evidenceSetId||'';
+    if (!id) return;
+    try {
+      await confirmStandaloneStructuredResult(id);
+      closeSheet();
+      await renderStandaloneEvidenceSets();
+      const set=await dbGet('scoringEvidenceSets',id);
+      const review=set&&set.structuredScoringUserReview;
+      toast(review&&review.status==='user_confirmed_with_known_gaps'?'確認済み（既知の未抽出あり）':'抽出内容を確認済みにしました');
+    } catch(err) { toast((err&&err.message)||'確認状態を保存できませんでした'); }
+  });
   $('#f-recat-confirm').addEventListener('click', confirmRecordedAtInForm);
   $('#f-recdate-confirm').addEventListener('click', confirmRecordedDateInForm);
   $('#f-recat-unknown').addEventListener('click', keepRecordingTimeUnknownInForm);
@@ -6253,6 +6448,33 @@ function openSettingsSheet() {
   $('#s-conf').value = settings.minimumConfidence;
   $('#s-setup').value = settings.recordingSetupPreset;
   openSheet('sheet-settings');
+}
+
+
+async function invalidatePairContextsForDeletedRecording(rec) {
+  const sha=String(rec && rec.audioSha256 || '').toLowerCase();
+  if (!sha) return 0;
+  const rows=await dbAll('pairContexts').catch(()=>[]);
+  let changed=0;
+  for (const row of rows) {
+    const pair=Array.isArray(row && row.audioPair) ? row.audioPair.map(x=>String(x).toLowerCase()) : [];
+    if (!pair.includes(sha)) continue;
+    const at=nowIso();
+    const history=Array.isArray(row.history)?row.history.slice(-49):[];
+    history.push({field:'pairContext',action:'invalidated_by_recording_deletion',at,source:'recording_deletion',recordingId:rec.recordingId||null,audioSha256:sha,appVersion:APP_VERSION,buildId:BUILD_ID});
+    row.history=history;
+    row.invalidatedAt=at;
+    row.lastInvalidatedAt=at;
+    row.invalidatedByRecordingDeletion=true;
+    row.invalidatedRecordingId=rec.recordingId||null;
+    row.invalidatedAudioSha256=sha;
+    row.chronology={status:'unknown',source:'invalidated_by_recording_deletion',updatedAt:at};
+    row.scoringConditions={status:'unknown',source:'invalidated_by_recording_deletion',coveredFields:SCORING_CONDITION_FIELDS.slice(),updatedAt:at};
+    row.updatedAt=at;
+    await dbPut('pairContexts',row);
+    changed++;
+  }
+  return changed;
 }
 
 function wireReview() {
@@ -6341,16 +6563,8 @@ function wireReview() {
   $('#chk-include-audio').checked = getFlag('includeAudio', false);
   $('#chk-include-audio').addEventListener('change', e => setFlag('includeAudio', e.target.checked));
   $('#btn-export').addEventListener('click', doExport);
-  $('#btn-eval-image').addEventListener('click', () => $('#eval-image-input').click());
-  $('#eval-image-input').addEventListener('change', e => {
-    const fs = e.target.files ? Array.from(e.target.files) : []; e.target.value = ''; if (fs.length) saveEvaluationImages(fs);
-  });
-  $('#btn-eval-image-remove').addEventListener('click', removeEvaluationImage);
-  $('#btn-eval-json').addEventListener('click', () => $('#eval-json-input').click());
-  $('#eval-json-input').addEventListener('change', e => {
-    const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) saveStructuredEvaluation(f);
-  });
-  $('#btn-eval-json-remove').addEventListener('click', removeStructuredEvaluation);
+  // G0 build08: legacy recording-attached scoring evidence is read-only until build09 migration.
+  ['btn-eval-image','btn-eval-image-remove','btn-eval-json','btn-eval-json-remove'].forEach(id=>{ const el=$('#'+id); if(el){ el.disabled=true; el.hidden=true; } });
 
   $('#btn-delete-rec').addEventListener('click', async () => {
     if (!state.rec) return;
@@ -6358,6 +6572,7 @@ function wireReview() {
     const id = state.rec.recordingId;
     stopPlayback();
     try {
+      await invalidatePairContextsForDeletedRecording(state.rec);
       await dbDelByRec('markers', id);
       await dbDelByRec('segments', id);
       await dbDelByRec('analysisHistory', id);
@@ -6448,6 +6663,37 @@ function wireGlobal() {
   document.addEventListener('gesturestart', e => e.preventDefault()); // 誤ピンチズーム防止
 }
 
+
+let songScopeReloadingForUpdate=false;
+function showSongScopeUpdatePrompt(reg) {
+  if (!reg || !reg.waiting || !navigator.serviceWorker.controller) return;
+  const banner=$('#update-banner');
+  if (!banner) return;
+  banner.hidden=false;
+  const btn=$('#btn-apply-update');
+  btn.onclick=()=>{
+    if (reg.waiting) reg.waiting.postMessage({type:'SKIP_WAITING'});
+  };
+}
+async function registerSongScopeServiceWorker() {
+  const reg=await navigator.serviceWorker.register('service-worker.js?v=' + encodeURIComponent(BUILD_ID));
+  if (reg.waiting) showSongScopeUpdatePrompt(reg);
+  reg.addEventListener('updatefound',()=>{
+    const worker=reg.installing;
+    if (!worker) return;
+    worker.addEventListener('statechange',()=>{
+      if (worker.state==='installed' && navigator.serviceWorker.controller) showSongScopeUpdatePrompt(reg);
+    });
+  });
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if (songScopeReloadingForUpdate) return;
+    songScopeReloadingForUpdate=true;
+    location.reload();
+  });
+  // Ask the browser to check now; failure is non-fatal/offline-safe.
+  reg.update().catch(()=>{});
+}
+
 async function init() {
   loadSettings();
   state.confMin = settings.minimumConfidence;
@@ -6469,7 +6715,7 @@ async function init() {
   await renderStandaloneEvidenceSets();
   refreshStorageEstimate();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('service-worker.js?v=' + encodeURIComponent(BUILD_ID)).catch(() => { });
+    registerSongScopeServiceWorker().catch(e=>console.warn('service worker registration failed',e));
   }
 }
 document.addEventListener('DOMContentLoaded', init);

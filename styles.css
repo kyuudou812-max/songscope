@@ -311,3 +311,105 @@ input[type=range]::-webkit-slider-thumb{
 @media (max-width:380px){
   .scoring-evidence-actions{grid-template-columns:1fr;}
 }
+
+
+/* G0 build08 — audit safety gate / iPhone-first review */
+.scoring-evidence-item.is-archived{
+  opacity:.68;
+}
+.scoring-review-fields{
+  margin:8px 0 14px;
+  border-radius:12px;
+  overflow:hidden;
+  background:var(--bg-elev);
+}
+.scoring-review-row{
+  padding:11px 12px;
+  border-bottom:.5px solid var(--sep);
+}
+.scoring-review-row:last-child{border-bottom:none}
+.scoring-review-row.review-gap{
+  background:rgba(255,149,0,.10);
+}
+.scoring-review-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:8px;
+  font-size:14px;
+}
+.scoring-review-head b{
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+.scoring-review-value{
+  margin:7px 0 0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  font-size:12px;
+  line-height:1.45;
+  color:var(--label-2);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+.warn-text{color:var(--orange)}
+.update-banner{
+  position:fixed;
+  z-index:80;
+  left:12px;
+  right:12px;
+  top:calc(10px + var(--safe-t));
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border-radius:13px;
+  background:var(--bg-elev);
+  border:.5px solid var(--sep);
+  box-shadow:0 6px 24px rgba(0,0,0,.18);
+}
+.update-banner>div{
+  min-width:0;
+  font-size:13px;
+  line-height:1.3;
+}
+.update-banner>div span{
+  display:block;
+  color:var(--label-2);
+  margin-top:2px;
+}
+.update-banner .mini{
+  flex:0 0 auto;
+  min-height:42px;
+}
+@media (max-width:380px){
+  .update-banner{
+    align-items:stretch;
+    flex-direction:column;
+  }
+  .update-banner .mini{width:100%}
+}
+
+.scoring-review-images{
+  display:grid;
+  gap:10px;
+  margin:8px 0 14px;
+}
+.scoring-review-image{
+  background:var(--bg-elev);
+  border-radius:12px;
+  padding:8px;
+  overflow:hidden;
+}
+.scoring-review-image .small{
+  margin:0 0 6px;
+  overflow-wrap:anywhere;
+}
+.scoring-review-image img{
+  display:block;
+  width:100%;
+  height:auto;
+  border-radius:8px;
+  background:var(--bg-sunken);
+}

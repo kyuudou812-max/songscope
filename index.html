@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260811-g0-07">
+<link rel="stylesheet" href="styles.css?v=20260811-g0-08">
 <title>SongScope</title>
 </head>
 <body>
@@ -51,6 +51,7 @@
       <p><b>DAMデンモク採点履歴</b>は録音とは別の一次証拠として先に保存できます。同じ歌唱だと確認できるまで録音には紐付けません。</p>
       <div class="row gap wrap">
         <button id="btn-scoring-evidence-add" class="mini accent">採点履歴画像を追加（複数可）</button>
+        <button id="btn-scoring-archive-toggle" class="mini" hidden>アーカイブ済みを表示</button>
         <input type="file" id="scoring-evidence-input" accept="image/*" multiple hidden>
         <input type="file" id="scoring-structured-input" accept="application/json,.json" hidden>
       </div>
@@ -148,19 +149,16 @@
       <div id="rv-summary" class="mono small"></div>
     </details>
 
-    <div class="card" id="rv-eval-card">
-      <div class="section-head tight"><span>評価アンカー</span><span class="mono small">Outcome evidence</span></div>
-      <p class="small">DAM等の外部評価は、音響観測とは別の証拠として保存します。採点結果画像は1タップで添付でき、ChatGPT等で画像から作った構造化評価JSONも元画像SHA-256を照合して紐づけられます。SongScope自身はOCR・上達判定を行いません。</p>
-      <div id="rv-eval-status" class="note"><p class="small">DAM点数: 未登録 ／ 採点結果画像: なし</p></div>
-      <div class="row gap wrap">
-        <button id="btn-eval-image" class="mini accent">DAMデンモク履歴画像を追加（複数可）</button>
-        <button id="btn-eval-image-remove" class="mini" hidden>画像を全て外す</button>
-        <button id="btn-eval-json" class="mini accent">評価JSONを読み込む</button>
-        <button id="btn-eval-json-remove" class="mini" hidden>評価JSONを外す</button>
-      </div>
-      <input type="file" id="eval-image-input" accept="image/*" multiple hidden>
-      <input type="file" id="eval-json-input" accept="application/json,.json" hidden>
-      <p class="small">評価JSONは現在の録音IDと採点結果画像SHA-256が一致する場合だけ受け付けます。画像・手入力値・外部抽出値が食い違っても自動補正しません。</p>
+    <div class="card note" id="rv-eval-card">
+      <div class="section-head tight"><span>旧評価アンカー</span><span class="mono small">read-only / migration pending</span></div>
+      <p class="small"><b>build08では録音への採点画像・評価JSONの直接追加を停止しました。</b>新しいDAM採点履歴はホーム画面の「DAMデンモク採点履歴」へ追加してください。ここに既存データがある場合は削除せず、build09で独立証拠へ非破壊移行します。</p>
+      <div id="rv-eval-status" class="note"><p class="small">旧方式の保存状態を確認中…</p></div>
+      <button id="btn-eval-image" hidden disabled></button>
+      <button id="btn-eval-image-remove" hidden disabled></button>
+      <button id="btn-eval-json" hidden disabled></button>
+      <button id="btn-eval-json-remove" hidden disabled></button>
+      <input type="file" id="eval-image-input" accept="image/*" multiple hidden disabled>
+      <input type="file" id="eval-json-input" accept="application/json,.json" hidden disabled>
     </div>
 
     <div class="card">
@@ -348,6 +346,16 @@
     <button class="primary" id="rec-save">保存</button>
   </div>
 
+  <!-- G0 build08: structured scoring field-by-field review -->
+  <div class="sheet" id="sheet-scoring-review" hidden>
+    <div class="sheet-head"><span>採点抽出内容の確認</span><button class="sheet-close" data-close>閉じる</button></div>
+    <div id="scoring-review-summary" class="note"></div>
+    <p class="sheet-sub">source_verifiedは「このJSONがこの画像集合に結び付いている」ことだけを意味します。元画像と下の抽出値・未抽出状態を実際に見比べてから内容確認を保存します。</p>
+    <div id="scoring-review-images" class="scoring-review-images"></div>
+    <div id="scoring-review-fields" class="scoring-review-fields"></div>
+    <button class="primary" id="scoring-review-confirm">この抽出内容を確認する</button>
+  </div>
+
   <!-- 設定 -->
   <div class="sheet" id="sheet-settings" hidden>
     <div class="sheet-head"><span>解析設定</span><button class="sheet-close" data-close>閉じる</button></div>
@@ -371,9 +379,14 @@
   </div>
 </div>
 
+<div id="update-banner" class="update-banner" hidden>
+  <div><b>SongScopeの更新があります</b><span>安全に切り替えるため再読み込みします。</span></div>
+  <button id="btn-apply-update" class="mini accent">更新する</button>
+</div>
+
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260811-g0-07"></script>
-<script src="app.js?v=20260811-g0-07"></script>
+<script src="zip.js?v=20260811-g0-08"></script>
+<script src="app.js?v=20260811-g0-08"></script>
 </body>
 </html>

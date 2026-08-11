@@ -648,3 +648,55 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - Audit-critical evidenceSetId, binding status, source verification, and user review are no longer ellipsized.
 - Evidence actions use a responsive 2-column grid (1 column on very narrow screens).
 - No evidence model, binding semantics, or scoring extraction semantics changed.
+
+
+## G0 build08 — Audit Safety Gate
+Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Binding実装前の安全性修正を実施。
+
+### B-01 gate
+- 録音レビュー画面から旧 `evaluationEvidenceImages` / `evaluationStructured` へ新規追加・削除するUIを停止。
+- 旧write関数もbuild08では明示エラーにし、新規データはホームの独立 `scoringEvidenceSets` だけへ入る。
+- 既存legacy証拠は削除しない。build09で非破壊移行する。
+
+### B-02 schema v2 / review
+- `songscope-external-scoring-result-v2` を導入。
+- 全requested fieldに `fieldStatus` を必須化:
+  `extracted / not_visible_in_images / unreadable / visible_not_extracted / not_applicable`。
+- `null`だけでは欠落理由を表現できないようimport validatorを強化。
+- countableな離散状態（安定性・ロングトーン・ビブラート・リズム等）はObservationとして数えられることを抽出ルールへ明記。
+- iPhoneレビューsheetでraw画像と全fieldの抽出値/statusを同時表示してからuser reviewを保存。
+- `valueReviewStatus` と `coverageReviewStatus` を分離。
+- `visible_not_extracted` が存在する場合は `user_confirmed_with_known_gaps`。
+- v1の過去reviewは削除しないがUIでは `legacy_review_needs_reverification` として再確認を要求。
+
+### B-05 scoringPerformedAt
+- schema v2では裸のoffset-less ISO文字列を禁止。
+- `{localDateTime,timeZone,precision,source}` として保存。
+- DAM画面にtime zone/offsetが表示されない限り `timeZone:null`。JST等を抽出時に推測しない。
+
+### B-04 delete lifecycle
+- 独立scoring evidenceの通常「削除」を廃止し、raw bytesを保持する `archived` へ変更。
+- archiveの表示/復元UIを追加。
+- 録音削除時、そのaudio SHAを含む`pairContexts`のchronology/scoringConditionsをunknownへ無効化し、
+  `invalidatedAt` とhistoryを残す。同一音声を再取り込みしても古いuser confirmationが自動復活しない。
+
+### B-10 source verification
+- SHA集合だけでなく `imageId ↔ SHA-256` ペア集合が完全一致した場合だけsource verificationを通す。
+
+### B-08 PWA update
+- waiting Service Workerを検知するとiPhone上に更新バナーを表示。
+- ユーザーが「更新する」を押した場合だけ `SKIP_WAITING` → controllerchange → reload。
+- 実行中ページと新workerのversion skewを避ける方針は維持。
+
+### Scope
+- DB_VERは7のまま。新しいbinding store/Performance entityはまだ作成していない。
+- F1/E3/Observed Historyの旧consumer一本化はbuild09で行う。
+
+
+### build08 static/validator checks
+- app.js / service-worker.js: Node syntax check PASS.
+- structured scoring v2 fixture: validator PASS.
+- imageId↔SHAを入れ替えたfixture: import rejection PASS.
+- fieldStatusを1項目欠落させたfixture: import rejection PASS.
+- scoringPerformedAtを旧裸文字列へ戻したfixture: import rejection PASS.
+- v1 stored result: source bindingは保持しつつ `legacy_review_needs_reverification` へ降格することを確認。
