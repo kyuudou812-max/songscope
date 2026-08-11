@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.16.4';
-const BUILD_ID = '20260812-g0-09';
+const SCHEMA_VERSION = '0.16.5';
+const BUILD_ID = '20260812-g0-10';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -492,9 +492,11 @@ const state = {
   pendingFile: null,   // 追加待ちのファイル
   editingRec: false,
   recFormContext: null, // metadata provenance判定用
-  evaluationImageMeta: null, // legacy/primary image meta
-  evaluationEvidenceImages: [], // G0b02: DAMデンモク由来の複数画像evidence set
-  evaluationStructured: null, // 外部で画像から構造化した評価JSON（audio store内）
+  evaluationImageMeta: null, // legacy read-only: pre-G0 recording-attached scoring image meta
+  evaluationEvidenceImages: [], // legacy read-only: pre-G0 recording-attached scoring image set
+  evaluationStructured: null, // legacy read-only: pre-G0 recording-attached structured JSON
+  legacyScoringEvidenceMigration: null, // build10 migration audit marker from audio store
+  scoringEvidenceCandidates: [], // authoritative scoringEvidenceSets related only by legacy candidate relation; NOT a binding
   markerDraft: null,   // {timeSec, tag, memo, markerId?}
   segmentDraft: null,
   worker: null,
@@ -1444,6 +1446,8 @@ async function openRecording(id) {
   state.evaluationImageMeta = null;
   state.evaluationEvidenceImages = [];
   state.evaluationStructured = null;
+  state.legacyScoringEvidenceMigration = null;
+  state.scoringEvidenceCandidates = [];
 
   showView('view-review');
   renderReviewHeader();
@@ -1456,6 +1460,8 @@ async function openRecording(id) {
     state.evaluationEvidenceImages = normalizeEvaluationEvidenceImages(a);
     state.evaluationImageMeta = state.evaluationEvidenceImages.length ? state.evaluationEvidenceImages[0].meta : null;
     state.evaluationStructured = a && a.evaluationStructured ? a.evaluationStructured : null;
+    state.legacyScoringEvidenceMigration = a && a.legacyScoringEvidenceMigration ? a.legacyScoringEvidenceMigration : null;
+    state.scoringEvidenceCandidates = await scoringEvidenceSetsForLegacyCandidateRecording(id);
     renderEvaluationAnchor();
   } catch (e) { toast('音声を読み込めませんでした'); }
 
@@ -1514,25 +1520,26 @@ function renderReviewHeader() {
 }
 
 function renderEvaluationAnchor() {
-  const box = $('#rv-eval-status');
-  if (!box || !state.rec) return;
-  const score = parseStoredScore(state.rec.damScore);
-  const img = evaluationImageDescriptor(state.rec, state.evaluationImageMeta);
-  const imageSet = evaluationEvidenceSetDescriptor(state.rec, state.evaluationEvidenceImages);
-  const structured = structuredEvaluationDescriptor(state.rec, state.evaluationImageMeta, state.evaluationStructured);
-  const parts = [];
-  parts.push(score === null ? 'DAM点数: 未登録' : `DAM点数: ${score.toFixed(3)}`);
-  parts.push(imageSet.status === 'available' ? `DAMデンモク採点履歴: ${imageSet.imageCount}枚` : 'DAMデンモク採点履歴: なし');
-  if (structured.status !== 'available') parts.push('構造化評価: なし');
-  else {
-    const s = structured.overallScore === null ? '' : ` / 総合 ${structured.overallScore.toFixed(3)}`;
-    const v = structured.verification && structured.verification.status === 'source_verified' ? '画像SHA一致' : `要確認:${structured.verification && structured.verification.status || 'unverified'}`;
-    parts.push(`構造化評価: あり (${v}${s})`);
-  }
-  box.innerHTML = `<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small"><b>旧方式（移行待ち）:</b> 録音への直接添付はbuild08で停止しました。既存証拠は削除せず、build09で独立scoringEvidenceSetsへ非破壊移行します。</p>`;
-  const rm = $('#btn-eval-image-remove'); if (rm) rm.hidden = true;
-  const srm = $('#btn-eval-json-remove'); if (srm) srm.hidden = true;
+  const box=$('#rv-eval-status');
+  if (!box||!state.rec) return;
+  const score=parseStoredScore(state.rec.damScore);
+  const unified=recordingScoringEvidenceDescriptor(state.rec,state.scoringEvidenceCandidates);
+  const mig=state.legacyScoringEvidenceMigration||{};
+  const oldImageCount=(state.evaluationEvidenceImages||[]).length;
+  const candidateCount=Number(unified.candidateCount||0);
+  const parts=[
+    score===null?'DAM点数: 未登録':`DAM点数: ${score.toFixed(3)}`,
+    `独立scoringEvidence候補: ${candidateCount}件`,
+    `旧添付raw画像: ${oldImageCount}枚（read-only）`
+  ];
+  let status='旧添付なし';
+  if (mig.status==='migrated_candidate_only') status=`移行済み → ${mig.evidenceSetId} / candidate only / NOT binding`;
+  else if (mig.status) status=`移行状態: ${mig.status}${mig.error?' / '+mig.error:''}`;
+  box.innerHTML=`<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small"><b>build10 authoritative path:</b> ${escapeHtml(status)}</p><p class="small">旧audio store内の採点画像/JSONは災害復旧・監査のため削除していませんが、比較・履歴・exportの採点証拠consumerはscoringEvidenceSets側を参照します。旧添付関係は同一performanceの確認ではありません。</p>`;
+  const rm=$('#btn-eval-image-remove'); if(rm)rm.hidden=true;
+  const srm=$('#btn-eval-json-remove'); if(srm)srm.hidden=true;
 }
+
 async function saveEvaluationImages(files) {
   throw new Error('build08では録音への採点証拠の直接追加・変更を停止しています。ホームのDAMデンモク採点履歴を使用してください。');
   if (!state.rec || !files || !files.length) return;
@@ -2587,7 +2594,7 @@ function buildSummaryJson(an) {
       recordingSetupPreset: rec.recordingSetupPreset || null
     },
     metadataProvenance: normalizedMetadataProvenance(rec),
-    evaluationAnchors: buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta, state.evaluationStructured),
+    evaluationAnchors: buildUnifiedRecordingEvaluationAnchors(rec, state.scoringEvidenceCandidates),
     recordingLimitations: {
       containsAccompaniment: 'likely',
       note: ACCOMP_NOTE_EN,
@@ -2647,9 +2654,10 @@ function buildReportMd(an) {
   L.push(`DAM Score: ${rec.damScore || ''}`);
   L.push(`DAM Score provenance: ${((normalizedMetadataProvenance(rec).damScore || {}).source) || ''}`);
   L.push(`RecordedAt provenance: ${((normalizedMetadataProvenance(rec).recordedAt || {}).source) || ''}`);
-  L.push(`DAM Denmoku evidence images: ${(state.evaluationEvidenceImages||[]).length}`);
-  const structuredEval = structuredEvaluationDescriptor(rec, state.evaluationImageMeta, state.evaluationStructured);
-  L.push(`Structured scoring result: ${structuredEval.status === 'available' ? (structuredEval.verification.status + (structuredEval.overallScore === null ? '' : ' / overall ' + structuredEval.overallScore)) : 'none'}`);
+  const scoringEvidence=recordingScoringEvidenceDescriptor(rec,state.scoringEvidenceCandidates);
+  L.push(`Scoring evidence candidate sets: ${scoringEvidence.candidateCount||0}`);
+  L.push(`Scoring relationship status: ${scoringEvidence.status||'unavailable'}`);
+  L.push('Legacy recording-attached scoring evidence is preserved read-only but is not treated as a binding.');
   L.push(`Key: ${rec.keyChange || ''}`);
   L.push(`Octave: ${rec.octave || ''}`);
   L.push(`Device: ${rec.device || ''}`);
@@ -2748,12 +2756,8 @@ function buildReportMd(an) {
   } else L.push('(none)');
   L.push('', '## Files', '');
   L.push('summary.json', 'analysis_history.json', 'evaluation_anchors.json', 'frames.csv', 'markers.csv', 'user_segments.csv', 'detected_segments.csv', '');
-  if (state.evaluationStructured) L.push('evaluation/structured_scoring_result.json');
+  if ((state.scoringEvidenceCandidates||[]).length) L.push('evaluation/scoring_evidence_candidates.json');
   L.push('waveform.png', 'loudness.png', 'pitch.png', 'spectrogram.png');
-  if (state.evaluationImageMeta) {
-    L.push('evaluation/scoring_result_image' + imageExtFromMeta(state.evaluationImageMeta));
-    L.push('evaluation/extraction_request.json');
-  }
   L.push('', '## Important', '');
   L.push('This application does not diagnose singing ability.');
   L.push('The measurements above are observations for later comparison and hypothesis testing.');
@@ -2783,10 +2787,10 @@ async function doExport() {
     catch (e) { }
     if (an && an.analysisId) rec.latestAnalysisId = an.analysisId;
     if (analysisHistory.length) rec.analysisCount = analysisHistory.length;
-    const binaryAsset = await dbGet('audio', rec.recordingId).catch(() => null);
-    state.evaluationEvidenceImages = normalizeEvaluationEvidenceImages(binaryAsset);
-    state.evaluationImageMeta = state.evaluationEvidenceImages.length ? state.evaluationEvidenceImages[0].meta : null;
-    state.evaluationStructured = binaryAsset && binaryAsset.evaluationStructured ? binaryAsset.evaluationStructured : null;
+    const binaryAsset=await dbGet('audio',rec.recordingId).catch(()=>null);
+    // Legacy fields stay read-only in the audio row; export consumers use scoringEvidenceSets.
+    state.legacyScoringEvidenceMigration=binaryAsset&&binaryAsset.legacyScoringEvidenceMigration||null;
+    state.scoringEvidenceCandidates=await scoringEvidenceSetsForLegacyCandidateRecording(rec.recordingId);
 
     files.push({ name: 'report.md', data: buildReportMd(an) });
     files.push({ name: 'summary.json', data: JSON.stringify(buildSummaryJson(an), null, 2) });
@@ -2797,17 +2801,32 @@ async function doExport() {
       latestAnalysisId: rec.latestAnalysisId || (an && an.analysisId) || null,
       analyses: analysisHistory
     }, null, 2) });
-    files.push({ name: 'evaluation_anchors.json', data: JSON.stringify(buildRecordingEvaluationAnchors(rec, state.evaluationImageMeta, state.evaluationStructured), null, 2) });
-    if (state.evaluationStructured) {
-      files.push({ name: 'evaluation/structured_scoring_result.json', data: JSON.stringify(structuredEvaluationDocument(state.evaluationStructured), null, 2) });
-    }
-    if (state.evaluationEvidenceImages.length) {
-      for (let i=0;i<state.evaluationEvidenceImages.length;i++) {
-        const x=state.evaluationEvidenceImages[i];
-        if (x.blob) files.push({ name: `evaluation/images/${String(i+1).padStart(2,'0')}_${x.imageId}${imageExtFromMeta(x.meta)}`, data: new Uint8Array(await x.blob.arrayBuffer()) });
+    files.push({name:'evaluation_anchors.json',data:JSON.stringify(buildUnifiedRecordingEvaluationAnchors(rec,state.scoringEvidenceCandidates),null,2)});
+    if (state.scoringEvidenceCandidates.length) {
+      files.push({name:'evaluation/scoring_evidence_candidates.json',data:JSON.stringify({
+        schemaVersion:'songscope-recording-scoring-evidence-candidates-v1',
+        recordingId:rec.recordingId,
+        relationPolicy:'legacy_attachment_candidate_only_not_binding',
+        candidates:state.scoringEvidenceCandidates.map(set=>({
+          evidenceSet:standaloneEvidenceSetPublic(set),
+          relationship:legacyCandidatePublic(legacyCandidateForRecording(set,rec.recordingId)),
+          structuredScoringResult:recordingScoringEvidenceDescriptor(rec,[set]).structuredScoringResult
+        }))
+      },null,2)});
+      for (const set of state.scoringEvidenceCandidates) {
+        const root=`evaluation/candidates/${set.evidenceSetId}`;
+        files.push({name:`${root}/evidence_set.json`,data:JSON.stringify(standaloneEvidenceSetPublic(set),null,2)});
+        const cand=legacyCandidateForRecording(set,rec.recordingId);
+        if (cand) files.push({name:`${root}/legacy_attachment_candidate.json`,data:JSON.stringify(legacyCandidatePublic(cand),null,2)});
+        for (let i=0;i<(set.images||[]).length;i++) {
+          const x=set.images[i];
+          if (!x||!x.blob) continue;
+          const ab=await x.blob.arrayBuffer();
+          const got=(await sha256Hex(ab)).toLowerCase();
+          if (got!==String(x.meta&&x.meta.sha256||'').toLowerCase()) throw new Error(`candidate ${set.evidenceSetId} image SHA mismatch`);
+          files.push({name:`${root}/images/${String(i+1).padStart(2,'0')}_${x.imageId}${imageExtFromMeta(x.meta)}`,data:new Uint8Array(ab)});
+        }
       }
-      files.push({ name: 'evaluation/evidence_set.json', data: JSON.stringify(evaluationEvidenceSetDescriptor(rec,state.evaluationEvidenceImages), null, 2) });
-      files.push({ name: 'evaluation/extraction_request.json', data: JSON.stringify(buildEvaluationExtractionRequest(rec,state.evaluationEvidenceImages), null, 2) });
     }
     files.push({ name: 'markers.csv', data: markersCsv() });
     files.push({ name: 'user_segments.csv', data: userSegmentsCsv() });
@@ -2844,29 +2863,273 @@ async function doExport() {
 
 
 /* ---------------- G0b03: 録音から独立したDAMデンモク採点証拠 ---------------- */
+const LEGACY_SCORING_SOURCE_KEY='legacy_recording_attachment_unclassified';
+async function scoringEvidenceSetIdForSource(images, sourceKey) {
+  const shas=(images||[]).map(x=>x&&x.meta&&x.meta.sha256).filter(Boolean).map(x=>String(x).toLowerCase()).sort();
+  if (!shas.length) throw new Error('採点証拠画像のSHA-256がありません');
+  const bytes=new TextEncoder().encode(String(sourceKey||'unknown')+':'+shas.join(':'));
+  const h=await sha256Hex(bytes.buffer);
+  return 'evs_'+h.slice(0,24);
+}
 async function standaloneEvidenceSetId(images) {
-  const shas = (images || []).map(x => x && x.meta && x.meta.sha256).filter(Boolean).sort();
-  const bytes = new TextEncoder().encode('dam_denmoku:' + shas.join(':'));
-  const h = await sha256Hex(bytes.buffer);
-  return 'evs_' + h.slice(0, 24);
+  return scoringEvidenceSetIdForSource(images,'dam_denmoku');
+}
+function scoringEvidenceSourceKey(set) {
+  return String(set&&set.source&&set.source.sourceKey||'unknown');
+}
+function standaloneSourceSupportedForG0(set) {
+  return scoringEvidenceSourceKey(set)==='dam_denmoku';
+}
+function legacyAttachmentCandidates(set) {
+  return Array.isArray(set&&set.legacyAttachmentCandidates) ? set.legacyAttachmentCandidates.filter(x=>x&&x.recordingId) : [];
+}
+function legacyCandidateForRecording(set,recordingId) {
+  return legacyAttachmentCandidates(set).find(x=>x.recordingId===recordingId)||null;
+}
+async function scoringEvidenceSetsForLegacyCandidateRecording(recordingId) {
+  if (!recordingId) return [];
+  const all=await dbAll('scoringEvidenceSets').catch(()=>[]);
+  return all.filter(set=>!!legacyCandidateForRecording(set,recordingId));
+}
+function legacyStructuredVerificationSnapshot(rec,images,stored) {
+  const doc=structuredEvaluationDocument(stored);
+  if (!doc) return {status:'unavailable',recordingIdMatch:false,sourceEvidenceMatch:false};
+  const recordingIdMatch=!!(rec&&rec.recordingId&&doc.recordingId===rec.recordingId);
+  const currentShas=evidenceSetShaList(images);
+  const sourceSha=doc.sourceEvidence&&doc.sourceEvidence.sha256?String(doc.sourceEvidence.sha256).toLowerCase():null;
+  const sourceShas=doc.sourceEvidence&&Array.isArray(doc.sourceEvidence.images)
+    ? doc.sourceEvidence.images.map(x=>String(x&&x.sha256||'').toLowerCase()).filter(Boolean)
+    : (sourceSha?[sourceSha]:[]);
+  const sourceEvidenceMatch=sameStringSet(sourceShas,currentShas);
+  return {
+    status:recordingIdMatch&&currentShas.length&&sourceEvidenceMatch?'source_verified_under_legacy_schema':'legacy_source_mismatch',
+    recordingIdMatch,sourceEvidenceMatch,currentImageSha256s:currentShas,
+    sourceImageSha256s:sourceShas,checkedAt:nowIso()
+  };
+}
+async function verifyLegacyScoringImageBytes(images) {
+  for (let i=0;i<(images||[]).length;i++) {
+    const x=images[i];
+    if (!x||!x.blob||typeof x.blob.arrayBuffer!=='function'||!x.meta||!x.meta.sha256) throw new Error(`legacy image ${i+1}: raw bytesまたはSHA-256がありません`);
+    const ab=await x.blob.arrayBuffer();
+    const bytes=new Uint8Array(ab);
+    const expectedSize=Number(x.meta.fileSize);
+    if (Number.isFinite(expectedSize)&&expectedSize>=0&&bytes.byteLength!==expectedSize) throw new Error(`legacy image ${i+1}: size mismatch`);
+    const got=(await sha256Hex(ab)).toLowerCase();
+    if (got!==String(x.meta.sha256).toLowerCase()) throw new Error(`legacy image ${i+1}: SHA-256 mismatch`);
+  }
+  return true;
+}
+function legacyCandidatePublic(x) {
+  if (!x) return null;
+  const ls=x.legacyStructuredScoringResult;
+  return {
+    recordingId:x.recordingId||null,
+    relationshipStatus:x.relationshipStatus||'legacy_attachment_candidate_unbound',
+    relationshipBasis:x.relationshipBasis||null,
+    legacyAttachedAt:x.legacyAttachedAt||null,
+    migratedAt:x.migratedAt||null,
+    rawImageVerification:x.rawImageVerification||null,
+    sourceClassification:x.sourceClassification||LEGACY_SCORING_SOURCE_KEY,
+    legacyStructured:{
+      present:!!(ls&&ls.document),
+      schemaVersion:ls&&ls.document&&ls.document.schemaVersion||null,
+      sourceVerificationAtMigration:ls&&ls.sourceVerificationAtMigration||null,
+      originalImportMeta:ls&&ls.importMeta||null
+    },
+    warning:'This records only that older SongScope UI stored this scoring evidence inside the recording row. It is NOT confirmation that the scoring result and audio are the same performance.'
+  };
+}
+async function migrateLegacyRecordingAttachedScoringEvidence() {
+  const recs=await dbAll('recordings').catch(()=>[]);
+  const recById=new Map(recs.map(r=>[r.recordingId,r]));
+  const assets=await dbAll('audio').catch(()=>[]);
+  const summary={examined:0,migrated:0,alreadyMigrated:0,blocked:0,createdSets:0,mergedSets:0};
+  for (const asset of assets) {
+    const images=normalizeEvaluationEvidenceImages(asset);
+    if (!images.length) continue;
+    summary.examined++;
+    const rec=recById.get(asset.recordingId);
+    if (!rec) {
+      asset.legacyScoringEvidenceMigration={status:'blocked_recording_missing',updatedAt:nowIso(),buildId:BUILD_ID};
+      await dbPut('audio',asset).catch(()=>{});
+      summary.blocked++;
+      continue;
+    }
+    try {
+      await verifyLegacyScoringImageBytes(images);
+      // The pre-G0 direct-attachment UI did not reliably distinguish DAMデンモク screenshots
+      // from other scoring screens. Do not relabel these legacy bytes as dam_denmoku.
+      const sourceKey=LEGACY_SCORING_SOURCE_KEY;
+      const evidenceSetId=await scoringEvidenceSetIdForSource(images,sourceKey);
+      let set=await dbGet('scoringEvidenceSets',evidenceSetId).catch(()=>null);
+      const existed=!!set;
+      if (!set) {
+        set={
+          evidenceSetId,
+          schemaVersion:'songscope-scoring-evidence-set-v1',
+          source:{provider:'DAM_or_unknown_legacy',application:null,sourceKey},
+          bindingStatus:'unbound',boundRecordingId:null,lifecycleStatus:'active',
+          createdAt:(images[0]&&images[0].meta&&images[0].meta.attachedAt)||asset.savedAt||rec.updatedAt||rec.createdAt||nowIso(),
+          updatedAt:nowIso(),
+          images:images.map((x,i)=>({
+            imageId:x.imageId||('img_'+String(i+1).padStart(2,'0')),
+            blob:x.blob,
+            meta:Object.assign({},x.meta,{
+              legacyOriginalSourceClaim:x.meta&&x.meta.source||null,
+              source:sourceKey,
+              migrationClassification:'source_unclassified_due_to_pre_g0_input_not_enforcing_source'
+            })
+          })),
+          note:'Migrated non-destructively from the pre-G0 recording-attached scoring-evidence path. Source is intentionally unclassified and relationship to the recording is candidate-only, not a binding.',
+          legacyAttachmentCandidates:[]
+        };
+        summary.createdSets++;
+      } else summary.mergedSets++;
+      if (!Array.isArray(set.legacyAttachmentCandidates)) set.legacyAttachmentCandidates=[];
+      let candidate=legacyCandidateForRecording(set,rec.recordingId);
+      if (!candidate) {
+        const stored=asset.evaluationStructured||null;
+        candidate={
+          recordingId:rec.recordingId,
+          relationshipStatus:'legacy_attachment_candidate_unbound',
+          relationshipBasis:'pre_g0_recording_attached_ui_without_explicit_same_performance_confirmation',
+          legacyAttachedAt:(images[0]&&images[0].meta&&images[0].meta.attachedAt)||null,
+          migratedAt:nowIso(),
+          rawImageVerification:'sha256_verified_at_migration',
+          sourceClassification:sourceKey,
+          legacyStructuredScoringResult:stored?{
+            document:structuredEvaluationDocument(stored),
+            importMeta:stored&&stored.importMeta||null,
+            sourceVerificationAtMigration:legacyStructuredVerificationSnapshot(rec,images,stored)
+          }:null
+        };
+        set.legacyAttachmentCandidates.push(candidate);
+        summary.migrated++;
+      } else summary.alreadyMigrated++;
+      // Never promote the candidate to a binding.
+      set.bindingStatus='unbound'; set.boundRecordingId=null; set.updatedAt=nowIso();
+      await dbPut('scoringEvidenceSets',set);
+      asset.legacyScoringEvidenceMigration={
+        status:'migrated_candidate_only',
+        evidenceSetId,sourceKey,
+        relationshipStatus:'legacy_attachment_candidate_unbound',
+        migratedAt:candidate&&candidate.migratedAt||nowIso(),
+        buildId:BUILD_ID,
+        note:'Legacy bytes remain in audio store for non-destructive rollback/audit. scoringEvidenceSets is authoritative for consumers from build10 onward.'
+      };
+      await dbPut('audio',asset);
+    } catch(e) {
+      asset.legacyScoringEvidenceMigration={status:'blocked_integrity_check_failed',error:(e&&e.message)||String(e),updatedAt:nowIso(),buildId:BUILD_ID};
+      await dbPut('audio',asset).catch(()=>{});
+      summary.blocked++;
+    }
+  }
+  return summary;
+}
+function recordingScoringEvidenceDescriptor(rec,sets) {
+  const recordingId=rec&&rec.recordingId||null;
+  const relevant=(sets||[]).filter(set=>!!legacyCandidateForRecording(set,recordingId));
+  const candidates=relevant.map(set=>({
+    evidenceSet:standaloneEvidenceSetPublic(set),
+    relationship:legacyCandidatePublic(legacyCandidateForRecording(set,recordingId))
+  }));
+  if (!relevant.length) return {
+    status:'unavailable',recordingId,candidateCount:0,candidates:[],
+    structuredScoringResult:{status:'unavailable',verification:{status:'unavailable'}},
+    policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
+  };
+  if (relevant.length!==1) return {
+    status:'ambiguous_multiple_legacy_candidates',recordingId,candidateCount:relevant.length,candidates,
+    structuredScoringResult:{
+      status:'available',
+      verification:{status:'legacy_attachment_candidate_conflict_multiple_sets'},
+      relationship:{status:'legacy_attachment_candidate_unbound'},
+      result:null,
+      note:'Multiple legacy scoring evidence sets point to this recording as candidates. SongScope does not choose one silently.'
+    },
+    policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
+  };
+  const set=relevant[0],candidate=legacyCandidateForRecording(set,recordingId);
+  const current=standaloneStructuredDescriptor(set);
+  let doc=null,sourceVerification='unavailable',structuredSource='none',userReview=null;
+  if (current.status==='available'&&current.verification&&current.verification.status==='source_verified') {
+    doc=structuredEvaluationDocument(set.structuredScoringResult);
+    sourceVerification='source_verified';
+    structuredSource='current_scoring_evidence_set_structured_result';
+    userReview=current.userReview||null;
+  } else if (candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document) {
+    doc=candidate.legacyStructuredScoringResult.document;
+    sourceVerification=candidate.legacyStructuredScoringResult.sourceVerificationAtMigration&&candidate.legacyStructuredScoringResult.sourceVerificationAtMigration.status||'unavailable';
+    structuredSource='legacy_recording_attached_structured_result_preserved_at_migration';
+    userReview=doc&&doc.extraction&&doc.extraction.userReview||null;
+  }
+  return {
+    status:'legacy_attachment_candidate_unbound',
+    recordingId,candidateCount:1,candidates,
+    structuredScoringResult:{
+      status:doc?'available':'unavailable',
+      schemaVersion:doc&&doc.schemaVersion||null,
+      sourceEvidence:doc&&doc.sourceEvidence||null,
+      extraction:doc&&doc.extraction||null,
+      result:doc&&doc.result||null,
+      verification:{
+        status:'legacy_attachment_candidate_unbound',
+        sourceVerificationBeforeRelationshipCheck:sourceVerification
+      },
+      relationship:{
+        status:'legacy_attachment_candidate_unbound',
+        evidenceSetId:set.evidenceSetId,
+        recordingId,
+        basis:candidate&&candidate.relationshipBasis||null,
+        explicitBindingConfirmed:false
+      },
+      userReview,
+      note:'Raw/structured scoring evidence may be source-verified, but its relationship to this recording is only a migrated legacy attachment candidate. It is not eligible as a bound performance outcome.'
+    },
+    policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
+  };
+}
+function buildUnifiedRecordingEvaluationAnchors(rec,sets) {
+  const prov=normalizedMetadataProvenance(rec||{});
+  return {
+    schemaVersion:'songscope-recording-scoring-evidence-candidates-v1',
+    recordingId:rec&&rec.recordingId||null,
+    manualDamScore:{
+      value:parseStoredScore(rec&&rec.damScore),
+      rawStoredValue:rec&&rec.damScore||null,
+      provenance:prov.damScore||{source:'absent',confirmation:'unknown'}
+    },
+    scoringEvidence:recordingScoringEvidenceDescriptor(rec,sets),
+    policy:{
+      scoringEvidenceStoredIndependently:true,
+      noRecordingAttachedScoringEvidenceConsumer:true,
+      legacyAttachmentCandidateDoesNotEqualBinding:true,
+      explicitBindingRequiredBeforePerformanceOutcomeUse:true
+    }
+  };
 }
 function standaloneLifecycleStatus(set) {
   return set && set.lifecycleStatus === 'archived' ? 'archived' : 'active';
 }
 function standaloneEvidenceSetPublic(set) {
   if (!set) return null;
+  const sourceKey=scoringEvidenceSourceKey(set);
   return {
-    schemaVersion: 'songscope-scoring-evidence-set-v1',
-    evidenceSetId: set.evidenceSetId,
-    source: set.source,
-    bindingStatus: set.bindingStatus || 'unbound',
-    boundRecordingId: set.boundRecordingId || null,
-    lifecycleStatus: standaloneLifecycleStatus(set),
-    archivedAt: set.archivedAt || null,
-    createdAt: set.createdAt,
-    imageCount: (set.images || []).length,
-    images: (set.images || []).map(x => ({ imageId:x.imageId, meta:x.meta })),
-    interpretation: 'A DAMデンモク scoring-history evidence set is an independent primary evidence object. It is not a recording and must not be treated as the same performance until an explicit binding is confirmed.'
+    schemaVersion:'songscope-scoring-evidence-set-v1',
+    evidenceSetId:set.evidenceSetId,
+    source:set.source,
+    bindingStatus:set.bindingStatus||'unbound',
+    boundRecordingId:set.boundRecordingId||null,
+    lifecycleStatus:standaloneLifecycleStatus(set),
+    archivedAt:set.archivedAt||null,
+    createdAt:set.createdAt,
+    imageCount:(set.images||[]).length,
+    images:(set.images||[]).map(x=>({imageId:x.imageId,meta:x.meta})),
+    legacyAttachmentCandidates:legacyAttachmentCandidates(set).map(legacyCandidatePublic),
+    interpretation:sourceKey==='dam_denmoku'
+      ? 'A DAMデンモク scoring-history evidence set is an independent primary evidence object. It is not a recording and must not be treated as the same performance until an explicit binding is confirmed.'
+      : 'Legacy scoring image evidence migrated from the old recording-attached path. Source classification and same-performance relationship are intentionally NOT asserted.'
   };
 }
 function standaloneFieldStatusTemplate() {
@@ -3023,6 +3286,7 @@ async function importStandaloneStructuredResult(evidenceSetId,file) {
   if (file.size > 1024*1024) throw new Error('構造化採点JSONが大きすぎます（1MB以下）');
   const set=await dbGet('scoringEvidenceSets',evidenceSetId);
   if (!set) throw new Error('採点証拠セットが見つかりません');
+  if (!standaloneSourceSupportedForG0(set)) throw new Error('この旧方式証拠はsource未分類のため、G0のDAMデンモク構造化対象にはできません');
   const buf=await file.arrayBuffer();
   const doc=JSON.parse(new TextDecoder('utf-8').decode(buf));
   validateStandaloneStructuredScoringResult(doc,set);
@@ -3218,18 +3482,26 @@ async function renderStandaloneEvidenceSets() {
   const rows=all.filter(r=>showArchivedScoringEvidence || standaloneLifecycleStatus(r)!=='archived');
   if (!rows.length) { box.innerHTML='<p class="small">表示するDAMデンモク採点履歴はありません。</p>'; return; }
   box.innerHTML=rows.map(r=>{
-    const p=standaloneEvidenceSetPublic(r); const sd=standaloneStructuredDescriptor(r);
-    const lifecycle=standaloneLifecycleStatus(r);
+    const p=standaloneEvidenceSetPublic(r),sd=standaloneStructuredDescriptor(r);
+    const lifecycle=standaloneLifecycleStatus(r),sourceKey=scoringEvidenceSourceKey(r);
+    const supported=standaloneSourceSupportedForG0(r);
+    const legacyCount=legacyAttachmentCandidates(r).length;
     let reviewStatus=sd.userReview&&sd.userReview.status||'unreviewed';
-    const schemaNote=sd.status==='available' && !sd.schemaCurrent ? ' ／ schema: v1→再抽出必要' : '';
-    const structuredText=sd.status==='available' ? `構造化: ${sd.verification.status} ／ 内容確認: ${reviewStatus}${schemaNote}` : '構造化: 未登録';
-    const reviewBtn=sd.status==='available' && sd.verification.status==='source_verified' && sd.schemaCurrent
-      ? `<button class="mini" data-ev-review="${escapeHtml(p.evidenceSetId)}">${reviewStatus==='unreviewed'?'抽出内容をレビュー':'レビューを再確認'}</button>` : '';
+    const schemaNote=sd.status==='available'&&!sd.schemaCurrent?' ／ schema: v1→再抽出必要':'';
+    let structuredText=sd.status==='available'?`構造化: ${sd.verification.status} ／ 内容確認: ${reviewStatus}${schemaNote}`:'構造化: 未登録';
+    if (!supported&&legacyCount) {
+      const legacyStructuredCount=legacyAttachmentCandidates(r).filter(x=>x.legacyStructuredScoringResult&&x.legacyStructuredScoringResult.document).length;
+      structuredText=`旧方式から移行: candidate ${legacyCount}件 ／ 旧構造化JSON ${legacyStructuredCount}件（監査用・未Binding）`;
+    }
+    const reviewBtn=supported&&sd.status==='available'&&sd.verification.status==='source_verified'&&sd.schemaCurrent
+      ? `<button class="mini" data-ev-review="${escapeHtml(p.evidenceSetId)}">${reviewStatus==='unreviewed'?'抽出内容をレビュー':'レビューを再確認'}</button>`:'';
     const lifecycleBtn=lifecycle==='archived'
       ? `<button class="mini" data-ev-restore="${escapeHtml(p.evidenceSetId)}">アーカイブから戻す</button>`
       : `<button class="mini danger" data-ev-archive="${escapeHtml(p.evidenceSetId)}">アーカイブ</button>`;
-    const structuredBtn=lifecycle==='archived' ? '' : `<button class="mini" data-ev-structured="${escapeHtml(p.evidenceSetId)}">構造化JSON</button>`;
-    return `<div class="item scoring-evidence-item${lifecycle==='archived'?' is-archived':''}"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${p.imageCount}枚 ／ binding: ${escapeHtml(p.bindingStatus)} ／ ${escapeHtml(lifecycle)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div></div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">抽出ZIP</button>${structuredBtn}${reviewBtn}${lifecycleBtn}</div></div>`;
+    const structuredBtn=supported&&lifecycle!=='archived'?`<button class="mini" data-ev-structured="${escapeHtml(p.evidenceSetId)}">構造化JSON</button>`:'';
+    const sourceLabel=supported?'DAMデンモク':'旧方式・source未分類';
+    const candidateLine=legacyCount?`<div class="item-sub scoring-evidence-status">旧添付候補: ${legacyCount}録音（candidate only / NOT binding）</div>`:'';
+    return `<div class="item scoring-evidence-item${lifecycle==='archived'?' is-archived':''}${supported?'':' is-legacy-source'}"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${escapeHtml(sourceLabel)} ／ ${p.imageCount}枚 ／ binding: ${escapeHtml(p.bindingStatus)} ／ ${escapeHtml(lifecycle)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div>${candidateLine}</div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">${supported?'抽出ZIP':'証拠ZIP'}</button>${structuredBtn}${reviewBtn}${lifecycleBtn}</div></div>`;
   }).join('');
   $$('[data-ev-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.evExport)));
   $$('[data-ev-structured]').forEach(b=>b.addEventListener('click',()=>{ const inp=$('#scoring-structured-input'); inp.dataset.evidenceSetId=b.dataset.evStructured; inp.click(); }));
@@ -3242,9 +3514,22 @@ async function exportStandaloneEvidenceSet(id) {
     const set=await dbGet('scoringEvidenceSets',id);
     if (!set) throw new Error('証拠セットが見つかりません');
     const files=[
-      {name:'evaluation/evidence_set.json',data:JSON.stringify(standaloneEvidenceSetPublic(set),null,2)},
-      {name:'evaluation/extraction_request.json',data:JSON.stringify(standaloneExtractionRequest(set),null,2)}
+      {name:'evaluation/evidence_set.json',data:JSON.stringify(standaloneEvidenceSetPublic(set),null,2)}
     ];
+    if (standaloneSourceSupportedForG0(set)) {
+      files.push({name:'evaluation/extraction_request.json',data:JSON.stringify(standaloneExtractionRequest(set),null,2)});
+    }
+    if (legacyAttachmentCandidates(set).length) {
+      files.push({name:'evaluation/legacy_attachment_candidates.json',data:JSON.stringify({
+        schemaVersion:'songscope-legacy-scoring-attachment-candidates-v1',
+        evidenceSetId:set.evidenceSetId,
+        candidates:legacyAttachmentCandidates(set).map(x=>({
+          summary:legacyCandidatePublic(x),
+          preservedLegacyStructuredScoringResult:x.legacyStructuredScoringResult||null
+        })),
+        warning:'Candidate relation is historical UI provenance only and is not a same-performance binding.'
+      },null,2)});
+    }
     if (set.structuredScoringResult) {
       files.push({name:'evaluation/structured_scoring_result.json',data:JSON.stringify(structuredEvaluationDocument(set.structuredScoringResult),null,2)});
       files.push({name:'evaluation/structured_scoring_verification.json',data:JSON.stringify({verification:standaloneStructuredDescriptor(set).verification,userReview:set.structuredScoringUserReview||{status:'unreviewed'}},null,2)});
@@ -3886,7 +4171,8 @@ async function restoreAll(file) {
     if (!ok) return;
     busy('復元中', '検証済みデータを1つのIndexedDBトランザクションで復元しています…', 72);
     await restoreFullBackupAtomic(parsed);
-    $('#busy-bar').style.width = '100%';
+    await migrateLegacyRecordingAttachedScoringEvidence().catch(e=>console.warn('legacy scoring migration after restore skipped:',e));
+    $('#busy-bar').style.width='100%';
     closeSheet();
     state.rec = null; state.analysis = null;
     await loadRecordings();
@@ -4101,7 +4387,8 @@ async function loadCmpSide(side, id) {
     audio = new Audio(url);
     audio.preload = 'metadata';
   }
-  cmp[side] = { rec, an, audio, url, asset: au || null };
+  const scoringEvidenceCandidates=await scoringEvidenceSetsForLegacyCandidateRecording(id);
+  cmp[side]={rec,an,audio,url,asset:au||null,scoringEvidenceCandidates};
   drawCompare();
   refreshE4ContextUi().catch(() => { });
 }
@@ -4804,10 +5091,10 @@ function d2RecordingDescriptor(side) {
       source: 'recording_metadata'
     },
     metadataProvenance: normalizedMetadataProvenance(rec),
-    evaluationEvidence: {
-      scoringResultImage: evaluationImageDescriptor(rec, d.asset && d.asset.evaluationImageMeta ? d.asset.evaluationImageMeta : null),
-      structuredScoringResult: structuredEvaluationDescriptor(rec, d.asset && d.asset.evaluationImageMeta ? d.asset.evaluationImageMeta : null, d.asset && d.asset.evaluationStructured ? d.asset.evaluationStructured : null)
-    }
+    evaluationEvidence:Object.assign(
+      {consumerSource:'scoringEvidenceSets',legacyRecordingAttachedFieldsIgnored:true},
+      recordingScoringEvidenceDescriptor(rec,d.scoringEvidenceCandidates||[])
+    )
   };
 }
 function d2MapMarkers(rows, side, offsetSec) {
@@ -5296,7 +5583,7 @@ function e3OutcomeComparison(descA, descB, pairContext = null, chronology = null
  * analysisHistoryの再解析runは「別歌唱」として数えない。
  * chronological orderは証拠制約から解き、曖昧/矛盾時は無理に並べない。
  * ===================================================================== */
-function f1DescriptorFromStored(rec, an, asset, audioIdentity) {
+function f1DescriptorFromStored(rec,an,asset,audioIdentity,scoringEvidenceCandidates) {
   rec = rec || {}; an = an || {}; asset = asset || {}; audioIdentity = audioIdentity || {};
   const effectiveSha = audioIdentity.sha256 || rec.audioSha256 || an.audioSha256 || null;
   return {
@@ -5335,10 +5622,10 @@ function f1DescriptorFromStored(rec, an, asset, audioIdentity) {
       source: 'recording_metadata'
     },
     metadataProvenance: normalizedMetadataProvenance(rec),
-    evaluationEvidence: {
-      scoringResultImage: evaluationImageDescriptor(rec, asset.evaluationImageMeta || null),
-      structuredScoringResult: structuredEvaluationDescriptor(rec, asset.evaluationImageMeta || null, asset.evaluationStructured || null)
-    }
+    evaluationEvidence:Object.assign(
+      {consumerSource:'scoringEvidenceSets',legacyRecordingAttachedFieldsIgnored:true},
+      recordingScoringEvidenceDescriptor(rec,scoringEvidenceCandidates||[])
+    )
   };
 }
 async function f1LoadDescriptorsForSong(songId) {
@@ -5360,7 +5647,8 @@ async function f1LoadDescriptorsForSong(songId) {
         hashComputationError = (e && e.message) ? String(e.message) : String(e);
       }
     }
-    out.push(f1DescriptorFromStored(rec, an, asset, { sha256: sha, source, hashComputationError }));
+    const scoringEvidenceCandidates=await scoringEvidenceSetsForLegacyCandidateRecording(rec.recordingId);
+    out.push(f1DescriptorFromStored(rec,an,asset,{sha256:sha,source,hashComputationError},scoringEvidenceCandidates));
   }
   // このsortは表示/JSON安定化だけ。chronologyの証拠には使わない。
   out.sort((a,b) => String(a.recordingId || '').localeCompare(String(b.recordingId || '')));
@@ -5466,7 +5754,17 @@ function f1VerifiedResult(desc) {
   return e3StructuredIsSourceVerified(st) && st.result && typeof st.result === 'object' ? st.result : null;
 }
 function f1OutcomeObservation(desc) {
-  const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult || { status: 'unavailable' };
+  const st=desc&&desc.evaluationEvidence&&desc.evaluationEvidence.structuredScoringResult||{status:'unavailable'};
+  if (st.relationship&&st.relationship.status==='legacy_attachment_candidate_unbound') {
+    return {
+      status:'legacy_attachment_candidate_unbound',
+      sourceVerification:st.verification&&st.verification.sourceVerificationBeforeRelationshipCheck||'unavailable',
+      sourceImageSha256:null,userReview:st.userReview||'unknown',scoringDate:null,
+      overallScore:null,personalBest:null,nationalAverage:null,heartBonus:null,ranking:null,metrics:{},techniques:{},vibrato:null,
+      candidateEvidenceSetId:st.relationship.evidenceSetId||null,
+      note:'Scoring evidence was migrated from the old recording-attached UI, but same-performance binding has not been explicitly confirmed. Values are preserved for audit but excluded from Observed History numeric series.'
+    };
+  }
   if (desc && desc.physicalIdentity && desc.physicalIdentity.verifiedStructuredOutcomeConflict) {
     return {
       status: 'duplicate_alias_evidence_conflict',
@@ -5732,6 +6030,7 @@ async function buildF1HistoryPackage() {
   const rowOrder=chronology.status==='fully_ordered'?orderedDescs:stable;
   const recordings=rowOrder.map((d,i)=>({ chronologyIndex:chronology.status==='fully_ordered'?i+1:null, recording:d, outcome:f1OutcomeObservation(d) }));
   const verifiedCount=recordings.filter(r=>r.outcome.status==='source_verified_structured_outcome').length;
+  const legacyUnboundCandidateCount=recordings.filter(r=>r.outcome.status==='legacy_attachment_candidate_unbound').length;
   const observedScores=recordings.map(r=>r.outcome&&r.outcome.overallScore).filter(v=>isFinite(Number(v))).map(Number);
   const personalBests=recordings.map(r=>r.outcome&&r.outcome.personalBest).filter(v=>isFinite(Number(v))).map(Number);
   const observedMax=observedScores.length?Math.max(...observedScores):null;
@@ -5769,6 +6068,7 @@ async function buildF1HistoryPackage() {
       storedRecordingRecordCount:storedDescs.length,
       unresolvedIdentityRecordCount:identityResolution.audit.unresolvedIdentityRecordCount,
       sourceVerifiedStructuredOutcomeCount:verifiedCount,
+      legacyUnboundCandidateOutcomeCount:legacyUnboundCandidateCount,
       minimumOrderedComparableRecordingsForExploratoryPattern:3,
       minimumOrderedComparableRecordingsForRepeatedObservationPattern:5,
       note:descs.length<3?'Two recordings can show a pair difference but cannot separate a repeated pattern from take-to-take variation.': 'Pattern labels remain descriptive evidence, not proof of durable skill improvement.'
@@ -5786,6 +6086,7 @@ async function buildF1HistoryPackage() {
       'A two-take difference is not a trend. At least three fully ordered, source-verified, scoring-condition-comparable recordings are required even for an exploratory direction pattern.',
       'Five or more such recordings permit a repeated-observation pattern label, but still do not prove durable singing skill change or causation.',
       'Technique counts and vibrato quantity are non-monotonic observations; more or less is not automatically better.',
+      'Migrated legacy recording-attached scoring evidence remains candidate-only and is excluded from numeric outcome series until explicit same-performance binding exists.',
       'F1 does not aggregate mixed-audio D2/F0 observations yet; those remain separate evidence.'
     ]
   };
@@ -6208,17 +6509,24 @@ async function exportD2DiagnosticPackage() {
       { name: 'comparison_summary.json', data: JSON.stringify(pkg, null, 2) },
       { name: 'comparison_windows.csv', data: d2WindowsCsv(pkg) }
     ];
-    for (const pair of [['A', cmp.a], ['B', cmp.b]]) {
-      const label = pair[0], d = pair[1];
-      const asset = d && d.asset;
-      const evimgs=normalizeEvaluationEvidenceImages(asset);
-      if (evimgs.length) {
-        for (let i=0;i<evimgs.length;i++) if (evimgs[i].blob) files.push({ name:`evaluation/${label}_images/${String(i+1).padStart(2,'0')}${imageExtFromMeta(evimgs[i].meta)}`, data:new Uint8Array(await evimgs[i].blob.arrayBuffer()) });
-        files.push({ name:`evaluation/${label}_evidence_set.json`, data:JSON.stringify(evaluationEvidenceSetDescriptor(d.rec,evimgs),null,2) });
-        files.push({ name:`evaluation/${label}_extraction_request.json`, data:JSON.stringify(buildEvaluationExtractionRequest(d.rec,evimgs),null,2) });
-      }
-      if (asset && asset.evaluationStructured) {
-        files.push({ name: `evaluation/${label}_structured_scoring_result.json`, data: JSON.stringify(structuredEvaluationDocument(asset.evaluationStructured), null, 2) });
+    for (const pair of [['A',cmp.a],['B',cmp.b]]) {
+      const label=pair[0],d=pair[1];
+      const sets=d&&Array.isArray(d.scoringEvidenceCandidates)?d.scoringEvidenceCandidates:[];
+      files.push({name:`evaluation/${label}_scoring_evidence_relation.json`,data:JSON.stringify(
+        d&&d.rec?recordingScoringEvidenceDescriptor(d.rec,sets):{status:'unavailable'},null,2)});
+      for (const set of sets) {
+        const root=`evaluation/${label}_candidates/${set.evidenceSetId}`;
+        files.push({name:`${root}/evidence_set.json`,data:JSON.stringify(standaloneEvidenceSetPublic(set),null,2)});
+        const candidate=d&&d.rec?legacyCandidateForRecording(set,d.rec.recordingId):null;
+        if (candidate) files.push({name:`${root}/legacy_attachment_candidate.json`,data:JSON.stringify(legacyCandidatePublic(candidate),null,2)});
+        for (let i=0;i<(set.images||[]).length;i++) {
+          const x=set.images[i];
+          if (!x||!x.blob) continue;
+          const ab=await x.blob.arrayBuffer();
+          const got=(await sha256Hex(ab)).toLowerCase();
+          if (got!==String(x.meta&&x.meta.sha256||'').toLowerCase()) throw new Error(`${label} candidate ${set.evidenceSetId}: image SHA mismatch`);
+          files.push({name:`${root}/images/${String(i+1).padStart(2,'0')}_${x.imageId}${imageExtFromMeta(x.meta)}`,data:new Uint8Array(ab)});
+        }
       }
     }
     const blob = SongScopeZip.createZip(files);
@@ -6629,7 +6937,7 @@ function wireReview() {
   $('#chk-include-audio').checked = getFlag('includeAudio', false);
   $('#chk-include-audio').addEventListener('change', e => setFlag('includeAudio', e.target.checked));
   $('#btn-export').addEventListener('click', doExport);
-  // G0 build08: legacy recording-attached scoring evidence is read-only until build09 migration.
+  // G0 build10: legacy recording-attached scoring evidence remains read-only for audit/rollback; all consumers use scoringEvidenceSets.
   ['btn-eval-image','btn-eval-image-remove','btn-eval-json','btn-eval-json-remove'].forEach(id=>{ const el=$('#'+id); if(el){ el.disabled=true; el.hidden=true; } });
 
   $('#btn-delete-rec').addEventListener('click', async () => {
@@ -6775,8 +7083,10 @@ async function init() {
     else toast('端末内データベースを開けませんでした。サイトデータは削除しないでください。', 8000);
     return;
   }
-  await migrateR1PairContexts().catch(e => console.warn('R1 pair-context migration skipped:', e));
-  await migrateBliteIdentityData().catch(e => console.warn('B-lite migration skipped:', e));
+  await migrateR1PairContexts().catch(e=>console.warn('R1 pair-context migration skipped:',e));
+  await migrateBliteIdentityData().catch(e=>console.warn('B-lite migration skipped:',e));
+  const legacyScoringMigration=await migrateLegacyRecordingAttachedScoringEvidence().catch(e=>{console.warn('G0 build10 legacy scoring migration skipped:',e);return null;});
+  if (legacyScoringMigration&&legacyScoringMigration.examined) console.info('SongScope build10 legacy scoring migration',legacyScoringMigration);
   await loadRecordings();
   await renderStandaloneEvidenceSets();
   refreshStorageEstimate();

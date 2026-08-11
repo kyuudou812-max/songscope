@@ -464,3 +464,12 @@ input[type=range]::-webkit-slider-thumb{
 #scoring-review-confirm:disabled{
   opacity:.45;
 }
+
+
+/* G0 build10 — migrated legacy scoring evidence is intentionally not relabeled as DAMデンモク */
+.scoring-evidence-item.is-legacy-source{
+  border-left:3px solid var(--orange);
+}
+.scoring-evidence-item.is-legacy-source .scoring-evidence-status{
+  color:var(--label);
+}

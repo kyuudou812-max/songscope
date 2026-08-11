@@ -709,3 +709,14 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - review sheetをVisual Viewport基準へ変更し、Safariのアドレスバー/ツールバー下への潜り込みを抑制。
 - レビュータイトル/閉じるをsticky化。
 - scoring schema / evidence semantics / Binding設計は変更なし。
+
+
+## G0 build10 — Scoring Evidence Unification / B-01
+- 旧recording-attached採点画像・structured JSONの新規入力停止を継続。
+- 既存旧証拠をraw bytesのSHA-256再検証後、`scoringEvidenceSets`へ非破壊移行。
+- 旧入力経路はsource種別を実際には強制していなかったため、移行データを`legacy_recording_attachment_unclassified`として保存し、`dam_denmoku`へ勝手に再分類しない。
+- 「昔このrecordingに添付されていた」事実は`legacyAttachmentCandidates[]`へ保存するが、`bindingStatus=unbound / boundRecordingId=null`を維持。same-performance Bindingとは扱わない。
+- legacy bytes/JSONはaudio storeにもread-onlyで残し、監査・rollback可能性を維持。
+- build10以降、recording export / D2 / F1 の採点証拠consumerは`scoringEvidenceSets`を参照し、旧audio-row評価フィールドを直接消費しない。
+- legacy candidate由来の採点値は、明示Binding前はObserved Historyの数値系列・E3比較へ使用しない。
+- DAMデンモクとして正式に追加した独立evidence setと、旧方式source未分類setをUIで区別。

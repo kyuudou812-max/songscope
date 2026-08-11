@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260812-g0-09">
+<link rel="stylesheet" href="styles.css?v=20260812-g0-10">
 <title>SongScope</title>
 </head>
 <body>
@@ -48,14 +48,14 @@
 
 
     <div class="card note" id="scoring-evidence-card">
-      <p><b>DAMデンモク採点履歴</b>は録音とは別の一次証拠として先に保存できます。同じ歌唱だと確認できるまで録音には紐付けません。</p>
+      <p><b>採点証拠</b>は録音とは別の一次証拠として保存します。<b>新規追加はDAMデンモク採点履歴のみ</b>対応し、同じ歌唱だと明示確認できるまで録音にはBindingしません。旧方式から移行したsource未分類の証拠は監査用として別表示します。</p>
       <div class="row gap wrap">
         <button id="btn-scoring-evidence-add" class="mini accent">採点履歴画像を追加（複数可）</button>
         <button id="btn-scoring-archive-toggle" class="mini" hidden>アーカイブ済みを表示</button>
         <input type="file" id="scoring-evidence-input" accept="image/*" multiple hidden>
         <input type="file" id="scoring-structured-input" accept="application/json,.json" hidden>
       </div>
-      <div id="scoring-evidence-list" class="list"><p class="small">未紐付けのDAMデンモク採点履歴はありません。</p></div>
+      <div id="scoring-evidence-list" class="list"><p class="small">表示する採点証拠はありません。</p></div>
     </div>
 
     <button id="btn-add" class="primary big">＋ 録音を追加</button>
@@ -150,8 +150,8 @@
     </details>
 
     <div class="card note" id="rv-eval-card">
-      <div class="section-head tight"><span>旧評価アンカー</span><span class="mono small">read-only / migration pending</span></div>
-      <p class="small"><b>build08では録音への採点画像・評価JSONの直接追加を停止しました。</b>新しいDAM採点履歴はホーム画面の「DAMデンモク採点履歴」へ追加してください。ここに既存データがある場合は削除せず、build09で独立証拠へ非破壊移行します。</p>
+      <div class="section-head tight"><span>旧評価アンカー</span><span class="mono small">read-only / migrated by build10</span></div>
+      <p class="small"><b>録音への採点画像・評価JSONの直接追加は停止済みです。</b>build10は既存bytesを削除せず独立scoringEvidenceSetsへ移し、「昔この録音に添付されていた」というcandidate履歴だけを保持します。これは同一performanceのBinding確認ではありません。</p>
       <div id="rv-eval-status" class="note"><p class="small">旧方式の保存状態を確認中…</p></div>
       <button id="btn-eval-image" hidden disabled></button>
       <button id="btn-eval-image-remove" hidden disabled></button>
@@ -386,7 +386,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260812-g0-09"></script>
-<script src="app.js?v=20260812-g0-09"></script>
+<script src="zip.js?v=20260812-g0-10"></script>
+<script src="app.js?v=20260812-g0-10"></script>
 </body>
 </html>
