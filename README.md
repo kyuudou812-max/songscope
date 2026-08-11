@@ -1,3 +1,12 @@
+# G0 build06 — standalone structured scoring result
+
+- `scoringEvidenceSets` に外部AIの構造化採点JSONを戻して保存できるようにした。
+- 新schema: `songscope-external-scoring-result-v1`。未紐付け段階では `recordingId` を受け付けない。
+- source verification は `evidenceSetId` と全画像SHA-256集合の完全一致で判定する。
+- `source_verified` と人間の内容確認 `userReview.status = user_confirmed` は別管理。JSON差し替え時は user review を必ず未確認へ戻す。
+- 抽出ZIPは構造化結果が存在すれば `structured_scoring_result.json` と verification/user review sidecar を含める。
+- 録音へのbindingはこのbuildでは実装しない。
+
 
 ## Audit Remediation R2 build 01 — 観測方向の意味論修正 / mixed-audio隔離
 
