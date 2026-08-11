@@ -10,7 +10,7 @@
 
 const APP_VERSION = '0.2.0-g0';
 const SCHEMA_VERSION = '0.16.4';
-const BUILD_ID = '20260811-g0-08';
+const BUILD_ID = '20260812-g0-09';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -421,7 +421,24 @@ async function refreshStorageEstimate() {
 }
 
 /* ---------------- シート制御 ---------------- */
+function syncSongScopeVisualViewport() {
+  const root=document.documentElement;
+  const vv=window.visualViewport;
+  if (!root) return;
+  if (vv) {
+    root.style.setProperty('--songscope-vv-top', `${Math.max(0,Number(vv.offsetTop)||0)}px`);
+    root.style.setProperty('--songscope-vv-left', `${Math.max(0,Number(vv.offsetLeft)||0)}px`);
+    root.style.setProperty('--songscope-vv-height', `${Math.max(1,Number(vv.height)||window.innerHeight||1)}px`);
+    root.style.setProperty('--songscope-vv-width', `${Math.max(1,Number(vv.width)||window.innerWidth||1)}px`);
+  } else {
+    root.style.setProperty('--songscope-vv-top','0px');
+    root.style.setProperty('--songscope-vv-left','0px');
+    root.style.setProperty('--songscope-vv-height', `${Math.max(1,window.innerHeight||1)}px`);
+    root.style.setProperty('--songscope-vv-width', `${Math.max(1,window.innerWidth||1)}px`);
+  }
+}
 function openSheet(id) {
+  syncSongScopeVisualViewport();
   $('#sheet-wrap').hidden = false;
   $$('.sheet').forEach(s => { s.hidden = s.id !== id; });
 }
@@ -3087,9 +3104,42 @@ function standaloneReviewValueText(value) {
 }
 let standaloneReviewImageUrls=[];
 function clearStandaloneReviewImageUrls() {
-  for (const url of standaloneReviewImageUrls) { try { URL.revokeObjectURL(url); } catch(e){} }
+  // build09: review images use short-lived data URLs rather than blob: URLs because
+  // iPhone Safari can fail to render IndexedDB-restored Blob object URLs.
   standaloneReviewImageUrls=[];
   const box=$('#scoring-review-images'); if (box) box.innerHTML='';
+}
+function reviewImageMimeType(x) {
+  const metaType=String(x&&x.meta&&x.meta.mimeType||'').toLowerCase();
+  if (metaType.startsWith('image/')) return metaType;
+  const name=String(x&&x.meta&&x.meta.fileName||'').toLowerCase();
+  if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+  if (name.endsWith('.webp')) return 'image/webp';
+  return 'image/png';
+}
+function blobToDataUrl(blob) {
+  return new Promise((resolve,reject)=>{
+    const r=new FileReader();
+    r.onload=()=>resolve(String(r.result||''));
+    r.onerror=()=>reject(r.error||new Error('画像Data URLの生成に失敗しました'));
+    r.readAsDataURL(blob);
+  });
+}
+async function standaloneReviewImageDataUrl(x) {
+  if (!x || !x.blob || typeof x.blob.arrayBuffer!=='function') throw new Error('raw image bytesがありません');
+  const ab=await x.blob.arrayBuffer();
+  const bytes=new Uint8Array(ab);
+  const expectedSize=Number(x.meta&&x.meta.fileSize);
+  if (Number.isFinite(expectedSize) && expectedSize>=0 && bytes.byteLength!==expectedSize) {
+    throw new Error(`size mismatch: ${bytes.byteLength} != ${expectedSize}`);
+  }
+  const expectedSha=String(x.meta&&x.meta.sha256||'').toLowerCase();
+  if (expectedSha) {
+    const got=(await sha256Hex(ab)).toLowerCase();
+    if (got!==expectedSha) throw new Error(`SHA-256 mismatch: ${got.slice(0,12)}…`);
+  }
+  const canonicalBlob=new Blob([bytes],{type:reviewImageMimeType(x)});
+  return blobToDataUrl(canonicalBlob);
 }
 async function openStandaloneStructuredReview(evidenceSetId) {
   const set=await dbGet('scoringEvidenceSets',evidenceSetId);
@@ -3099,13 +3149,24 @@ async function openStandaloneStructuredReview(evidenceSetId) {
   if (!desc.schemaCurrent || !desc.fieldStatus) throw new Error('この結果は旧schemaです。build08用JSONを読み込み直してください');
   clearStandaloneReviewImageUrls();
   const imageBox=$('#scoring-review-images');
+  const imageErrors=[];
   for (const x of (set.images||[])) {
-    if (!x || !x.blob) continue;
-    const url=URL.createObjectURL(x.blob); standaloneReviewImageUrls.push(url);
+    if (!x) continue;
     const wrap=document.createElement('div'); wrap.className='scoring-review-image';
     const label=document.createElement('div'); label.className='small mono'; label.textContent=`${x.imageId} / ${String(x.meta&&x.meta.sha256||'').slice(0,12)}…`;
-    const img=document.createElement('img'); img.src=url; img.alt=`DAMデンモク証拠 ${x.imageId}`; img.loading='eager';
-    wrap.append(label,img); imageBox.appendChild(wrap);
+    wrap.appendChild(label);
+    try {
+      const dataUrl=await standaloneReviewImageDataUrl(x);
+      const img=document.createElement('img');
+      img.src=dataUrl; img.alt=`DAMデンモク証拠 ${x.imageId}`; img.loading='eager';
+      wrap.appendChild(img);
+    } catch(e) {
+      imageErrors.push({imageId:x.imageId,error:(e&&e.message)||String(e)});
+      const err=document.createElement('div'); err.className='scoring-review-image-error';
+      err.textContent=`元画像を表示・検証できません: ${(e&&e.message)||String(e)}`;
+      wrap.appendChild(err);
+    }
+    imageBox.appendChild(wrap);
   }
   const box=$('#scoring-review-fields');
   const gaps=[];
@@ -3116,12 +3177,17 @@ async function openStandaloneStructuredReview(evidenceSetId) {
     const cls=status==='visible_not_extracted'?' review-gap':'';
     return `<div class="scoring-review-row${cls}"><div class="scoring-review-head"><b>${escapeHtml(STANDALONE_FIELD_LABELS[key]||key)}</b><span class="pill ${status==='extracted'?'ok':status==='visible_not_extracted'?'err':'wait'}">${escapeHtml(FIELD_STATUS_LABELS[status]||status)}</span></div><pre class="scoring-review-value">${escapeHtml(standaloneReviewValueText(value))}</pre></div>`;
   }).join('');
-  $('#scoring-review-summary').innerHTML=gaps.length
-    ? `<p class="small warn-text"><b>未抽出の可視項目が${gaps.length}件あります。</b>確認しても「既知の未抽出あり」として保存されます。</p>`
-    : '<p class="small"><b>全requested fieldの状態が明示されています。</b>下の一覧を確認してから確定してください。</p>';
+  if (imageErrors.length) {
+    $('#scoring-review-summary').innerHTML=`<p class="small warn-text"><b>元画像${imageErrors.length}枚を表示・検証できません。</b>raw evidenceを見比べられないため内容確認は保存できません。</p>`;
+  } else if (gaps.length) {
+    $('#scoring-review-summary').innerHTML=`<p class="small warn-text"><b>未抽出の可視項目が${gaps.length}件あります。</b>確認しても「既知の未抽出あり」として保存されます。</p>`;
+  } else {
+    $('#scoring-review-summary').innerHTML='<p class="small"><b>全requested fieldの状態が明示されています。</b>下の一覧を確認してから確定してください。</p>';
+  }
   const btn=$('#scoring-review-confirm');
   btn.dataset.evidenceSetId=evidenceSetId;
-  btn.textContent=gaps.length?'確認する（既知の未抽出あり）':'この抽出内容を確認する';
+  btn.disabled=imageErrors.length>0;
+  btn.textContent=imageErrors.length ? '元画像を確認できないため確定不可' : (gaps.length?'確認する（既知の未抽出あり）':'この抽出内容を確認する');
   openSheet('sheet-scoring-review');
 }
 async function archiveStandaloneEvidenceSet(id) {
@@ -6719,3 +6785,12 @@ async function init() {
   }
 }
 document.addEventListener('DOMContentLoaded', init);
+
+
+// build09: keep modal sheets inside Safari's actually visible viewport as browser chrome changes.
+syncSongScopeVisualViewport();
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', syncSongScopeVisualViewport, {passive:true});
+  window.visualViewport.addEventListener('scroll', syncSongScopeVisualViewport, {passive:true});
+}
+window.addEventListener('resize', syncSongScopeVisualViewport, {passive:true});

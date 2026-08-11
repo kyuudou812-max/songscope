@@ -701,4 +701,11 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - scoringPerformedAtを旧裸文字列へ戻したfixture: import rejection PASS.
 - v1 stored result: source bindingは保持しつつ `legacy_review_needs_reverification` へ降格することを確認。
 
-Deploy retry 2026-08-11
+
+## G0 build09
+- iPhone Safariの採点レビューでIndexedDB Blobのblob: URL表示が失敗するケースを回避。
+- レビュー表示時にraw image bytesのsize/SHA-256を再検証し、MIMEを明示したData URLで表示。
+- raw画像が表示・検証できない場合はuser confirmationを無効化。
+- review sheetをVisual Viewport基準へ変更し、Safariのアドレスバー/ツールバー下への潜り込みを抑制。
+- レビュータイトル/閉じるをsticky化。
+- scoring schema / evidence semantics / Binding設計は変更なし。

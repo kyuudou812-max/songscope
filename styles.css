@@ -413,3 +413,54 @@ input[type=range]::-webkit-slider-thumb{
   border-radius:8px;
   background:var(--bg-sunken);
 }
+
+
+/* G0 build09 — iPhone Safari review viewport + reliable raw image review */
+:root{
+  --songscope-vv-top:0px;
+  --songscope-vv-left:0px;
+  --songscope-vv-height:100dvh;
+  --songscope-vv-width:100vw;
+}
+@supports not (height:100dvh){
+  :root{--songscope-vv-height:100vh;}
+}
+.sheet-wrap{
+  top:var(--songscope-vv-top);
+  left:var(--songscope-vv-left);
+  right:auto;
+  bottom:auto;
+  width:var(--songscope-vv-width);
+  height:var(--songscope-vv-height);
+}
+.sheet{
+  max-height:min(88dvh, calc(var(--songscope-vv-height) - 12px));
+}
+#sheet-scoring-review{
+  max-height:calc(var(--songscope-vv-height) - 12px);
+  scroll-padding-top:64px;
+}
+#sheet-scoring-review .scoring-review-sticky-head{
+  position:sticky;
+  top:0;
+  z-index:8;
+  background:var(--bg);
+  border-bottom:.5px solid var(--sep);
+  padding:10px 0 8px;
+}
+.scoring-review-image-error{
+  min-height:120px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  padding:16px;
+  border-radius:8px;
+  background:rgba(255,59,48,.10);
+  color:var(--red);
+  font-size:13px;
+  font-weight:600;
+}
+#scoring-review-confirm:disabled{
+  opacity:.45;
+}
