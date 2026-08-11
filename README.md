@@ -625,3 +625,10 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - iOS SafariでDAMデンモク採点履歴画像を選択後、一覧が更新されない不具合を修正。
 - file inputをresetする前にFileListをArrayへsnapshotし、非同期保存へ渡す。
 - DB schema/worker/評価意味論は変更なし。
+
+
+## G0 build05
+- 独立したDAMデンモク採点証拠セットの抽出ZIPで、画像Blobを直接ZIP writerへ渡さないよう修正。
+- 各画像を `Blob -> ArrayBuffer -> Uint8Array` に変換し、保存済みfileSize / SHA-256と再照合してからZIP entryを生成。
+- `zip.js` は string / ArrayBuffer / TypedArray 以外を拒否し、Blob等の未対応型がheader size=0の不正ZIPを黙って生成する経路を遮断。
+- BUILD_ID: `20260811-g0-05`。

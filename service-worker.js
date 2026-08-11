@@ -3,7 +3,7 @@
  * install時にskipWaitingしない: 実行中ページと新workerのversion skewを避ける。
  */
 const CACHE = 'songscope-v0.2.0-g0-20260811-g0-04';
-const BUILD_ID = '20260811-g0-04';
+const BUILD_ID = '20260811-g0-05';
 const SHELL = [
   './',
   './index.html',

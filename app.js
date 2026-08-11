@@ -10,7 +10,7 @@
 
 const APP_VERSION = '0.2.0-g0';
 const SCHEMA_VERSION = '0.16.3';
-const BUILD_ID = '20260811-g0-04';
+const BUILD_ID = '20260811-g0-05';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -2914,7 +2914,17 @@ async function exportStandaloneEvidenceSet(id) {
     ];
     for (let i=0;i<(set.images||[]).length;i++) {
       const x=set.images[i]; const ext=imageExtFromMeta(x.meta);
-      files.push({name:`evaluation/images/${String(i+1).padStart(2,'0')}_${x.imageId}${ext}`,data:x.blob});
+      if (!x.blob || typeof x.blob.arrayBuffer !== 'function') throw new Error(`採点画像 ${i+1} のraw bytesを読み込めません`);
+      const ab=await x.blob.arrayBuffer();
+      const bytes=new Uint8Array(ab);
+      const expectedSize=Number(x.meta&&x.meta.fileSize);
+      if (Number.isFinite(expectedSize) && expectedSize>=0 && bytes.byteLength!==expectedSize) throw new Error(`採点画像 ${i+1} のサイズが保存metadataと一致しません`);
+      const expectedSha=String((x.meta&&x.meta.sha256)||'').toLowerCase();
+      if (expectedSha) {
+        const gotSha=(await sha256Hex(ab)).toLowerCase();
+        if (gotSha!==expectedSha) throw new Error(`採点画像 ${i+1} のSHA-256が保存metadataと一致しません`);
+      }
+      files.push({name:`evaluation/images/${String(i+1).padStart(2,'0')}_${x.imageId}${ext}`,data:bytes});
     }
     const blob=SongScopeZip.createZip(files);
     const stamp=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);

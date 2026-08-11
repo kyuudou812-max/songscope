@@ -35,8 +35,14 @@
    * @returns {Blob} application/zip
    */
   function createZip(files) {
-    var entries = files.map(function (f) {
-      var data = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+    var entries = files.map(function (f, index) {
+      if (!f || typeof f.name !== 'string' || !f.name) throw new TypeError('ZIP entry nameが不正です: index ' + index);
+      var data;
+      if (typeof f.data === 'string') data = enc.encode(f.data);
+      else if (f.data instanceof Uint8Array) data = f.data;
+      else if (f.data instanceof ArrayBuffer) data = new Uint8Array(f.data);
+      else if (ArrayBuffer.isView(f.data)) data = new Uint8Array(f.data.buffer, f.data.byteOffset, f.data.byteLength);
+      else throw new TypeError('ZIP entry dataはstring / ArrayBuffer / TypedArrayへ事前変換してください: ' + f.name);
       return { nameBytes: enc.encode(f.name), data: data, crc: crc32(data) };
     });
     var dt = dosDateTime(new Date());
