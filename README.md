@@ -731,3 +731,13 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - 無効化contextはF1 chronology/scoring-condition evidenceから防御的に除外。
 - 同じ音声を後日再取り込みしても古い確認は自動復活しない。A/B画面で新たに明示確認した場合だけ`reactivated_by_new_explicit_user_confirmation`として再有効化。
 - Binding/Performance entityはまだ実装しない。
+
+
+## G0 build12 — History completeness semantics
+- `historyCompleteness`で「評価できない」と「missing take signalが無い」を分離。
+- eligibleなsource-verified/bound outcomeにpersonalBestが無い場合は`not_assessable_no_eligible_personal_best_evidence`。
+- eligibleなoverallScoreが無い場合は`not_assessable_no_eligible_observed_score`。
+- personalBestとobserved scoreの双方がeligibleな場合だけ`may_omit_unrecorded_takes` / `no_missing_take_signal_from_personal_best`を評価。
+- R2 Observed Historyへassessment statusとsignal statusを別々に伝搬。
+- `not_assessable`は`no_missing_take_signal`として扱わない。
+- unbound/legacy candidate証拠をcompleteness判定へ黙って流用しない。ただし「除外された証拠が偽」という意味ではなく、将来の独立history/completeness evidence layerで扱う余地を明記。

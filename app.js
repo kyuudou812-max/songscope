@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.16.6';
-const BUILD_ID = '20260812-g0-11';
+const SCHEMA_VERSION = '0.16.7';
+const BUILD_ID = '20260812-g0-12';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -6069,11 +6069,47 @@ async function buildF1HistoryPackage() {
   const recordings=rowOrder.map((d,i)=>({ chronologyIndex:chronology.status==='fully_ordered'?i+1:null, recording:d, outcome:f1OutcomeObservation(d) }));
   const verifiedCount=recordings.filter(r=>r.outcome.status==='source_verified_structured_outcome').length;
   const legacyUnboundCandidateCount=recordings.filter(r=>r.outcome.status==='legacy_attachment_candidate_unbound').length;
-  const observedScores=recordings.map(r=>r.outcome&&r.outcome.overallScore).filter(v=>isFinite(Number(v))).map(Number);
-  const personalBests=recordings.map(r=>r.outcome&&r.outcome.personalBest).filter(v=>isFinite(Number(v))).map(Number);
+  // Completeness assessment may use ONLY eligible, source-verified bound outcomes.
+  // Absence of eligible evidence is NOT evidence that no missing take exists.
+  const completenessEligible=recordings.filter(r=>r.outcome&&r.outcome.status==='source_verified_structured_outcome');
+  const observedScores=completenessEligible.map(r=>r.outcome&&r.outcome.overallScore).filter(v=>v!==null&&v!==undefined&&isFinite(Number(v))).map(Number);
+  const personalBests=completenessEligible.map(r=>r.outcome&&r.outcome.personalBest).filter(v=>v!==null&&v!==undefined&&isFinite(Number(v))).map(Number);
   const observedMax=observedScores.length?Math.max(...observedScores):null;
   const personalBestMax=personalBests.length?Math.max(...personalBests):null;
-  const historyCompleteness={ status: personalBestMax!==null&&observedMax!==null&&personalBestMax>observedMax+0.001?'may_omit_unrecorded_takes':'no_missing_take_signal_from_personal_best', observedRecordingCount:descs.length, observedMaxOverallScore:observedMax, maxReadablePersonalBest:personalBestMax, note:'SongScope counts observed imported takes, not every real-world singing attempt. A higher personal-best value is only a completeness warning and never a hard chronology constraint.' };
+  let completenessAssessmentStatus='assessable';
+  let completenessSignalStatus='no_missing_take_signal_from_personal_best';
+  let completenessReason='Eligible source-verified personalBest and observed overallScore are available.';
+  if (!personalBests.length) {
+    completenessAssessmentStatus='not_assessable_no_eligible_personal_best_evidence';
+    completenessSignalStatus='not_assessed';
+    completenessReason='No eligible source-verified personalBest evidence is available under the current binding rules.';
+  } else if (!observedScores.length) {
+    completenessAssessmentStatus='not_assessable_no_eligible_observed_score';
+    completenessSignalStatus='not_assessed';
+    completenessReason='No eligible source-verified observed overallScore is available for comparison with personalBest.';
+  } else if (personalBestMax>observedMax+0.001) {
+    completenessSignalStatus='may_omit_unrecorded_takes';
+    completenessReason='The highest eligible source-verified personalBest exceeds the highest eligible SongScope-observed overallScore.';
+  }
+  const historyCompleteness={
+    status:completenessAssessmentStatus==='assessable'?completenessSignalStatus:completenessAssessmentStatus,
+    assessmentStatus:completenessAssessmentStatus,
+    signalStatus:completenessSignalStatus,
+    reason:completenessReason,
+    observedRecordingCount:descs.length,
+    eligibleSourceVerifiedOutcomeCount:completenessEligible.length,
+    eligibleObservedScoreCount:observedScores.length,
+    eligiblePersonalBestCount:personalBests.length,
+    observedMaxOverallScore:observedMax,
+    maxReadablePersonalBest:personalBestMax,
+    knownEvidencePolicy:{
+      onlyEligibleBoundSourceVerifiedOutcomesUsedForThisAssessment:true,
+      unboundOrLegacyCandidateEvidenceExcluded:true,
+      exclusionDoesNotMeanEvidenceIsFalse:true,
+      note:'Known or preserved evidence outside the eligible bound outcome set may still indicate missing real-world takes, but this assessment does not silently import it across an unconfirmed relationship. Such evidence must be represented in an appropriate independent history/completeness evidence layer before use.'
+    },
+    note:'SongScope counts observed/imported physical recordings, not every real-world singing attempt. not_assessable means the system lacks eligible evidence to evaluate completeness; it never means the history is complete.'
+  };
   let readiness='insufficient_history_for_pattern';
   if(chronology.status!=='fully_ordered') readiness='chronology_not_fully_ordered';
   else if(descs.length>=3 && verifiedCount<3) readiness='insufficient_source_verified_outcomes';
@@ -6082,7 +6118,7 @@ async function buildF1HistoryPackage() {
   else if(descs.length>=3 && verifiedCount===descs.length) readiness='exploratory_pattern_available';
   const series=chronology.status==='fully_ordered'?f1BuildSeries(recordings,conditionChain):[];
   return {
-    schemaVersion:'songscope-history-0.3.0',
+    schemaVersion:'songscope-history-0.4.0',
     packageType:'same_song_compact_history_evidence',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
@@ -6274,11 +6310,20 @@ function f2BuildPatternEvidence(historyPkg) {
   const verified=Number(pr.sourceVerifiedStructuredOutcomeCount||0);
   const historyCompleteness=h.historyCompleteness&&typeof h.historyCompleteness==='object'
     ? h.historyCompleteness
-    : {status:'unknown',note:'F1 did not provide history completeness metadata.'};
+    : {status:'unknown',assessmentStatus:'unknown',signalStatus:'unknown',note:'F1 did not provide history completeness metadata.'};
   let status='waiting_for_third_observed_take';
   const blockers=[];
   const completenessWarnings=[];
-  if (historyCompleteness.status==='may_omit_unrecorded_takes') completenessWarnings.push('history_may_omit_unrecorded_takes');
+  const completenessAssessment=historyCompleteness.assessmentStatus||(
+    String(historyCompleteness.status||'').startsWith('not_assessable_')?historyCompleteness.status:'unknown'
+  );
+  const completenessSignal=historyCompleteness.signalStatus||(
+    historyCompleteness.status==='may_omit_unrecorded_takes'||historyCompleteness.status==='no_missing_take_signal_from_personal_best'
+      ? historyCompleteness.status
+      : 'not_assessed'
+  );
+  if (completenessSignal==='may_omit_unrecorded_takes') completenessWarnings.push('history_may_omit_unrecorded_takes');
+  if (String(completenessAssessment).startsWith('not_assessable_')) completenessWarnings.push('history_completeness_not_assessable');
   let evidenceVolume='pair_only';
   if(n<3) blockers.push('observed_take_count_below_3');
   else if(chronology.status!=='fully_ordered') { status='blocked_chronology_not_fully_ordered'; blockers.push('chronology_not_fully_ordered'); }
@@ -6306,7 +6351,7 @@ function f2BuildPatternEvidence(historyPkg) {
     interpretation:x.interpretation
   })) : [];
   return {
-    schemaVersion:'songscope-observed-direction-history-0.3.0',
+    schemaVersion:'songscope-observed-direction-history-0.4.0',
     packageType:'same_song_observed_take_direction_history',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
@@ -6318,6 +6363,8 @@ function f2BuildPatternEvidence(historyPkg) {
     readiness:{
       status,evidenceVolume,blockers,completenessWarnings,
       historyCompletenessStatus:historyCompleteness.status||'unknown',
+      historyCompletenessAssessmentStatus:completenessAssessment,
+      historyCompletenessSignalStatus:completenessSignal,
       observedPhysicalRecordingCount:n,sourceVerifiedStructuredOutcomeCount:verified,
       chronologyStatus:chronology.status||'unknown',scoringConditionChainStatus:chain.status||'unknown',
       minimumObservedTakesForDirectionHistory:3,
@@ -6327,9 +6374,13 @@ function f2BuildPatternEvidence(historyPkg) {
     historyCompleteness,
     observedHistoryScope:{
       continuityClaim:'none',
-      note:historyCompleteness.status==='may_omit_unrecorded_takes'
-        ? 'A source-visible personal best exceeds SongScope-observed scores, so one or more real-world takes may be absent. Direction summaries describe only imported observations and must not be read as consecutive-performance history.'
-        : 'SongScope still does not claim complete real-world performance coverage; this field only reports whether a specific missing-take signal was observed.'
+      completenessAssessmentStatus:completenessAssessment,
+      completenessSignalStatus:completenessSignal,
+      note:completenessSignal==='may_omit_unrecorded_takes'
+        ? 'Eligible source-verified personalBest exceeds eligible SongScope-observed scores, so one or more real-world takes may be absent. Direction summaries describe only imported observations and must not be read as consecutive-performance history.'
+        : (String(completenessAssessment).startsWith('not_assessable_')
+          ? 'Completeness cannot currently be assessed from eligible evidence. This is explicitly different from finding no missing-take signal. Direction summaries, if otherwise available, still describe only imported observations.'
+          : 'No personalBest-based missing-take signal was detected within the eligible evidence set, but SongScope still does not claim complete real-world performance coverage.')
     },
     summary:{
       consistentDirectionalObservationCount:consistentDirectionalObservations.length,
@@ -6349,12 +6400,12 @@ function f2BuildPatternEvidence(historyPkg) {
     nextLayerReadiness:{
       status:!ready
         ? 'waiting_for_observed_direction_history'
-        : (completenessWarnings.length?'external_outcome_history_available_with_incomplete_take_coverage_warning':'external_outcome_history_available_for_hypothesis_layer'),
+        : (completenessWarnings.length?'external_outcome_history_available_with_completeness_caution':'external_outcome_history_available_for_hypothesis_layer'),
       completenessWarnings,
       note:'A later hypothesis/practice layer may use verified external scoring outcomes and user-reported evidence, but must preserve any history-completeness warning. It must not use mixed-audio F0/RMS as evidence about the singer.'
     },
     interpretationGuardrails:[
-      'R2 summarizes only SongScope-observed/imported physical recordings; missing real-world karaoke takes may exist between observations. If F1 detects a specific personal-best completeness warning, R2 carries it forward explicitly.',
+      'R2 summarizes only SongScope-observed/imported physical recordings; missing real-world karaoke takes may exist between observations. R2 carries forward both explicit missing-take signals and not-assessable completeness states. not_assessable is never treated as no_missing_take_signal.',
       'Display resolution is measurement/display granularity only. A one-step visible score change is an observation, not a threshold for meaningful skill change.',
       'Two observed recordings are never described as a cross-step directional history. At least three observed takes are required.',
       'A same non-zero direction across observed adjacent steps is a descriptive compression only; it is not called a trend or signal and has no statistical-significance claim.',
@@ -6400,8 +6451,7 @@ async function exportF2PatternPackage() {
     const name=`songscope_observed_history_${safeName(pattern.song.representativeTitle||'song')}_${stamp}.zip`;
     const how=await saveBlob(blob,name);
     const r=pattern.readiness;
-    const completenessNote=(r.completenessWarnings||[]).length
-      ? `<p class="small"><b>履歴完全性警告:</b> ${escapeHtml((r.completenessWarnings||[]).join(', '))}</p>`:'';
+    const completenessNote=`<p class="small"><b>履歴完全性:</b> assessment ${escapeHtml(r.historyCompletenessAssessmentStatus||'unknown')} / signal ${escapeHtml(r.historyCompletenessSignalStatus||'unknown')}${(r.completenessWarnings||[]).length?' / '+escapeHtml((r.completenessWarnings||[]).join(', ')):''}</p>`;
     if(note)note.innerHTML=`<p><b>R2 観測方向履歴パッケージを書き出しました</b></p><p class="small mono">observed physical recordings ${r.observedPhysicalRecordingCount} / verified outcomes ${r.sourceVerifiedStructuredOutcomeCount}</p><p class="small">readiness: <b>${escapeHtml(r.status)}</b> / consistent non-zero directions ${pattern.summary.consistentDirectionalObservationCount}</p>${completenessNote}<p class="small">これはtrendやsignalではありません。SongScopeに取り込まれた観測テイクの外部評価推移を圧縮したものです。表示分解能は技能変化の閾値ではありません。mixed-audio F0/RMSはPractice/Hypothesis入力から除外します。</p>`;
     if(how!=='cancelled')toast(`${name}を書き出しました`);
   }catch(e){
