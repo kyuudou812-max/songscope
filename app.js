@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.16.5';
-const BUILD_ID = '20260812-g0-10';
+const SCHEMA_VERSION = '0.16.6';
+const BUILD_ID = '20260812-g0-11';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -4786,6 +4786,8 @@ function normalizeComparisonContext(raw, identity) {
     invalidatedByRecordingDeletion: !!raw.invalidatedByRecordingDeletion,
     invalidatedRecordingId: raw.invalidatedRecordingId || null,
     invalidatedAudioSha256: raw.invalidatedAudioSha256 || null,
+    reactivatedAt: raw.reactivatedAt || null,
+    reactivatedBy: raw.reactivatedBy || null,
     updatedAt: raw.updatedAt || null
   };
 }
@@ -4794,6 +4796,33 @@ function e4HistoryPush(ctx, field, action) {
   h.push({ field, action, at: nowIso(), source: 'user_pair_confirmation', appVersion: APP_VERSION, buildId: BUILD_ID });
   ctx.history = h;
   ctx.updatedAt = nowIso();
+}
+function pairContextIsCurrentlyInvalidated(ctx) {
+  if (!ctx || !ctx.invalidatedByRecordingDeletion) return false;
+  const inv=Date.parse(ctx.invalidatedAt||ctx.lastInvalidatedAt||'')||0;
+  if (!inv) return true;
+  const reactivated=Date.parse(ctx.reactivatedAt||'')||0;
+  return reactivated<inv;
+}
+function reactivatePairContextForExplicitUserConfirmation(ctx, field) {
+  if (!pairContextIsCurrentlyInvalidated(ctx)) return false;
+  const at=nowIso();
+  const h=Array.isArray(ctx.history)?ctx.history.slice(-49):[];
+  h.push({
+    field:field||'pairContext',
+    action:'reactivated_by_new_explicit_user_confirmation',
+    at,source:'user_pair_confirmation',
+    priorInvalidatedAt:ctx.invalidatedAt||ctx.lastInvalidatedAt||null,
+    priorInvalidatedRecordingId:ctx.invalidatedRecordingId||null,
+    priorInvalidatedAudioSha256:ctx.invalidatedAudioSha256||null,
+    appVersion:APP_VERSION,buildId:BUILD_ID
+  });
+  ctx.history=h;
+  ctx.reactivatedAt=at;
+  ctx.reactivatedBy='new_explicit_user_confirmation';
+  ctx.invalidatedByRecordingDeletion=false;
+  ctx.updatedAt=at;
+  return true;
 }
 async function legacyComparisonContextForIdentity(identity) {
   if (!identity) return null;
@@ -4870,6 +4899,7 @@ async function setE4Chronology(choice) {
     if (!identity) throw new Error('A/BのaudioSha256が不足しています');
     const ctx = await getComparisonContextForIdentity(identity);
     if (choice === 'a_first' || choice === 'b_first') {
+      reactivatePairContextForExplicitUserConfirmation(ctx,'chronology');
       const earlier = choice === 'a_first' ? identity.a : identity.b;
       const later = choice === 'a_first' ? identity.b : identity.a;
       ctx.chronology = {
@@ -4895,8 +4925,10 @@ async function setE4ScoringConditions(choice) {
     const ctx = await getComparisonContextForIdentity(identity);
     const covered = SCORING_CONDITION_FIELDS.slice();
     if (choice === 'same') {
+      reactivatePairContextForExplicitUserConfirmation(ctx,'scoringConditions');
       ctx.scoringConditions = { status: 'user_confirmed_same', source: 'user_pair_confirmation', coveredFields: covered, meaning: 'all_covered_fields_same', confirmedAt: nowIso() };
     } else if (choice === 'different') {
+      reactivatePairContextForExplicitUserConfirmation(ctx,'scoringConditions');
       ctx.scoringConditions = { status: 'user_confirmed_different', source: 'user_pair_confirmation', coveredFields: covered, meaning: 'at_least_one_covered_field_differs', confirmedAt: nowIso() };
     } else {
       ctx.scoringConditions = { status: 'unknown', source: 'user_cleared_pair_confirmation', coveredFields: covered, updatedAt: nowIso() };
@@ -5815,7 +5847,8 @@ async function f1ChronologyConstraints(descs, aliasToCanonical) {
   // R1: pair-level human context is independent from alignmentResults.
   const contexts = await dbAll('pairContexts').catch(() => []);
   for (const pc of contexts) {
-    const c = pc && pc.chronology;
+    if (pairContextIsCurrentlyInvalidated(pc)) continue;
+    const c=pc&&pc.chronology;
     if (!c || c.status !== 'user_confirmed_order') continue;
     const earlierId = canonicalId(c.earlierRecordingId), laterId = canonicalId(c.laterRecordingId);
     if (!ids.has(earlierId) || !ids.has(laterId) || earlierId === laterId) continue;
@@ -5898,7 +5931,12 @@ async function f1PairContextFor(descA, descB) {
     a:{recordingId:descA.recordingId,audioSha256:ha,title:descA.title||''},
     b:{recordingId:descB.recordingId,audioSha256:hb,title:descB.title||''}
   };
-  return getComparisonContextForIdentity(identity);
+  const ctx=await getComparisonContextForIdentity(identity);
+  if (!pairContextIsCurrentlyInvalidated(ctx)) return ctx;
+  return Object.assign({},ctx,{
+    chronology:{status:'unknown',source:'invalidated_by_recording_deletion'},
+    scoringConditions:{status:'unknown',source:'invalidated_by_recording_deletion',coveredFields:SCORING_CONDITION_FIELDS.slice()}
+  });
 }
 async function f1ScoringConditionChain(orderedDescs) {
   if (!orderedDescs || orderedDescs.length < 2) return { status: 'not_applicable', adjacentPairs: [] };
@@ -6124,10 +6162,23 @@ async function exportF1HistoryPackage() {
  * 3件/5件は証拠量の表示であり、統計的な格付けではない。
  * mixed-audio F0/RMS はPractice/Hypothesis入力から明示的に除外する。
  * ===================================================================== */
-function f2DirectionFromDelta(delta) {
+function f2DisplayResolution(series) {
+  const key=String(series&&series.key||'');
+  // This is screen/display granularity, NOT a minimum meaningful singing-skill change.
+  if (key==='overall_score') return {step:0.001,basis:'DAM overall score is displayed to 0.001 point',semantic:'display_granularity_only'};
+  if (key==='heart_bonus') return {step:0.001,basis:'DAM Heart bonus is displayed to 0.001 point',semantic:'display_granularity_only'};
+  if (key.startsWith('metric:')) return {step:1,basis:'Current supported DAM subscore/accuracy fields are displayed as integer points or percent',semantic:'display_granularity_only'};
+  if (key.startsWith('technique:')) return {step:1,basis:'Technique occurrence count is displayed as an integer count',semantic:'display_granularity_only'};
+  if (key==='vibrato:duration') return {step:1,basis:'Current supported DAM vibrato duration display is integer seconds',semantic:'display_granularity_only'};
+  if (key==='vibrato:count') return {step:1,basis:'Vibrato count is displayed as an integer count',semantic:'display_granularity_only'};
+  return {step:null,basis:'display resolution not declared for this field',semantic:'unknown'};
+}
+function f2DirectionFromDelta(delta,displayResolution) {
   const n=Number(delta);
   if(!isFinite(n)) return null;
-  const eps=1e-6;
+  const step=Number(displayResolution&&displayResolution.step);
+  // Only absorb floating-point noise far below one display step. A one-step change remains a real observed display change.
+  const eps=isFinite(step)&&step>0?Math.max(1e-9,step*1e-6):1e-6;
   if(n>eps) return 'higher';
   if(n<-eps) return 'lower';
   return 'same';
@@ -6153,12 +6204,13 @@ function f2LongestDirectionRun(directions) {
   }
   return best;
 }
-function f2MetricPattern(series, evidenceVolume) {
+function f2MetricPattern(series,evidenceVolume) {
   const points=(series&&series.points)||[];
   const steps=(series&&series.adjacentSteps)||[];
+  const displayResolution=f2DisplayResolution(series);
   const values=points.map(p=>p&&p.value!==undefined?p.value:null);
-  const allValuesPresent=values.length>0 && values.every(v=>v!==null && v!==undefined && isFinite(Number(v)));
-  const directions=steps.map(s=>f2DirectionFromDelta(s&&s.deltaLaterMinusEarlier));
+  const allValuesPresent=values.length>0&&values.every(v=>v!==null&&v!==undefined&&isFinite(Number(v)));
+  const directions=steps.map(s=>f2DirectionFromDelta(s&&s.deltaLaterMinusEarlier,displayResolution));
   const counts=f2DirectionCounts(directions);
   const longestRun=f2LongestDirectionRun(directions);
   const completeDirections=directions.length===Math.max(0,points.length-1) && directions.every(Boolean);
@@ -6190,6 +6242,7 @@ function f2MetricPattern(series, evidenceVolume) {
   return {
     key:series.key,label:series.label,unit:series.unit||null,
     classification:series.classification,directionality,
+    displayResolution,
     status,evidenceVolume,consistentObservedDirection,eligibleForDirectionalSummary,
     physicalRecordingCount:points.length,adjacentStepCount:steps.length,
     firstValue,lastValue,netDeltaLaterMinusEarlier:netDelta,
@@ -6198,13 +6251,17 @@ function f2MetricPattern(series, evidenceVolume) {
     adjacentSteps:steps.map((x,i)=>({
       stepIndex:i+1,earlierRecordingId:x.earlierRecordingId,laterRecordingId:x.laterRecordingId,
       earlier:x.earlier,later:x.later,deltaLaterMinusEarlier:x.deltaLaterMinusEarlier,
+      deltaInDisplaySteps:(displayResolution.step&&isFinite(Number(x.deltaLaterMinusEarlier)))
+        ? +((Number(x.deltaLaterMinusEarlier)/displayResolution.step).toFixed(6)):null,
+      isSmallestNonzeroVisibleChange:(displayResolution.step&&isFinite(Number(x.deltaLaterMinusEarlier)))
+        ? Math.abs(Math.abs(Number(x.deltaLaterMinusEarlier))-displayResolution.step)<=displayResolution.step*1e-6:false,
       observedDirection:directions[i],scoringConditionComparability:x.scoringConditionComparability
     })),
     interpretation: directionality==='non_monotonic'
       ? 'Descriptive sequence only. More or less of this technique quantity is not automatically better or worse.'
       : directionality==='descriptive_only'
         ? 'Descriptive external-score component only. Direction is retained but is not promoted to a cross-take directional summary.'
-        : 'This is a compression of observed external numeric outcomes across SongScope-observed takes. A consistent direction is not a trend, a statistical signal, a durable skill change, or a causal explanation.'
+        : 'This is a compression of observed external numeric outcomes across SongScope-observed takes. Display resolution describes only the granularity of the DAM value; even a one-display-step change is not automatically a meaningful singing-skill change. A consistent direction is not a trend, a statistical signal, a durable skill change, or a causal explanation.'
   };
 }
 function f2BuildPatternEvidence(historyPkg) {
@@ -6215,8 +6272,13 @@ function f2BuildPatternEvidence(historyPkg) {
   const chain=h.scoringConditionChain||{};
   const n=Number(song.physicalRecordingCount||song.recordingCount||0);
   const verified=Number(pr.sourceVerifiedStructuredOutcomeCount||0);
+  const historyCompleteness=h.historyCompleteness&&typeof h.historyCompleteness==='object'
+    ? h.historyCompleteness
+    : {status:'unknown',note:'F1 did not provide history completeness metadata.'};
   let status='waiting_for_third_observed_take';
   const blockers=[];
+  const completenessWarnings=[];
+  if (historyCompleteness.status==='may_omit_unrecorded_takes') completenessWarnings.push('history_may_omit_unrecorded_takes');
   let evidenceVolume='pair_only';
   if(n<3) blockers.push('observed_take_count_below_3');
   else if(chronology.status!=='fully_ordered') { status='blocked_chronology_not_fully_ordered'; blockers.push('chronology_not_fully_ordered'); }
@@ -6244,7 +6306,7 @@ function f2BuildPatternEvidence(historyPkg) {
     interpretation:x.interpretation
   })) : [];
   return {
-    schemaVersion:'songscope-observed-direction-history-0.2.0',
+    schemaVersion:'songscope-observed-direction-history-0.3.0',
     packageType:'same_song_observed_take_direction_history',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
@@ -6254,12 +6316,20 @@ function f2BuildPatternEvidence(historyPkg) {
       scopeDefinition:'Count refers only to physical recordings observed/imported by SongScope; it is not the total number of times the user has ever sung the song.'
     },
     readiness:{
-      status,evidenceVolume,blockers,
+      status,evidenceVolume,blockers,completenessWarnings,
+      historyCompletenessStatus:historyCompleteness.status||'unknown',
       observedPhysicalRecordingCount:n,sourceVerifiedStructuredOutcomeCount:verified,
       chronologyStatus:chronology.status||'unknown',scoringConditionChainStatus:chain.status||'unknown',
       minimumObservedTakesForDirectionHistory:3,
       evidenceVolumeLabels:{threeToFour:'descriptive volume only',fiveOrMore:'larger descriptive volume only'},
       note:n<3?'Two observed takes preserve a pair difference; R2 waits for a third before summarizing cross-step direction.':'Availability means the observed history can be compressed descriptively. It is not a statistical tier or skill-change claim.'
+    },
+    historyCompleteness,
+    observedHistoryScope:{
+      continuityClaim:'none',
+      note:historyCompleteness.status==='may_omit_unrecorded_takes'
+        ? 'A source-visible personal best exceeds SongScope-observed scores, so one or more real-world takes may be absent. Direction summaries describe only imported observations and must not be read as consecutive-performance history.'
+        : 'SongScope still does not claim complete real-world performance coverage; this field only reports whether a specific missing-take signal was observed.'
     },
     summary:{
       consistentDirectionalObservationCount:consistentDirectionalObservations.length,
@@ -6277,11 +6347,15 @@ function f2BuildPatternEvidence(historyPkg) {
       reason:'Current D2 F0/RMS features are mixed voice+accompaniment+room observations and are not vocal-specific. They remain available only in diagnostic comparison packages.'
     },
     nextLayerReadiness:{
-      status:!ready?'waiting_for_observed_direction_history':'external_outcome_history_available_for_hypothesis_layer',
-      note:'A later hypothesis/practice layer may use verified external scoring outcomes and user-reported evidence. It must not use mixed-audio F0/RMS as evidence about the singer.'
+      status:!ready
+        ? 'waiting_for_observed_direction_history'
+        : (completenessWarnings.length?'external_outcome_history_available_with_incomplete_take_coverage_warning':'external_outcome_history_available_for_hypothesis_layer'),
+      completenessWarnings,
+      note:'A later hypothesis/practice layer may use verified external scoring outcomes and user-reported evidence, but must preserve any history-completeness warning. It must not use mixed-audio F0/RMS as evidence about the singer.'
     },
     interpretationGuardrails:[
-      'R2 summarizes only SongScope-observed/imported physical recordings; missing real-world karaoke takes may exist between observations.',
+      'R2 summarizes only SongScope-observed/imported physical recordings; missing real-world karaoke takes may exist between observations. If F1 detects a specific personal-best completeness warning, R2 carries it forward explicitly.',
+      'Display resolution is measurement/display granularity only. A one-step visible score change is an observation, not a threshold for meaningful skill change.',
       'Two observed recordings are never described as a cross-step directional history. At least three observed takes are required.',
       'A same non-zero direction across observed adjacent steps is a descriptive compression only; it is not called a trend or signal and has no statistical-significance claim.',
       'All-same values are not promoted as directional evidence.',
@@ -6294,11 +6368,12 @@ function f2BuildPatternEvidence(historyPkg) {
   };
 }
 function f2PatternSeriesCsv(pkg) {
-  const head=['metric_key','label','unit','classification','directionality','status','evidence_volume','consistent_observed_direction','eligible_for_directional_summary','physical_recording_count','adjacent_step_count','first_value','last_value','net_delta_later_minus_earlier','higher_step_count','lower_step_count','same_step_count','longest_run_direction','longest_run_length'];
+  const head=['metric_key','label','unit','classification','directionality','display_resolution_step','display_resolution_basis','status','evidence_volume','consistent_observed_direction','eligible_for_directional_summary','physical_recording_count','adjacent_step_count','first_value','last_value','net_delta_later_minus_earlier','higher_step_count','lower_step_count','same_step_count','longest_run_direction','longest_run_length'];
   const rows=[head.join(',')];
   for(const x of (pkg&&pkg.metricPatterns)||[]) {
     const c=x.directionCounts||{}, r=x.longestSameDirectionRun||{};
-    const vals=[x.key,x.label,x.unit||'',x.classification||'',x.directionality||'',x.status||'',x.evidenceVolume||'',x.consistentObservedDirection||'',x.eligibleForDirectionalSummary?'true':'false',x.physicalRecordingCount,x.adjacentStepCount,x.firstValue,x.lastValue,x.netDeltaLaterMinusEarlier,c.higher||0,c.lower||0,c.same||0,r.direction||'',r.length||0];
+    const dr=x.displayResolution||{};
+    const vals=[x.key,x.label,x.unit||'',x.classification||'',x.directionality||'',dr.step??'',dr.basis||'',x.status||'',x.evidenceVolume||'',x.consistentObservedDirection||'',x.eligibleForDirectionalSummary?'true':'false',x.physicalRecordingCount,x.adjacentStepCount,x.firstValue,x.lastValue,x.netDeltaLaterMinusEarlier,c.higher||0,c.lower||0,c.same||0,r.direction||'',r.length||0];
     rows.push(vals.map(v=>v===null||v===undefined?'':csvEscape(v)).join(','));
   }
   return rows.join('\n');
@@ -6325,7 +6400,9 @@ async function exportF2PatternPackage() {
     const name=`songscope_observed_history_${safeName(pattern.song.representativeTitle||'song')}_${stamp}.zip`;
     const how=await saveBlob(blob,name);
     const r=pattern.readiness;
-    if(note)note.innerHTML=`<p><b>R2 観測方向履歴パッケージを書き出しました</b></p><p class="small mono">observed physical recordings ${r.observedPhysicalRecordingCount} / verified outcomes ${r.sourceVerifiedStructuredOutcomeCount}</p><p class="small">readiness: <b>${escapeHtml(r.status)}</b> / consistent non-zero directions ${pattern.summary.consistentDirectionalObservationCount}</p><p class="small">これはtrendやsignalではありません。SongScopeに取り込まれた観測テイクの外部評価推移を圧縮したものです。mixed-audio F0/RMSはPractice/Hypothesis入力から除外します。</p>`;
+    const completenessNote=(r.completenessWarnings||[]).length
+      ? `<p class="small"><b>履歴完全性警告:</b> ${escapeHtml((r.completenessWarnings||[]).join(', '))}</p>`:'';
+    if(note)note.innerHTML=`<p><b>R2 観測方向履歴パッケージを書き出しました</b></p><p class="small mono">observed physical recordings ${r.observedPhysicalRecordingCount} / verified outcomes ${r.sourceVerifiedStructuredOutcomeCount}</p><p class="small">readiness: <b>${escapeHtml(r.status)}</b> / consistent non-zero directions ${pattern.summary.consistentDirectionalObservationCount}</p>${completenessNote}<p class="small">これはtrendやsignalではありません。SongScopeに取り込まれた観測テイクの外部評価推移を圧縮したものです。表示分解能は技能変化の閾値ではありません。mixed-audio F0/RMSはPractice/Hypothesis入力から除外します。</p>`;
     if(how!=='cancelled')toast(`${name}を書き出しました`);
   }catch(e){
     console.error(e); if(note)note.innerHTML=`<p class="small">F2生成に失敗しました: ${escapeHtml((e&&e.message)||String(e))}</p>`; toast('R2観測方向履歴パッケージを作成できませんでした');
@@ -6826,29 +6903,43 @@ function openSettingsSheet() {
 
 
 async function invalidatePairContextsForDeletedRecording(rec) {
-  const sha=String(rec && rec.audioSha256 || '').toLowerCase();
-  if (!sha) return 0;
+  const sha=String(rec&&rec.audioSha256||'').toLowerCase();
+  if (!sha) return {invalidatedCount:0,skippedBecauseSamePhysicalRecordingStillStored:false};
+  const recs=await dbAll('recordings').catch(()=>[]);
+  const samePhysicalStillStored=recs.some(r=>r&&r.recordingId!==rec.recordingId&&String(r.audioSha256||'').toLowerCase()===sha);
+  if (samePhysicalStillStored) {
+    return {invalidatedCount:0,skippedBecauseSamePhysicalRecordingStillStored:true};
+  }
   const rows=await dbAll('pairContexts').catch(()=>[]);
   let changed=0;
   for (const row of rows) {
-    const pair=Array.isArray(row && row.audioPair) ? row.audioPair.map(x=>String(x).toLowerCase()) : [];
+    const pair=Array.isArray(row&&row.audioPair)?row.audioPair.map(x=>String(x).toLowerCase()):[];
     if (!pair.includes(sha)) continue;
     const at=nowIso();
     const history=Array.isArray(row.history)?row.history.slice(-49):[];
-    history.push({field:'pairContext',action:'invalidated_by_recording_deletion',at,source:'recording_deletion',recordingId:rec.recordingId||null,audioSha256:sha,appVersion:APP_VERSION,buildId:BUILD_ID});
+    history.push({
+      field:'pairContext',action:'invalidated_by_recording_deletion',
+      at,source:'recording_deletion',
+      recordingId:rec.recordingId||null,audioSha256:sha,
+      priorChronologyStatus:row.chronology&&row.chronology.status||'unknown',
+      priorScoringConditionsStatus:row.scoringConditions&&row.scoringConditions.status||'unknown',
+      appVersion:APP_VERSION,buildId:BUILD_ID
+    });
     row.history=history;
     row.invalidatedAt=at;
     row.lastInvalidatedAt=at;
     row.invalidatedByRecordingDeletion=true;
     row.invalidatedRecordingId=rec.recordingId||null;
     row.invalidatedAudioSha256=sha;
+    row.reactivatedAt=null;
+    row.reactivatedBy=null;
     row.chronology={status:'unknown',source:'invalidated_by_recording_deletion',updatedAt:at};
     row.scoringConditions={status:'unknown',source:'invalidated_by_recording_deletion',coveredFields:SCORING_CONDITION_FIELDS.slice(),updatedAt:at};
     row.updatedAt=at;
     await dbPut('pairContexts',row);
     changed++;
   }
-  return changed;
+  return {invalidatedCount:changed,skippedBecauseSamePhysicalRecordingStillStored:false};
 }
 
 function wireReview() {
@@ -6945,8 +7036,9 @@ function wireReview() {
     if (!confirm(`「${state.rec.title}」を削除します。取り消せません。よろしいですか？`)) return;
     const id = state.rec.recordingId;
     stopPlayback();
+    let pairInvalidation={invalidatedCount:0,skippedBecauseSamePhysicalRecordingStillStored:false};
     try {
-      await invalidatePairContextsForDeletedRecording(state.rec);
+      pairInvalidation=await invalidatePairContextsForDeletedRecording(state.rec);
       await dbDelByRec('markers', id);
       await dbDelByRec('segments', id);
       await dbDelByRec('analysisHistory', id);
@@ -6958,7 +7050,10 @@ function wireReview() {
     showView('view-home');
     await loadRecordings();
     refreshStorageEstimate();
-    toast('削除しました');
+    const pairNote=pairInvalidation.invalidatedCount
+      ? ` ／ pair確認 ${pairInvalidation.invalidatedCount}件を無効化`
+      : (pairInvalidation.skippedBecauseSamePhysicalRecordingStillStored?' ／ 同一SHAの別recordingが残るためpair確認は維持':'');
+    toast('削除しました'+pairNote,5200);
   });
 }
 

@@ -720,3 +720,14 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - build10以降、recording export / D2 / F1 の採点証拠consumerは`scoringEvidenceSets`を参照し、旧audio-row評価フィールドを直接消費しない。
 - legacy candidate由来の採点値は、明示Binding前はObserved Historyの数値系列・E3比較へ使用しない。
 - DAMデンモクとして正式に追加した独立evidence setと、旧方式source未分類setをUIで区別。
+
+
+## G0 build11 — Pre-Binding audit closure
+- F1 `historyCompleteness` をR2 Observed Historyへ明示伝搬。
+- personalBest等から未観測takeの可能性が検出された場合、R2に`history_may_omit_unrecorded_takes`警告を保持。生成自体は止めず、「SongScopeへ取り込まれた観測列」に限定して解釈する。
+- DAM値の`displayResolution`をR2 metric patternへ追加。これは画面表示の粒度のみを表し、技能変化の`minimumMeaningfulDelta`としては使用しない。
+- 各adjacent stepへ`deltaInDisplaySteps`と`isSmallestNonzeroVisibleChange`を追加。
+- recording削除時、同じaudio SHAの別recordingが残っていない場合だけ、関連`pairContexts`を監査履歴付きで無効化。
+- 無効化contextはF1 chronology/scoring-condition evidenceから防御的に除外。
+- 同じ音声を後日再取り込みしても古い確認は自動復活しない。A/B画面で新たに明示確認した場合だけ`reactivated_by_new_explicit_user_confirmation`として再有効化。
+- Binding/Performance entityはまだ実装しない。
