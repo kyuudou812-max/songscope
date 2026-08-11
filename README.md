@@ -576,3 +576,10 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - 比較ZIPに `comparison_context.json` を追加しました。
 - DB_VERは5のままです。新ObjectStoreは作りません。`audio-analysis-worker.js` / `alignment-worker.js` は変更しません。
 - App: `0.2.0-phaseE4` / Schema: `0.11.0` / Build: `20260810-e4-01`
+
+
+## Audit R1 build02
+- DAMの「今回の総合点」と「自己ベスト」を別の証拠として扱えるようにし、source-verified画像由来overallScoreと本人確認済み手入力DAM点数が不一致なら `conflict_manual_score_vs_source_verified_image` として手入力点差をblockします。
+- external evaluation requestは、画面上で明示的に読める場合のみpersonalBestをoverallScoreとは別に抽出するよう要求します。
+- chronologyは `exact datetime / date-only / relative-order-only / unknown` の精度を区別します。正確な時刻が分からなくても、日付だけ、またはpairの相対順序だけで履歴を保持できます。
+- `personalBest > SongScope内の観測済みoverallScore最大値` は `historyCompleteness.may_omit_unrecorded_takes` という警告にだけ使い、chronologyやpatternを自動で変更・blockしません。

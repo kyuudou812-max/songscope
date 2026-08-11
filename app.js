@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-auditR1';
-const SCHEMA_VERSION = '0.14.0';
-const BUILD_ID = '20260810-r1-01';
+const SCHEMA_VERSION = '0.14.1';
+const BUILD_ID = '20260811-r1-02';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v2';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -600,7 +600,11 @@ function setStructuredSelectValue(id, value, field) {
 function updateRecConfirmationUi() {
   const ctx = state.recFormContext || {};
   const at = $('#f-recat-confirm-status');
-  if (at) at.textContent = ctx.recordedAtExplicitConfirm ? '日時: 本人確認済み' : '日時: 未確認';
+  if (at) {
+    if (ctx.recordedAtExplicitConfirm) at.textContent = '時系列証拠: 正確な録音日時を本人確認済み';
+    else if (ctx.recordedDateExplicitConfirm) at.textContent = '時系列証拠: 録音日だけ本人確認済み';
+    else at.textContent = '時系列証拠: 日時未確認（相対順序だけでも可）';
+  }
   const sc = $('#f-cond-confirm-status');
   if (sc) sc.textContent = ctx.scoringConditionsExplicitConfirm ? '採点4条件: 本人確認済み' : (ctx.scoringConditionsDefaulted ? '採点4条件: 前回値（未確認）' : '採点4条件: 未確認');
 }
@@ -608,8 +612,28 @@ function confirmRecordedAtInForm() {
   if (!state.recFormContext) state.recFormContext = {};
   if (!$('#f-recat').value) { toast('録音日時を入力してください'); return; }
   state.recFormContext.recordedAtExplicitConfirm = true;
+  state.recFormContext.recordedDateExplicitConfirm = false;
+  state.recFormContext.chronologyPrecisionChoice = 'exact';
   updateRecConfirmationUi();
   toast('この録音日時を本人確認済みにしました');
+}
+function confirmRecordedDateInForm() {
+  if (!state.recFormContext) state.recFormContext = {};
+  const v = $('#f-recdate').value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))) { toast('録音日を入力してください'); return; }
+  state.recFormContext.recordedDateExplicitConfirm = true;
+  state.recFormContext.recordedAtExplicitConfirm = false;
+  state.recFormContext.chronologyPrecisionChoice = 'day';
+  updateRecConfirmationUi();
+  toast('この録音日だけを本人確認済みにしました');
+}
+function keepRecordingTimeUnknownInForm() {
+  if (!state.recFormContext) state.recFormContext = {};
+  state.recFormContext.recordedAtExplicitConfirm = false;
+  state.recFormContext.recordedDateExplicitConfirm = false;
+  state.recFormContext.chronologyPrecisionChoice = 'unknown';
+  updateRecConfirmationUi();
+  toast('録音日時は未確認のままにします。相対順序の確認は引き続き利用できます');
 }
 function confirmScoringConditionsFromPrevious() {
   if (!state.recFormContext) state.recFormContext = {};
@@ -658,10 +682,13 @@ function openAddSheet(file) {
   const hasFileModified = !!(file && file.lastModified && isFinite(file.lastModified));
   const d = hasFileModified ? new Date(file.lastModified) : new Date();
   $('#f-recat').value = toLocalInput(d);
+  $('#f-recdate').value = '';
   state.recFormContext = {
     mode: 'add', initial: recFormSnapshot(), previousProvenance: {},
     recordedAtDefaultSource: hasFileModified ? 'file_last_modified_unverified' : 'import_time_default',
     recordedAtExplicitConfirm: false,
+    recordedDateExplicitConfirm: false,
+    chronologyPrecisionChoice: 'unknown',
     scoringConditionsDefaulted: Object.values(scDefaults).some(Boolean),
     scoringConditionsExplicitConfirm: false
   };
@@ -675,7 +702,7 @@ function toLocalInput(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-const REC_METADATA_PROVENANCE_FIELDS = ['title','artist','damScore','keyChange','octave','device','scoringMode','memo','recordingSetupPreset','recordedAt'];
+const REC_METADATA_PROVENANCE_FIELDS = ['title','artist','damScore','keyChange','octave','device','scoringMode','memo','recordingSetupPreset','recordedAt','recordedDate'];
 function recFormSnapshot() {
   const at = $('#f-recat').value;
   return {
@@ -685,7 +712,8 @@ function recFormSnapshot() {
     device: canonicalScoringConditionValue('device', $('#f-device').value),
     scoringMode: canonicalScoringConditionValue('scoringMode', $('#f-mode').value),
     memo: $('#f-memo').value.trim(), recordingSetupPreset: $('#f-setup').value.trim(),
-    recordedAt: at ? new Date(at).toISOString() : null
+    recordedAt: at ? new Date(at).toISOString() : null,
+    recordedDate: ($('#f-recdate') && $('#f-recdate').value) ? $('#f-recdate').value : null
   };
 }
 function provenanceEntry(source, confirmation = 'unknown') {
@@ -705,12 +733,21 @@ function buildMetadataProvenance(form) {
   const prev = ctx.previousProvenance || {};
   const initial = ctx.initial || {};
   const out = Object.assign({}, prev);
+  if (ctx.chronologyPrecisionChoice === 'unknown') {
+    if (out.recordedAt) out.recordedAt = provenanceEntry('user_left_recorded_at_unconfirmed', 'unknown');
+    if (out.recordedDate) out.recordedDate = provenanceEntry('user_left_recorded_date_unconfirmed', 'unknown');
+  } else if (ctx.chronologyPrecisionChoice === 'day') {
+    if (out.recordedAt) out.recordedAt = provenanceEntry('exact_time_not_confirmed_date_only', 'unknown');
+  } else if (ctx.chronologyPrecisionChoice === 'exact') {
+    if (out.recordedDate) out.recordedDate = provenanceEntry('superseded_by_exact_recorded_at', 'unknown');
+  }
   const same = (a,b) => String(a == null ? '' : a) === String(b == null ? '' : b);
   for (const k of REC_METADATA_PROVENANCE_FIELDS) {
     const value = form[k];
     if (!value) { if (ctx.mode === 'edit' && !same(value, initial[k])) delete out[k]; continue; }
     if (ctx.mode === 'add') {
       if (k === 'recordedAt' && ctx.recordedAtExplicitConfirm) out[k] = provenanceEntry('user_confirmed_recorded_at', 'user_confirmed');
+      else if (k === 'recordedDate' && ctx.recordedDateExplicitConfirm) out[k] = provenanceEntry('user_confirmed_recorded_date', 'user_confirmed');
       else if (k === 'recordedAt' && same(value, initial[k])) out[k] = provenanceEntry(ctx.recordedAtDefaultSource || 'import_time_default', 'unverified');
       else if (SCORING_CONDITION_FIELDS.includes(k) && ctx.scoringConditionsExplicitConfirm) out[k] = provenanceEntry('user_confirmed_scoring_conditions', 'user_confirmed');
       else if (SCORING_CONDITION_FIELDS.includes(k) && ctx.scoringConditionsDefaulted && same(value, initial[k])) out[k] = provenanceEntry('previous_recording_default', 'unverified');
@@ -719,6 +756,8 @@ function buildMetadataProvenance(form) {
       else out[k] = provenanceEntry('user_input', 'user_confirmed');
     } else if (k === 'recordedAt' && ctx.recordedAtExplicitConfirm) {
       out[k] = provenanceEntry('user_confirmed_recorded_at', 'user_confirmed');
+    } else if (k === 'recordedDate' && ctx.recordedDateExplicitConfirm) {
+      out[k] = provenanceEntry('user_confirmed_recorded_date', 'user_confirmed');
     } else if (SCORING_CONDITION_FIELDS.includes(k) && ctx.scoringConditionsExplicitConfirm) {
       out[k] = provenanceEntry('user_confirmed_scoring_conditions', 'user_confirmed');
     } else if (!same(value, initial[k])) {
@@ -762,6 +801,22 @@ function structuredOverallScore(stored) {
   const n = Number(v);
   return isFinite(n) ? +n.toFixed(3) : null;
 }
+function structuredPersonalBest(stored) {
+  const doc = structuredEvaluationDocument(stored);
+  const nobj = doc && doc.result && (doc.result.personalBest || doc.result.personalBestScore || doc.result.bestScore);
+  const v = nobj && typeof nobj === 'object' ? nobj.value : nobj;
+  const n = Number(v);
+  return isFinite(n) ? +n.toFixed(3) : null;
+}
+function manualVsStructuredScoreConsistency(rec, structuredDesc) {
+  const storedScore = parseStoredScore(rec && rec.damScore);
+  const extractedScore = structuredDesc && structuredDesc.verification && structuredDesc.verification.status === 'source_verified' ? structuredDesc.overallScore : null;
+  if (storedScore === null || extractedScore === null) return { status:'not_comparable', storedScore, extractedScore, delta:null };
+  const delta = +(storedScore - extractedScore).toFixed(3);
+  if (Math.abs(delta) <= 0.001) return { status:'same_value', storedScore, extractedScore, delta:0 };
+  const prov = normalizedMetadataProvenance(rec || {}).damScore || {};
+  return { status: prov.confirmation === 'user_confirmed' ? 'conflict_manual_score_vs_source_verified_image' : 'different_value_unconfirmed_manual_score', storedScore, extractedScore, delta };
+}
 function structuredEvaluationDescriptor(rec, imageMeta, stored) {
   const doc = structuredEvaluationDocument(stored);
   if (!doc) return { status: 'unavailable' };
@@ -784,6 +839,7 @@ function structuredEvaluationDescriptor(rec, imageMeta, stored) {
     extraction: doc.extraction || null,
     result: doc.result || null,
     overallScore: structuredOverallScore(stored),
+    personalBest: structuredPersonalBest(stored),
     verification: {
       status: verificationStatus,
       recordingIdMatch,
@@ -822,6 +878,8 @@ function buildEvaluationExtractionRequest(rec, imageMeta) {
       'Do not guess hidden numeric values from radar charts, bars, keyboards, or other graphical-only scales.',
       'Preserve uncertainty with status fields instead of inventing confidence percentages.',
       'Return a JSON document whose recordingId and sourceEvidence.sha256 exactly match this request.',
+      'If explicitly readable, extract the current overall score and the separately displayed personal best / highest score as different fields. Never substitute personalBest for overallScore.',
+      'If explicitly readable, preserve ranking.position and ranking.total as context; do not use them as hard chronology evidence.',
       'Do not label improvement or infer an acoustic cause from the score.'
     ],
     minimumOutputEnvelope: {
@@ -837,9 +895,9 @@ function buildRecordingEvaluationAnchors(rec, imageMeta, structured = state.eval
   const prov = normalizedMetadataProvenance(rec || {});
   const structuredDesc = structuredEvaluationDescriptor(rec, imageMeta, structured);
   const storedScore = parseStoredScore(rec && rec.damScore);
-  const extractedScore = structuredDesc.verification && structuredDesc.verification.status === 'source_verified' ? structuredDesc.overallScore : null;
-  let scoreConsistency = 'not_comparable';
-  if (storedScore !== null && extractedScore !== null) scoreConsistency = Math.abs(storedScore - extractedScore) <= 0.001 ? 'same_value' : 'different_value';
+  const scoreCheck = manualVsStructuredScoreConsistency(rec, structuredDesc);
+  const extractedScore = scoreCheck.extractedScore;
+  const personalBest = structuredDesc.verification && structuredDesc.verification.status === 'source_verified' ? structuredDesc.personalBest : null;
   return {
     schemaVersion: 'songscope-evaluation-anchors-v2',
     recordingId: rec && rec.recordingId || null,
@@ -851,13 +909,17 @@ function buildRecordingEvaluationAnchors(rec, imageMeta, structured = state.eval
     },
     scoringResultImage: evaluationImageDescriptor(rec, imageMeta),
     structuredScoringResult: structuredDesc,
+    personalBest: { status: personalBest === null ? 'unavailable' : 'available_source_verified', value: personalBest, interpretation: 'Context from the scoring screen only. It can indicate that SongScope may omit other takes, but it is not used as hard chronology evidence.' },
     consistencyChecks: {
-      storedDamScoreVsStructuredOverallScore: scoreConsistency,
-      policy: 'Differences are surfaced and never silently reconciled.'
+      storedDamScoreVsStructuredOverallScore: scoreCheck.status,
+      storedDamScoreMinusStructuredOverallScore: scoreCheck.delta,
+      conflictBlocksManualScoreComparison: scoreCheck.status === 'conflict_manual_score_vs_source_verified_image',
+      policy: 'A user-confirmed manual score that conflicts with a source-verified image-derived overallScore is explicitly blocked from manual-score comparison; values are never silently reconciled.'
     },
-    recordedAt: {
-      value: rec && (rec.recordedAt || rec.createdAt) || null,
-      provenance: prov.recordedAt || { source: 'legacy_unknown', confirmation: 'unknown' }
+    chronologyMetadata: {
+      recordedAt: { value: rec && rec.recordedAt || null, provenance: prov.recordedAt || { source: 'legacy_unknown', confirmation: 'unknown' }, precision: 'datetime' },
+      recordedDate: { value: rec && rec.recordedDate || null, provenance: prov.recordedDate || { source: 'absent', confirmation: 'unknown' }, precision: 'day' },
+      relativeOrderAvailableSeparately: true
     },
     policy: {
       appDoesNotParseImage: true,
@@ -882,10 +944,13 @@ function openEditSheet(rec) {
   $('#f-memo').value = rec.memo || '';
   $('#f-setup').value = rec.recordingSetupPreset || settings.recordingSetupPreset;
   $('#f-recat').value = rec.recordedAt ? toLocalInput(new Date(rec.recordedAt)) : '';
+  $('#f-recdate').value = rec.recordedDate || '';
   const existingProv = normalizedMetadataProvenance(rec);
   state.recFormContext = {
     mode: 'edit', initial: recFormSnapshot(), previousProvenance: existingProv,
     recordedAtExplicitConfirm: !!(existingProv.recordedAt && existingProv.recordedAt.confirmation === 'user_confirmed'),
+    recordedDateExplicitConfirm: !!(existingProv.recordedDate && existingProv.recordedDate.confirmation === 'user_confirmed'),
+    chronologyPrecisionChoice: (existingProv.recordedAt && existingProv.recordedAt.confirmation === 'user_confirmed') ? 'exact' : ((existingProv.recordedDate && existingProv.recordedDate.confirmation === 'user_confirmed') ? 'day' : 'unknown'),
     scoringConditionsDefaulted: false,
     scoringConditionsExplicitConfirm: SCORING_CONDITION_FIELDS.every(k => existingProv[k] && existingProv[k].confirmation === 'user_confirmed')
   };
@@ -909,7 +974,8 @@ function readRecForm() {
     scoringMode: canonicalScoringConditionValue('scoringMode', $('#f-mode').value),
     memo: $('#f-memo').value.trim(),
     recordingSetupPreset: $('#f-setup').value.trim(),
-    recordedAt: at ? new Date(at).toISOString() : nowIso()
+    recordedAt: at ? new Date(at).toISOString() : null,
+    recordedDate: ($('#f-recdate') && $('#f-recdate').value) ? $('#f-recdate').value : null
   };
   form.metadataProvenance = buildMetadataProvenance(form);
   return form;
@@ -3999,6 +4065,17 @@ function e4ResolveChronology(descA, descB, ctx) {
       aRecordedAt: descA.recordedAt, bRecordedAt: descB.recordedAt
     };
   }
+  const pda = descA && descA.metadataProvenance && descA.metadataProvenance.recordedDate || {};
+  const pdb = descB && descB.metadataProvenance && descB.metadataProvenance.recordedDate || {};
+  const daUser = descA && descA.recordedDate || null, dbUser = descB && descB.recordedDate || null;
+  let dateOrder = null;
+  if (!timeOrder && pda.confirmation === 'user_confirmed' && pdb.confirmation === 'user_confirmed' && /^\d{4}-\d{2}-\d{2}$/.test(String(daUser||'')) && /^\d{4}-\d{2}-\d{2}$/.test(String(dbUser||'')) && daUser !== dbUser) {
+    const aFirst = daUser < dbUser;
+    dateOrder = { earlierRecordingId:aFirst?descA.recordingId:descB.recordingId, laterRecordingId:aFirst?descB.recordingId:descA.recordingId, aRecordedDate:daUser, bRecordedDate:dbUser };
+  }
+  if (dateOrder && pairOrder && (dateOrder.earlierRecordingId !== pairOrder.earlierRecordingId || dateOrder.laterRecordingId !== pairOrder.laterRecordingId)) {
+    return { status:'conflict', source:'conflict_user_confirmed_recorded_date_vs_pair_confirmation', resolution:null, earlierRecordingId:null,laterRecordingId:null,earlierSide:null,laterSide:null, recordedDateEvidence:dateOrder,pairConfirmationEvidence:pairOrder, note:'User-confirmed calendar dates and relative-order confirmation disagree. SongScope does not choose one automatically.' };
+  }
   if (timeOrder && pairOrder && (timeOrder.earlierRecordingId !== pairOrder.earlierRecordingId || timeOrder.laterRecordingId !== pairOrder.laterRecordingId)) {
     return {
       status: 'conflict', source: 'conflict_user_confirmed_recorded_at_vs_pair_confirmation', resolution: null,
@@ -4007,16 +4084,18 @@ function e4ResolveChronology(descA, descB, ctx) {
       note: 'Two user-confirmed chronology sources disagree. SongScope does not choose one automatically.'
     };
   }
-  const selected = timeOrder || pairOrder;
+  const selected = timeOrder || dateOrder || pairOrder;
   if (selected) {
-    const source = timeOrder ? 'user_confirmed_recorded_at' : 'user_pair_confirmation';
+    const source = timeOrder ? 'user_confirmed_recorded_at' : (dateOrder ? 'user_confirmed_recorded_date' : 'user_pair_confirmation');
     return {
-      status: 'established', source, resolution: timeOrder ? 'timestamp' : 'explicit_order',
+      status: 'established', source, resolution: timeOrder ? 'timestamp' : (dateOrder ? 'day' : 'explicit_order'),
       earlierRecordingId: selected.earlierRecordingId, laterRecordingId: selected.laterRecordingId,
       earlierSide: selected.earlierRecordingId === descA.recordingId ? 'A' : 'B',
       laterSide: selected.laterRecordingId === descA.recordingId ? 'A' : 'B',
       aRecordedAt: timeOrder && timeOrder.aRecordedAt || null,
       bRecordedAt: timeOrder && timeOrder.bRecordedAt || null,
+      aRecordedDate: dateOrder && dateOrder.aRecordedDate || null,
+      bRecordedDate: dateOrder && dateOrder.bRecordedDate || null,
       confirmedAt: pairOrder && pairOrder.confirmedAt || null
     };
   }
@@ -4115,7 +4194,8 @@ function d2RecordingDescriptor(side) {
     songIdentityKey: rec.songIdentityKey || null,
     title: rec.title || '',
     artist: rec.artist || '',
-    recordedAt: rec.recordedAt || rec.createdAt || null,
+    recordedAt: rec.recordedAt || null,
+    recordedDate: rec.recordedDate || null,
     durationSec: d2AnalysisDurationSec(side),
     analysisId: an.analysisId || rec.latestAnalysisId || null,
     analysisSchemaVersion: an.schemaVersion || null,
@@ -4304,14 +4384,22 @@ function d2EvaluationAnchors(descA, descB, strictConditions = null) {
       ? 'available_both_confirmed_conditions_match'
       : 'available_both_comparability_not_established';
   } else if (verifiedStructured(stA) || verifiedStructured(stB)) structuredStatus = 'available_one_side';
-  const consistency = (stored, extracted) => stored !== null && extracted !== null ? (Math.abs(stored - extracted) <= 0.001 ? 'same_value' : 'different_value') : 'not_comparable';
+  const consistency = (recDesc, stored, extracted) => {
+    if (stored === null || extracted === null) return 'not_comparable';
+    if (Math.abs(stored-extracted) <= 0.001) return 'same_value';
+    const p = recDesc && recDesc.metadataProvenance && recDesc.metadataProvenance.damScore || {};
+    return p.confirmation === 'user_confirmed' ? 'conflict_manual_score_vs_source_verified_image' : 'different_value_unconfirmed_manual_score';
+  };
+  const scoreConsistencyA = consistency(descA, scoreA, stScoreA), scoreConsistencyB = consistency(descB, scoreB, stScoreB);
+  const manualScoreConflict = scoreConsistencyA === 'conflict_manual_score_vs_source_verified_image' || scoreConsistencyB === 'conflict_manual_score_vs_source_verified_image';
+  if (manualScoreConflict) scoreStatus = 'blocked_conflict_manual_score_vs_source_verified_image';
   return {
     scoringConditionComparability: strictConditions || null,
     damScore: {
       status: scoreStatus,
       a: scoreA,
       b: scoreB,
-      deltaBminusA: scoreA !== null && scoreB !== null ? +(scoreB - scoreA).toFixed(3) : null,
+      deltaBminusA: !manualScoreConflict && scoreA !== null && scoreB !== null ? +(scoreB - scoreA).toFixed(3) : null,
       provenance: {
         a: provA.damScore || { source: 'legacy_unknown', confirmation: 'unknown' },
         b: provB.damScore || { source: 'legacy_unknown', confirmation: 'unknown' }
@@ -4333,8 +4421,9 @@ function d2EvaluationAnchors(descA, descB, strictConditions = null) {
       overallScoreB: stScoreB,
       deltaBminusA: stScoreA !== null && stScoreB !== null ? +(stScoreB - stScoreA).toFixed(3) : null,
       consistencyWithStoredDamScore: {
-        a: consistency(scoreA, stScoreA),
-        b: consistency(scoreB, stScoreB)
+        a: scoreConsistencyA,
+        b: scoreConsistencyB,
+        manualScoreComparisonBlocked: manualScoreConflict
       },
       note: 'Values are externally structured from preserved image evidence and are usable only when source verification passes. Comparison conditions remain a separate question.'
     }
@@ -4634,7 +4723,8 @@ function f1DescriptorFromStored(rec, an, asset, audioIdentity) {
     recordingIdentityBasis: rec.recordingIdentityBasis || null,
     title: rec.title || '',
     artist: rec.artist || '',
-    recordedAt: rec.recordedAt || rec.createdAt || null,
+    recordedAt: rec.recordedAt || null,
+    recordedDate: rec.recordedDate || null,
     durationSec: isFinite(Number(rec.durationSec)) ? Number(rec.durationSec) : null,
     analysisId: an.analysisId || rec.latestAnalysisId || null,
     analysisCount: isFinite(Number(rec.analysisCount)) ? Number(rec.analysisCount) : null,
@@ -4804,6 +4894,7 @@ function f1OutcomeObservation(desc) {
     userReview: st.extraction && st.extraction.userReview || 'unknown',
     scoringDate: result && result.scoringDate && result.scoringDate.status === 'readable' ? result.scoringDate.value || null : null,
     overallScore: result ? e3ReadableNumber(result.overallScore) : null,
+    personalBest: result ? e3ReadableNumber(result.personalBest || result.personalBestScore || result.bestScore) : null,
     nationalAverage: result ? e3ReadableNumber(result.nationalAverage) : null,
     heartBonus: result ? e3ReadableNumber(result.heartBonus) : null,
     ranking: rank ? { position: Number(rank.position), total: Number(rank.total) } : null,
@@ -5013,11 +5104,11 @@ function f1HistoryCsv(pkg) {
     Object.keys((r.outcome&&r.outcome.techniques)||{}).forEach(k=>techKeys.add(k));
   }
   const mks=Array.from(metricKeys).sort(), tks=Array.from(techKeys).sort();
-  const head=['chronology_index','physical_recording_id','recording_id','alias_recording_ids','audio_sha256','audio_identity_source','title','recorded_at','recorded_at_confirmation','structured_outcome_status','scoring_date','overall_score','national_average','heart_bonus',...mks.map(k=>'metric_'+k),...tks.map(k=>'technique_'+k+'_count'),'vibrato_duration_sec','vibrato_count','vibrato_type'];
+  const head=['chronology_index','physical_recording_id','recording_id','alias_recording_ids','audio_sha256','audio_identity_source','title','recorded_at','recorded_at_confirmation','structured_outcome_status','scoring_date','overall_score','personal_best','national_average','heart_bonus',...mks.map(k=>'metric_'+k),...tks.map(k=>'technique_'+k+'_count'),'vibrato_duration_sec','vibrato_count','vibrato_type'];
   const out=[head.join(',')];
   for(const row of rows){
     const o=row.outcome||{}, p=row.recording.metadataProvenance&&row.recording.metadataProvenance.recordedAt||{};
-    const vals=[row.chronologyIndex||'',row.recording.physicalRecordingId||'',row.recording.recordingId,(row.recording.physicalIdentity&&row.recording.physicalIdentity.aliasRecordingIds||[]).join('|'),row.recording.audioSha256||'',row.recording.audioIdentityEvidence&&row.recording.audioIdentityEvidence.source||'',row.recording.title,row.recording.recordedAt||'',p.confirmation||'unknown',o.status,o.scoringDate||'',o.overallScore,o.nationalAverage,o.heartBonus,
+    const vals=[row.chronologyIndex||'',row.recording.physicalRecordingId||'',row.recording.recordingId,(row.recording.physicalIdentity&&row.recording.physicalIdentity.aliasRecordingIds||[]).join('|'),row.recording.audioSha256||'',row.recording.audioIdentityEvidence&&row.recording.audioIdentityEvidence.source||'',row.recording.title,row.recording.recordedAt||'',p.confirmation||'unknown',o.status,o.scoringDate||'',o.overallScore,o.personalBest,o.nationalAverage,o.heartBonus,
       ...mks.map(k=>o.metrics&&o.metrics[k]?o.metrics[k].value:''),...tks.map(k=>o.techniques&&o.techniques[k]?o.techniques[k].count:''),
       o.vibrato&&o.vibrato.totalDurationSec,o.vibrato&&o.vibrato.count,o.vibrato&&o.vibrato.type];
     out.push(vals.map(v=>v===null||v===undefined?'':csvEscape(v)).join(','));
@@ -5044,6 +5135,11 @@ async function buildF1HistoryPackage() {
   const rowOrder=chronology.status==='fully_ordered'?orderedDescs:stable;
   const recordings=rowOrder.map((d,i)=>({ chronologyIndex:chronology.status==='fully_ordered'?i+1:null, recording:d, outcome:f1OutcomeObservation(d) }));
   const verifiedCount=recordings.filter(r=>r.outcome.status==='source_verified_structured_outcome').length;
+  const observedScores=recordings.map(r=>r.outcome&&r.outcome.overallScore).filter(v=>isFinite(Number(v))).map(Number);
+  const personalBests=recordings.map(r=>r.outcome&&r.outcome.personalBest).filter(v=>isFinite(Number(v))).map(Number);
+  const observedMax=observedScores.length?Math.max(...observedScores):null;
+  const personalBestMax=personalBests.length?Math.max(...personalBests):null;
+  const historyCompleteness={ status: personalBestMax!==null&&observedMax!==null&&personalBestMax>observedMax+0.001?'may_omit_unrecorded_takes':'no_missing_take_signal_from_personal_best', observedRecordingCount:descs.length, observedMaxOverallScore:observedMax, maxReadablePersonalBest:personalBestMax, note:'SongScope counts observed imported takes, not every real-world singing attempt. A higher personal-best value is only a completeness warning and never a hard chronology constraint.' };
   let readiness='insufficient_history_for_pattern';
   if(chronology.status!=='fully_ordered') readiness='chronology_not_fully_ordered';
   else if(descs.length>=3 && verifiedCount<3) readiness='insufficient_source_verified_outcomes';
@@ -5068,6 +5164,7 @@ async function buildF1HistoryPackage() {
     identityResolution: identityResolution.audit,
     chronology,
     scoringConditionChain:conditionChain,
+    historyCompleteness,
     patternReadiness:{
       status:readiness,
       recordingCount:descs.length,
@@ -5707,10 +5804,16 @@ function wireSheets() {
   }));
   $('#rec-save').addEventListener('click', onRecSave);
   $('#f-recat-confirm').addEventListener('click', confirmRecordedAtInForm);
+  $('#f-recdate-confirm').addEventListener('click', confirmRecordedDateInForm);
+  $('#f-recat-unknown').addEventListener('click', keepRecordingTimeUnknownInForm);
   $('#f-cond-prev').addEventListener('click', confirmScoringConditionsFromPrevious);
   $('#f-cond-confirm').addEventListener('click', confirmCurrentScoringConditions);
   $('#f-recat').addEventListener('input', () => {
-    if (state.recFormContext) state.recFormContext.recordedAtExplicitConfirm = false;
+    if (state.recFormContext) { state.recFormContext.recordedAtExplicitConfirm = false; state.recFormContext.recordedDateExplicitConfirm = false; }
+    updateRecConfirmationUi();
+  });
+  $('#f-recdate').addEventListener('input', () => {
+    if (state.recFormContext) { state.recFormContext.recordedDateExplicitConfirm = false; if (state.recFormContext.chronologyPrecisionChoice === 'day') state.recFormContext.chronologyPrecisionChoice = 'unknown'; }
     updateRecConfirmationUi();
   });
   for (const id of ['#f-device','#f-mode','#f-key','#f-octave']) {
