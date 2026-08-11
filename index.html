@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260810-r1-01">
+<link rel="stylesheet" href="styles.css?v=20260811-g0-03">
 <title>SongScope</title>
 </head>
 <body>
@@ -44,6 +44,16 @@
         <input type="file" id="restore-input" accept="application/zip,.zip" hidden>
         <input type="file" id="restore-selftest-input" accept="application/zip,.zip" hidden>
       </div>
+    </div>
+
+
+    <div class="card note" id="scoring-evidence-card">
+      <p><b>DAMデンモク採点履歴</b>は録音とは別の一次証拠として先に保存できます。同じ歌唱だと確認できるまで録音には紐付けません。</p>
+      <div class="row gap wrap">
+        <button id="btn-scoring-evidence-add" class="mini accent">採点履歴画像を追加（複数可）</button>
+        <input type="file" id="scoring-evidence-input" accept="image/*" multiple hidden>
+      </div>
+      <div id="scoring-evidence-list" class="list"><p class="small">未紐付けのDAMデンモク採点履歴はありません。</p></div>
     </div>
 
     <button id="btn-add" class="primary big">＋ 録音を追加</button>
@@ -142,12 +152,12 @@
       <p class="small">DAM等の外部評価は、音響観測とは別の証拠として保存します。採点結果画像は1タップで添付でき、ChatGPT等で画像から作った構造化評価JSONも元画像SHA-256を照合して紐づけられます。SongScope自身はOCR・上達判定を行いません。</p>
       <div id="rv-eval-status" class="note"><p class="small">DAM点数: 未登録 ／ 採点結果画像: なし</p></div>
       <div class="row gap wrap">
-        <button id="btn-eval-image" class="mini accent">採点結果画像を追加</button>
-        <button id="btn-eval-image-remove" class="mini" hidden>画像を外す</button>
+        <button id="btn-eval-image" class="mini accent">DAMデンモク履歴画像を追加（複数可）</button>
+        <button id="btn-eval-image-remove" class="mini" hidden>画像を全て外す</button>
         <button id="btn-eval-json" class="mini accent">評価JSONを読み込む</button>
         <button id="btn-eval-json-remove" class="mini" hidden>評価JSONを外す</button>
       </div>
-      <input type="file" id="eval-image-input" accept="image/*" hidden>
+      <input type="file" id="eval-image-input" accept="image/*" multiple hidden>
       <input type="file" id="eval-json-input" accept="application/json,.json" hidden>
       <p class="small">評価JSONは現在の録音IDと採点結果画像SHA-256が一致する場合だけ受け付けます。画像・手入力値・外部抽出値が食い違っても自動補正しません。</p>
     </div>
@@ -362,7 +372,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260810-r1-01"></script>
-<script src="app.js?v=20260811-r2-01"></script>
+<script src="zip.js?v=20260811-g0-03"></script>
+<script src="app.js?v=20260811-g0-03"></script>
 </body>
 </html>

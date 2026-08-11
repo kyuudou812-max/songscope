@@ -1,7 +1,7 @@
 
 ## Audit Remediation R2 build 01 — 観測方向の意味論修正 / mixed-audio隔離
 
-- App: `0.2.0-auditR2` / Build: `20260811-r2-01` / schema: `0.15.0` / DB: `6`
+- App: `0.2.0-g0` / Build: `20260811-g0-01` / schema: `0.16.0` / DB: `6`
 - F2の「pattern / signal / trend」という表現を廃止し、`same_song_observed_take_direction_history`として記述的な履歴圧縮に変更。
 - 3件/5件は統計的な格付けではなく、単なる観測テイク数（evidence volume）としてのみ保持。
 - 全step同値 (`same`) はdirectional summaryへ昇格しない。`descriptive_only` と `non_monotonic` も除外。
@@ -595,3 +595,27 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - external evaluation requestは、画面上で明示的に読める場合のみpersonalBestをoverallScoreとは別に抽出するよう要求します。
 - chronologyは `exact datetime / date-only / relative-order-only / unknown` の精度を区別します。正確な時刻が分からなくても、日付だけ、またはpairの相対順序だけで履歴を保持できます。
 - `personalBest > SongScope内の観測済みoverallScore最大値` は `historyCompleteness.may_omit_unrecorded_takes` という警告にだけ使い、chronologyやpatternを自動で変更・blockしません。
+
+
+## G0 — DAM画像の離散観測（2026-08-11）
+- G0はObservation層のみ。練習提案・原因推定・take間の良否判定は行わない。
+- 外部画像抽出requestに、ロングトーン上手さ、ビブラート上手さ、安定性、リズム、声域、音程グラフの可視エラーマーカー、分析レポート文の任意フィールドを追加。
+- 数えられる表示だけを数える。グラフやバーから隠れた数値・百分率を逆算しない。
+- 音程グラフの横位置は graphical_only の0..1近似位置としてのみ保持でき、G0では音声時刻へ変換しない。
+- 既存 `songscope-external-evaluation-v1` とDB_VER=6を維持し、過去の評価JSON/データを壊さない。
+
+
+## G0 build02 — DAMデンモク multi-image evidence set
+- G0の正式入力源を `dam_denmoku` に限定。カラオケ端末の直撮りは当面対象外。
+- 1採点結果を1枚ではなく `evaluationEvidenceSet` として扱い、精密採点DX-Gのような複数画面を1つの証拠セットに束ねる。
+- 画像はSHA-256で個別識別。既存の単一画像データは自動的に1枚セットとして後方互換。
+- extraction request v2は全画像SHA集合を要求し、外部構造化JSON v2は全画像集合が一致した場合のみsource_verified。
+- `scoringPerformedAt` はDAMデンモク表示の採点日時として扱い、iPhone `recordedAt` とは分離。
+- 精密採点Ai / 精密採点DX-Gの違いは欠損を推測で埋めず、共通値＋mode-specific/discrete observationsとして保持する。
+
+
+## G0 build03 (2026-08-11)
+- DAMデンモク採点履歴を録音から独立した一次証拠として保存する `scoringEvidenceSets` store を追加（DB_VER 7）。
+- 1採点結果を1〜複数画像の evidence set として保存し、録音とのbindingは未確認のまま保持可能。
+- 未紐付けevidence setはホームから抽出ZIPを書き出せる。外部AIにはrecordingIdを推測・付与しないよう要求する。
+- 従来の録音画面からの画像添付は「同一歌唱だと確認済みの場合」の直接binding経路として残す。
