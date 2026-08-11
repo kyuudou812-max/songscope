@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.16.2';
-const BUILD_ID = '20260811-g0-03';
+const SCHEMA_VERSION = '0.16.3';
+const BUILD_ID = '20260811-g0-04';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -6044,7 +6044,11 @@ function wireHome() {
   $('#btn-add').addEventListener('click', () => $('#file-input').click());
   $('#btn-scoring-evidence-add').addEventListener('click', () => $('#scoring-evidence-input').click());
   $('#scoring-evidence-input').addEventListener('change', e => {
-    const files=e.target.files; e.target.value=''; if (files && files.length) onStandaloneEvidenceInput(files);
+    // iOS Safariではinput.valueを空にするとFileList自体も空になる場合がある。
+    // 非同期処理へ渡す前に通常Arrayへsnapshotしてからinputをresetする。
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length) onStandaloneEvidenceInput(files);
   });
   $('#file-input').addEventListener('change', e => {
     const f = e.target.files && e.target.files[0];

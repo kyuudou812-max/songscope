@@ -619,3 +619,9 @@ SongScope v0.1.0 — 端末内処理 / 採点なし / 観測データのみ
 - 1採点結果を1〜複数画像の evidence set として保存し、録音とのbindingは未確認のまま保持可能。
 - 未紐付けevidence setはホームから抽出ZIPを書き出せる。外部AIにはrecordingIdを推測・付与しないよう要求する。
 - 従来の録音画面からの画像添付は「同一歌唱だと確認済みの場合」の直接binding経路として残す。
+
+
+## G0 build04
+- iOS SafariでDAMデンモク採点履歴画像を選択後、一覧が更新されない不具合を修正。
+- file inputをresetする前にFileListをArrayへsnapshotし、非同期保存へ渡す。
+- DB schema/worker/評価意味論は変更なし。
