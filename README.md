@@ -700,3 +700,5 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - fieldStatusを1項目欠落させたfixture: import rejection PASS.
 - scoringPerformedAtを旧裸文字列へ戻したfixture: import rejection PASS.
 - v1 stored result: source bindingは保持しつつ `legacy_review_needs_reverification` へ降格することを確認。
+
+Deploy retry 2026-08-11
