@@ -1,3 +1,15 @@
+
+## Audit Remediation R2 build 01 — 観測方向の意味論修正 / mixed-audio隔離
+
+- App: `0.2.0-auditR2` / Build: `20260811-r2-01` / schema: `0.15.0` / DB: `6`
+- F2の「pattern / signal / trend」という表現を廃止し、`same_song_observed_take_direction_history`として記述的な履歴圧縮に変更。
+- 3件/5件は統計的な格付けではなく、単なる観測テイク数（evidence volume）としてのみ保持。
+- 全step同値 (`same`) はdirectional summaryへ昇格しない。`descriptive_only` と `non_monotonic` も除外。
+- `physicalRecordingCount` は「実世界で歌った全回数」ではなく「SongScopeに観測/取込されたphysical recording数」と明示。
+- mixed-audio F0 / F0 candidate ratio / ambiguity / RMS は `practiceLayerEligible: false`。D2診断ZIPには残すが、Practice/Hypothesisの歌手固有証拠として使わない。
+- R2 packageは `practiceLayerPolicy` を持ち、外部AIが使ってよい証拠scopeとdiagnostic-only scopeを機械可読に分離。
+- 音響worker、D1 alignment、DB schemaは変更なし。
+
 # SongScope v0.2 Audit Remediation R1 build 01
 
 R0で完全バックアップ/災害復旧を実機検証した後の、**chronology と採点条件の整合性・入力負荷**を直す監査対応。音響workerとD1 matcher自体は変更しない。

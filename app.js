@@ -1,5 +1,5 @@
 /* =====================================================================
- * SongScope v0.2 Audit Remediation R1  —  歌唱録音レビュー・解析アプリ
+ * SongScope v0.2 Audit Remediation R2  —  歌唱録音レビュー・解析アプリ
  *
  * 思想:
  *   観測された事実 と 解釈・評価 を分離する。
@@ -8,9 +8,9 @@
  * ===================================================================== */
 'use strict';
 
-const APP_VERSION = '0.2.0-auditR1';
-const SCHEMA_VERSION = '0.14.1';
-const BUILD_ID = '20260811-r1-02';
+const APP_VERSION = '0.2.0-auditR2';
+const SCHEMA_VERSION = '0.15.0';
+const BUILD_ID = '20260811-r2-01';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const COMPARISON_CONTEXT_SCHEMA = 'songscope-comparison-context-v2';
 const SONG_IDENTITY_VERSION = 'title_artist_nfkc_v1';
@@ -4287,7 +4287,8 @@ function d2MetricCatalog() {
         signalScope: 'voice_plus_accompaniment_plus_room',
         vocalSpecific: false,
         normalization: "rms_db minus that recording's finite-RMS p95 reference; not a shared calibrated SPL scale",
-        interpretationClass: 'descriptive_only',
+        interpretationClass: 'diagnostic_only',
+        practiceLayerEligible: false,
         allowedInterpretation: [
           'Describe the within-recording relative level distribution in the same aligned song interval.',
           'Compare distribution shape cautiously when recording conditions are sufficiently similar.'
@@ -4303,6 +4304,7 @@ function d2MetricCatalog() {
         signalScope: 'voice_plus_accompaniment_plus_room',
         vocalSpecific: false,
         interpretationClass: 'diagnostic_only',
+        practiceLayerEligible: false,
         safeLabel: 'mixed_audio_periodicity_candidate_hz',
         allowedInterpretation: [
           'Describe the distribution of retained periodicity candidates produced by the current estimator.',
@@ -4319,6 +4321,7 @@ function d2MetricCatalog() {
       f0CandidateRatio: {
         source: 'estimator_evidence',
         interpretationClass: 'diagnostic_only',
+        practiceLayerEligible: false,
         safeLabel: 'mixed_audio_periodicity_candidate_ratio',
         allowedInterpretation: ['Fraction of available analysis frames that produced a retained F0 candidate under the current estimator settings.'],
         prohibitedInterpretation: ['Voiced ratio', 'Singing duration', 'Correct-pitch ratio', 'Vocal activity probability']
@@ -4326,6 +4329,7 @@ function d2MetricCatalog() {
       f0Ambiguity: {
         source: 'heuristic_estimator_diagnostic',
         interpretationClass: 'diagnostic_only',
+        practiceLayerEligible: false,
         allowedInterpretation: ['How often the retained candidate was accompanied by a currently detected harmonic/integer-ratio ambiguity pattern.'],
         prohibitedInterpretation: [
           'Probability that F0 is wrong',
@@ -5218,12 +5222,13 @@ async function exportF1HistoryPackage() {
 
 
 /* =====================================================================
- * Phase F2: repeated-direction pattern evidence
+ * Audit R2: observed-direction history summary
  *
- * F1で解決したphysical recording / chronology / scoring-condition chainを
- * そのまま入力証拠として使う。F2は「どの外部評価変化が複数stepで同じ
- * 方向に観測されたか」を記述するだけで、上達・悪化・原因・練習処方は
- * 判定しない。3 physical recordings未満ではpatternを作らない。
+ * F1のphysical recording / chronology / scoring-condition chainを入力証拠とする。
+ * ここで作るのは「時系列に並んだ観測テイクで、外部評価値がどう動いたか」
+ * の圧縮表現だけ。trend / signal / improvement / deterioration を判定しない。
+ * 3件/5件は証拠量の表示であり、統計的な格付けではない。
+ * mixed-audio F0/RMS はPractice/Hypothesis入力から明示的に除外する。
  * ===================================================================== */
 function f2DirectionFromDelta(delta) {
   const n=Number(delta);
@@ -5254,7 +5259,7 @@ function f2LongestDirectionRun(directions) {
   }
   return best;
 }
-function f2MetricPattern(series, evidenceTier) {
+function f2MetricPattern(series, evidenceVolume) {
   const points=(series&&series.points)||[];
   const steps=(series&&series.adjacentSteps)||[];
   const values=points.map(p=>p&&p.value!==undefined?p.value:null);
@@ -5263,27 +5268,35 @@ function f2MetricPattern(series, evidenceTier) {
   const counts=f2DirectionCounts(directions);
   const longestRun=f2LongestDirectionRun(directions);
   const completeDirections=directions.length===Math.max(0,points.length-1) && directions.every(Boolean);
-  const uniqueDirections=Array.from(new Set(directions.filter(Boolean)));
-  const allAdjacentSameDirection=completeDirections && directions.length>=2 && uniqueDirections.length===1;
+  const nonSameDirections=directions.filter(d=>d==='higher'||d==='lower');
+  const uniqueNonSame=Array.from(new Set(nonSameDirections));
+  const allAdjacentDirectionalSame = completeDirections && directions.length>=2 && directions.every(d=>d==='higher'||d==='lower') && uniqueNonSame.length===1;
+  const directionality=series.directionality||null;
+  const directionalSummaryEligible = directionality!=='non_monotonic' && directionality!=='descriptive_only';
   let status='not_ready';
-  let repeatedDirection=null;
-  let eligibleForRepeatedSignal=false;
-  if(points.length<3) status='waiting_for_third_physical_recording';
+  let consistentObservedDirection=null;
+  let eligibleForDirectionalSummary=false;
+  if(points.length<3) status='waiting_for_third_observed_take';
   else if(!allValuesPresent) status='missing_metric_values';
   else if(!completeDirections) status='incomplete_adjacent_steps';
-  else if(series.directionality==='non_monotonic') status='descriptive_non_monotonic_sequence';
-  else if(allAdjacentSameDirection) {
-    status='same_direction_observed_across_all_adjacent_steps';
-    repeatedDirection=uniqueDirections[0]||null;
-    eligibleForRepeatedSignal=true;
-  } else status='mixed_adjacent_step_directions';
+  else if(directionality==='non_monotonic') status='descriptive_non_monotonic_sequence';
+  else if(directionality==='descriptive_only') status='descriptive_only_sequence';
+  else if(allAdjacentDirectionalSame) {
+    status='same_nonzero_direction_observed_across_all_observed_steps';
+    consistentObservedDirection=uniqueNonSame[0]||null;
+    eligibleForDirectionalSummary=true;
+  } else if(directions.every(d=>d==='same')) {
+    status='unchanged_across_all_observed_steps';
+  } else {
+    status='mixed_or_flat_observed_directions';
+  }
   const firstValue=allValuesPresent?Number(values[0]):null;
   const lastValue=allValuesPresent?Number(values[values.length-1]):null;
   const netDelta=firstValue!==null&&lastValue!==null?+((lastValue-firstValue).toFixed(6)):null;
   return {
     key:series.key,label:series.label,unit:series.unit||null,
-    classification:series.classification,directionality:series.directionality,
-    status,evidenceTier,repeatedDirection,eligibleForRepeatedSignal,
+    classification:series.classification,directionality,
+    status,evidenceVolume,consistentObservedDirection,eligibleForDirectionalSummary,
     physicalRecordingCount:points.length,adjacentStepCount:steps.length,
     firstValue,lastValue,netDeltaLaterMinusEarlier:netDelta,
     directionCounts:counts,longestSameDirectionRun:longestRun,
@@ -5293,9 +5306,11 @@ function f2MetricPattern(series, evidenceTier) {
       earlier:x.earlier,later:x.later,deltaLaterMinusEarlier:x.deltaLaterMinusEarlier,
       observedDirection:directions[i],scoringConditionComparability:x.scoringConditionComparability
     })),
-    interpretation: series.directionality==='non_monotonic'
+    interpretation: directionality==='non_monotonic'
       ? 'Descriptive sequence only. More or less of this technique quantity is not automatically better or worse.'
-      : 'Repeated direction means the external numeric observation moved in the same direction across every adjacent step in this history. It does not establish durable singing-skill improvement/deterioration, statistical significance, or acoustic cause.'
+      : directionality==='descriptive_only'
+        ? 'Descriptive external-score component only. Direction is retained but is not promoted to a cross-take directional summary.'
+        : 'This is a compression of observed external numeric outcomes across SongScope-observed takes. A consistent direction is not a trend, a statistical signal, a durable skill change, or a causal explanation.'
   };
 }
 function f2BuildPatternEvidence(historyPkg) {
@@ -5306,78 +5321,90 @@ function f2BuildPatternEvidence(historyPkg) {
   const chain=h.scoringConditionChain||{};
   const n=Number(song.physicalRecordingCount||song.recordingCount||0);
   const verified=Number(pr.sourceVerifiedStructuredOutcomeCount||0);
-  let status='waiting_for_third_physical_recording';
+  let status='waiting_for_third_observed_take';
   const blockers=[];
-  let evidenceTier='insufficient';
-  if(n<3) blockers.push('physical_recording_count_below_3');
+  let evidenceVolume='pair_only';
+  if(n<3) blockers.push('observed_take_count_below_3');
   else if(chronology.status!=='fully_ordered') { status='blocked_chronology_not_fully_ordered'; blockers.push('chronology_not_fully_ordered'); }
-  else if(verified<n) { status='blocked_missing_source_verified_outcomes'; blockers.push('not_all_physical_recordings_have_source_verified_structured_outcomes'); }
+  else if(verified<n) { status='blocked_missing_source_verified_outcomes'; blockers.push('not_all_observed_takes_have_source_verified_structured_outcomes'); }
   else if(chain.status!=='comparable_chain') { status='blocked_scoring_conditions_not_comparable'; blockers.push('scoring_condition_chain_not_comparable'); }
   else {
-    evidenceTier=n>=5?'repeated_observation_5_plus':'exploratory_3_to_4_recordings';
-    status=n>=5?'repeated_observation_pattern_evidence_available':'exploratory_pattern_evidence_available';
+    evidenceVolume=n>=5?'five_or_more_observed_takes':'three_to_four_observed_takes';
+    status='observed_direction_history_available';
   }
-  const ready=status==='exploratory_pattern_evidence_available'||status==='repeated_observation_pattern_evidence_available';
-  const series=(h.outcomeSeries||[]).map(s=>f2MetricPattern(s,ready?evidenceTier:'insufficient'));
-  const repeatedSameDirectionSignals=ready?series.filter(x=>x.eligibleForRepeatedSignal).map(x=>({
-    key:x.key,label:x.label,unit:x.unit,direction:x.repeatedDirection,
+  const ready=status==='observed_direction_history_available';
+  const series=(h.outcomeSeries||[]).map(s=>f2MetricPattern(s,ready?evidenceVolume:'insufficient'));
+  const consistentDirectionalObservations=ready?series.filter(x=>x.eligibleForDirectionalSummary).map(x=>({
+    key:x.key,label:x.label,unit:x.unit,direction:x.consistentObservedDirection,
     physicalRecordingCount:x.physicalRecordingCount,adjacentStepCount:x.adjacentStepCount,
     firstValue:x.firstValue,lastValue:x.lastValue,netDeltaLaterMinusEarlier:x.netDeltaLaterMinusEarlier,
-    evidenceTier:x.evidenceTier,
-    interpretation:'Repeated direction of an external observation only; not an automatic better/worse or causal claim.'
-  })):[];
-  const mixedDirectionSignals=ready?series.filter(x=>x.status==='mixed_adjacent_step_directions').map(x=>({
-    key:x.key,label:x.label,directionCounts:x.directionCounts,longestSameDirectionRun:x.longestSameDirectionRun,
-    netDeltaLaterMinusEarlier:x.netDeltaLaterMinusEarlier,evidenceTier:x.evidenceTier
-  })):[];
-  const descriptiveNonMonotonic=ready?series.filter(x=>x.status==='descriptive_non_monotonic_sequence').map(x=>({
-    key:x.key,label:x.label,directionCounts:x.directionCounts,longestSameDirectionRun:x.longestSameDirectionRun,
-    interpretation:'Non-monotonic technique quantity; sequence is retained descriptively and is excluded from repeated better/worse signal lists.'
-  })):[];
+    evidenceVolume:x.evidenceVolume,
+    interpretation:'Same non-zero observed direction across all SongScope-observed adjacent steps. This is descriptive only; do not call it a trend, signal, improvement, deterioration, or statistical evidence.'
+  })) : [];
+  const mixedOrFlat=ready?series.filter(x=>x.status==='mixed_or_flat_observed_directions'||x.status==='unchanged_across_all_observed_steps').map(x=>({
+    key:x.key,label:x.label,status:x.status,directionCounts:x.directionCounts,longestSameDirectionRun:x.longestSameDirectionRun,
+    netDeltaLaterMinusEarlier:x.netDeltaLaterMinusEarlier,evidenceVolume:x.evidenceVolume
+  })) : [];
+  const descriptiveOnly=ready?series.filter(x=>x.status==='descriptive_non_monotonic_sequence'||x.status==='descriptive_only_sequence').map(x=>({
+    key:x.key,label:x.label,status:x.status,directionCounts:x.directionCounts,longestSameDirectionRun:x.longestSameDirectionRun,
+    interpretation:x.interpretation
+  })) : [];
   return {
-    schemaVersion:'songscope-pattern-evidence-0.1.1',
-    packageType:'same_song_repeated_direction_pattern_evidence',
+    schemaVersion:'songscope-observed-direction-history-0.2.0',
+    packageType:'same_song_observed_take_direction_history',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
       songId:song.songId||null,representativeTitle:song.representativeTitle||'',representativeArtist:song.representativeArtist||'',
-      physicalRecordingCount:n,storedRecordingRecordCount:Number(song.storedRecordingRecordCount||0),
-      duplicateAliasRecordCount:Number(song.duplicateAliasRecordCount||0),unresolvedIdentityRecordCount:Number(song.unresolvedIdentityRecordCount||0)
+      observedPhysicalRecordingCount:n,storedRecordingRecordCount:Number(song.storedRecordingRecordCount||0),
+      duplicateAliasRecordCount:Number(song.duplicateAliasRecordCount||0),unresolvedIdentityRecordCount:Number(song.unresolvedIdentityRecordCount||0),
+      scopeDefinition:'Count refers only to physical recordings observed/imported by SongScope; it is not the total number of times the user has ever sung the song.'
     },
     readiness:{
-      status,evidenceTier,blockers,
-      physicalRecordingCount:n,sourceVerifiedStructuredOutcomeCount:verified,
+      status,evidenceVolume,blockers,
+      observedPhysicalRecordingCount:n,sourceVerifiedStructuredOutcomeCount:verified,
       chronologyStatus:chronology.status||'unknown',scoringConditionChainStatus:chain.status||'unknown',
-      minimumPhysicalRecordingsForExploratoryPattern:3,minimumPhysicalRecordingsForRepeatedObservationPattern:5,
-      note:n<3?'Two physical recordings preserve a pair difference but F2 deliberately waits for a third before producing repeated-direction pattern evidence.':'Availability means pattern evidence can be described; it is not a claim of durable skill change.'
+      minimumObservedTakesForDirectionHistory:3,
+      evidenceVolumeLabels:{threeToFour:'descriptive volume only',fiveOrMore:'larger descriptive volume only'},
+      note:n<3?'Two observed takes preserve a pair difference; R2 waits for a third before summarizing cross-step direction.':'Availability means the observed history can be compressed descriptively. It is not a statistical tier or skill-change claim.'
     },
     summary:{
-      repeatedSameDirectionSignalCount:repeatedSameDirectionSignals.length,
-      mixedDirectionSignalCount:mixedDirectionSignals.length,
-      descriptiveNonMonotonicSequenceCount:descriptiveNonMonotonic.length,
-      repeatedSameDirectionSignals,mixedDirectionSignals,descriptiveNonMonotonicSequences:descriptiveNonMonotonic
+      consistentDirectionalObservationCount:consistentDirectionalObservations.length,
+      mixedOrFlatObservationCount:mixedOrFlat.length,
+      descriptiveOnlySequenceCount:descriptiveOnly.length,
+      consistentDirectionalObservations,
+      mixedOrFlatObservations:mixedOrFlat,
+      descriptiveOnlySequences:descriptiveOnly
     },
     metricPatterns:series,
+    practiceLayerPolicy:{
+      usableSignalScopes:['source_verified_external_scoring_outcomes','user_reported_markers_and_segments'],
+      diagnosticOnlyScopes:['mixed_audio_periodicity_candidate_hz','mixed_audio_periodicity_candidate_ratio','mixed_audio_f0_ambiguity','mixed_audio_rms_relative_db'],
+      mixedAudioAcousticFeaturesEligibleForPracticeHypothesis:false,
+      reason:'Current D2 F0/RMS features are mixed voice+accompaniment+room observations and are not vocal-specific. They remain available only in diagnostic comparison packages.'
+    },
     nextLayerReadiness:{
-      status:!ready?'waiting_for_pattern_evidence':(repeatedSameDirectionSignals.length?'pattern_evidence_available_for_hypothesis_layer':'no_all-step_repeated_direction_signal_yet'),
-      note:'F2 does not prescribe practice. A later hypothesis/practice layer may use repeated outcome evidence together with targeted D2 observations and user-reported experience, while keeping causal claims provisional.'
+      status:!ready?'waiting_for_observed_direction_history':'external_outcome_history_available_for_hypothesis_layer',
+      note:'A later hypothesis/practice layer may use verified external scoring outcomes and user-reported evidence. It must not use mixed-audio F0/RMS as evidence about the singer.'
     },
     interpretationGuardrails:[
-      'F2 derives only from F1 physical-recording identity, established chronology, source-verified structured outcomes, and scoring-condition comparability.',
-      'Two recordings are never promoted to a repeated pattern. At least three physical recordings are required.',
-      'same_direction_observed_across_all_adjacent_steps means every adjacent numeric step had the same observed sign; it does not establish statistical significance or durable skill change.',
-      'Technique counts and vibrato quantity remain non-monotonic descriptive sequences and are excluded from better/worse pattern claims.',
+      'R2 summarizes only SongScope-observed/imported physical recordings; missing real-world karaoke takes may exist between observations.',
+      'Two observed recordings are never described as a cross-step directional history. At least three observed takes are required.',
+      'A same non-zero direction across observed adjacent steps is a descriptive compression only; it is not called a trend or signal and has no statistical-significance claim.',
+      'All-same values are not promoted as directional evidence.',
+      'descriptive_only and non_monotonic metrics are excluded from consistent-direction summaries.',
+      'Technique counts and vibrato quantity remain non-monotonic descriptive sequences and are never treated as better/worse.',
       'No composite singing score is invented. No weighting is applied across metrics.',
-      'F2 does not use mixed-audio F0/RMS observations to explain external-score changes and does not infer causation.',
-      'F2 does not generate a practice prescription; it only prepares evidence for a later hypothesis/practice layer.'
+      'Mixed-audio F0/RMS are diagnostic-only and are explicitly ineligible as Practice/Hypothesis evidence about the singer.',
+      'No causal explanation or practice prescription is generated in R2.'
     ]
   };
 }
 function f2PatternSeriesCsv(pkg) {
-  const head=['metric_key','label','unit','classification','directionality','status','evidence_tier','repeated_direction','eligible_for_repeated_signal','physical_recording_count','adjacent_step_count','first_value','last_value','net_delta_later_minus_earlier','higher_step_count','lower_step_count','same_step_count','longest_run_direction','longest_run_length'];
+  const head=['metric_key','label','unit','classification','directionality','status','evidence_volume','consistent_observed_direction','eligible_for_directional_summary','physical_recording_count','adjacent_step_count','first_value','last_value','net_delta_later_minus_earlier','higher_step_count','lower_step_count','same_step_count','longest_run_direction','longest_run_length'];
   const rows=[head.join(',')];
   for(const x of (pkg&&pkg.metricPatterns)||[]) {
     const c=x.directionCounts||{}, r=x.longestSameDirectionRun||{};
-    const vals=[x.key,x.label,x.unit||'',x.classification||'',x.directionality||'',x.status||'',x.evidenceTier||'',x.repeatedDirection||'',x.eligibleForRepeatedSignal?'true':'false',x.physicalRecordingCount,x.adjacentStepCount,x.firstValue,x.lastValue,x.netDeltaLaterMinusEarlier,c.higher||0,c.lower||0,c.same||0,r.direction||'',r.length||0];
+    const vals=[x.key,x.label,x.unit||'',x.classification||'',x.directionality||'',x.status||'',x.evidenceVolume||'',x.consistentObservedDirection||'',x.eligibleForDirectionalSummary?'true':'false',x.physicalRecordingCount,x.adjacentStepCount,x.firstValue,x.lastValue,x.netDeltaLaterMinusEarlier,c.higher||0,c.lower||0,c.same||0,r.direction||'',r.length||0];
     rows.push(vals.map(v=>v===null||v===undefined?'':csvEscape(v)).join(','));
   }
   return rows.join('\n');
@@ -5391,7 +5418,7 @@ async function exportF2PatternPackage() {
   const btn=$('#btn-f2-export'); if(btn)btn.disabled=true;
   const note=$('#cmp-f2-result');
   try{
-    if(note)note.innerHTML='<p class="small">F1のphysical recording履歴から、繰り返し方向の証拠を構造化しています…</p>';
+    if(note)note.innerHTML='<p class="small">F1の観測テイク履歴から、外部評価値の方向推移を記述的に圧縮しています…</p>';
     const built=await buildF2PatternPackage();
     const history=built.history, pattern=built.pattern;
     const files=[
@@ -5401,13 +5428,13 @@ async function exportF2PatternPackage() {
     ];
     const blob=SongScopeZip.createZip(files);
     const stamp=new Date().toISOString().replace(/[-:]/g,'').slice(0,15);
-    const name=`songscope_pattern_${safeName(pattern.song.representativeTitle||'song')}_${stamp}.zip`;
+    const name=`songscope_observed_history_${safeName(pattern.song.representativeTitle||'song')}_${stamp}.zip`;
     const how=await saveBlob(blob,name);
     const r=pattern.readiness;
-    if(note)note.innerHTML=`<p><b>F2パターン証拠パッケージを書き出しました</b></p><p class="small mono">physical recordings ${r.physicalRecordingCount} / verified outcomes ${r.sourceVerifiedStructuredOutcomeCount}</p><p class="small">readiness: <b>${escapeHtml(r.status)}</b> / repeated same-direction signals ${pattern.summary.repeatedSameDirectionSignalCount}</p><p class="small">3歌唱未満ではpatternを作りません。F2は練習処方や上達判定を行わず、外部評価の繰り返し方向だけを記述します。</p>`;
+    if(note)note.innerHTML=`<p><b>R2 観測方向履歴パッケージを書き出しました</b></p><p class="small mono">observed physical recordings ${r.observedPhysicalRecordingCount} / verified outcomes ${r.sourceVerifiedStructuredOutcomeCount}</p><p class="small">readiness: <b>${escapeHtml(r.status)}</b> / consistent non-zero directions ${pattern.summary.consistentDirectionalObservationCount}</p><p class="small">これはtrendやsignalではありません。SongScopeに取り込まれた観測テイクの外部評価推移を圧縮したものです。mixed-audio F0/RMSはPractice/Hypothesis入力から除外します。</p>`;
     if(how!=='cancelled')toast(`${name}を書き出しました`);
   }catch(e){
-    console.error(e); if(note)note.innerHTML=`<p class="small">F2生成に失敗しました: ${escapeHtml((e&&e.message)||String(e))}</p>`; toast('F2パターン証拠パッケージを作成できませんでした');
+    console.error(e); if(note)note.innerHTML=`<p class="small">F2生成に失敗しました: ${escapeHtml((e&&e.message)||String(e))}</p>`; toast('R2観測方向履歴パッケージを作成できませんでした');
   }finally{if(btn)btn.disabled=false;}
 }
 
@@ -5490,7 +5517,7 @@ async function buildD2DiagnosticPackage() {
     appVersion: APP_VERSION,
     buildId: BUILD_ID,
     comparisonPrinciples: [
-      'This package reports aligned observations and evidence quantity; it does not label improvement.',
+      'This package is a diagnostic observation package. It reports aligned observations and evidence quantity; it does not label improvement.',
       'Per-window A/B observations are aggregated only over the common aligned interval shared by both recordings.',
       'f0_candidate_hz is a mixed-audio periodicity candidate, not true vocal F0, vocal range, or pitch accuracy.',
       'F0 ambiguity flags are heuristic diagnostics: ambiguity=none does not mean correct, and ambiguity does not provide an error probability.',
@@ -5498,7 +5525,8 @@ async function buildD2DiagnosticPackage() {
       'rms_relative_db is normalized within each recording and must not be interpreted as absolute loudness or singer vocal volume difference.',
       'Missing or weak evidence remains missing/weak rather than being imputed.',
       'Phase E3 compares source-verified external scoring fields as outcome observations; it never attributes an acoustic cause or labels overall singing improvement.',
-      'Phase E4 keeps A/B direction separate from evidence-backed earlier→later chronology and from scoring-condition comparability.'
+      'Phase E4 keeps A/B direction separate from evidence-backed earlier→later chronology and from scoring-condition comparability.',
+      'Audit R2 explicitly excludes mixed-audio F0/RMS from Practice/Hypothesis evidence about the singer; these fields remain diagnostic-only.'
     ],
     alignment: {
       status: resolved.result.status,
@@ -5532,6 +5560,13 @@ async function buildD2DiagnosticPackage() {
     comparisonContext,
     evaluationAnchors: evalAnchors,
     outcomeComparison,
+    practiceLayerPolicy: {
+      packageRole: 'diagnostic_observation_only',
+      mixedAudioAcousticFeaturesEligibleForPracticeHypothesis: false,
+      excludedFromPracticeEvidence: ['rms_relative_db','f0_candidate_hz','f0_candidate_ratio','f0_ambiguity'],
+      allowedPracticeEvidenceFromThisPackage: ['user_reported_markers_and_segments','source_verified_external_scoring_outcomes'],
+      note: 'D2 mixed-audio acoustic features remain exportable for diagnostics/alignment audit but must not be used to infer singer-specific cause, skill, or practice prescription.'
+    },
     comparisonReadiness: {
       temporalAlignment: 'resolved',
       temporalWindowing: 'validated_same_aligned_interval',

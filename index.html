@@ -249,10 +249,10 @@
       <p class="small">「同じ」は部屋・マイク位置・体調などまで同一だったという意味ではありません。分からない場合は未確定のままで構いません。</p>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>D2 + E3 + R1 比較パッケージ</span><span class="mono small">Observation + outcome evidence</span></div>
+      <div class="section-head tight"><span>D2 + E3 + R2 診断比較パッケージ</span><span class="mono small">Observation + outcome evidence</span></div>
       <p class="small">保存済みのresolved D1を使い、同じ曲位置の観測値と証拠量を10秒窓・5秒hopで並べます。R1では時間順・採点条件の本人確認はD1から独立して保存します。録音日時の本人確認を時間順の主経路とし、A/Bの順序ボタンは補助経路です。F0 candidateは混合音声の周期候補であり、vocal F0や音程正確性とは扱いません。</p>
       <div class="row gap wrap">
-        <button id="btn-d2-export" class="mini accent">比較パッケージを書き出す（D2+E3+R1）</button>
+        <button id="btn-d2-export" class="mini accent">診断比較パッケージを書き出す（D2+E3+R2）</button>
       </div>
       <div id="cmp-d2-result" class="note"><p class="small">D1がresolvedになったA/Bで使用できます。E3は評価証拠が片側だけでも安全に出力し、足りない側をmissingのまま残します。</p></div>
     </div>
@@ -265,10 +265,10 @@
       <div id="cmp-f1-result" class="note"><p class="small">音声・採点画像・frame単位D2データは入れないcompact exportです。chronologyが曖昧/矛盾する場合は無理に順序を作りません。</p></div>
     </div>
     <div class="card">
-      <div class="section-head tight"><span>F2 パターン証拠</span><span class="mono small">Repeated-direction evidence</span></div>
+      <div class="section-head tight"><span>R2 観測方向履歴</span><span class="mono small">Descriptive observed-take history</span></div>
       <p class="small">F1で正規化したphysical recording履歴をそのまま使い、<strong>3歌唱目以降で初めて</strong>「隣接stepで同じ方向が繰り返された外部評価項目」を構造化します。2歌唱では待機し、技法回数・ビブラート量はnon-monotonicのままです。上達・悪化・原因・練習内容は自動判定しません。</p>
       <div class="row gap wrap">
-        <button id="btn-f2-export" class="mini accent">この曲のパターン証拠を書き出す（F2）</button>
+        <button id="btn-f2-export" class="mini accent">この曲の観測方向履歴を書き出す（R2）</button>
       </div>
       <div id="cmp-f2-result" class="note"><p class="small">現在2歌唱なら正常結果は <code>waiting_for_third_physical_recording</code> です。3〜4歌唱でexploratory、5歌唱以上でrepeated-observation evidenceへ進みます。</p></div>
     </div>
@@ -363,6 +363,6 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="zip.js?v=20260810-r1-01"></script>
-<script src="app.js?v=20260811-r1-02"></script>
+<script src="app.js?v=20260811-r2-01"></script>
 </body>
 </html>
