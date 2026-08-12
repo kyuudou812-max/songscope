@@ -612,3 +612,69 @@ input[type=range]::-webkit-slider-thumb{
     font-size:22px;
   }
 }
+
+
+/* G0 build16 — daily karaoke workflow */
+.workflow-main-action{
+  width:100%;
+  min-height:58px;
+  margin:16px 0 10px;
+  white-space:normal;
+}
+#sheet-session-import{
+  max-height:calc(var(--songscope-vv-height) - 12px);
+  scroll-padding-top:64px;
+}
+#sheet-session-import .scoring-review-sticky-head{
+  position:sticky;
+  top:0;
+  z-index:8;
+  background:var(--bg);
+  border-bottom:.5px solid var(--sep);
+  padding:10px 0 8px;
+}
+.session-import-step{
+  display:grid;
+  grid-template-columns:34px minmax(0,1fr);
+  gap:10px;
+  align-items:start;
+  background:var(--bg-elev);
+  border-radius:14px;
+  padding:12px;
+  margin:10px 0;
+}
+.session-step-no{
+  width:30px;
+  height:30px;
+  border-radius:999px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:var(--accent);
+  color:#fff;
+  font-weight:700;
+}
+.session-step-body{
+  min-width:0;
+}
+.session-step-body > b{
+  display:block;
+  font-size:16px;
+  margin:3px 0 4px;
+}
+.session-step-body p{
+  margin:0 0 9px;
+}
+.session-import-note{
+  margin:12px 0;
+}
+@media (max-width:390px){
+  .session-import-step{
+    grid-template-columns:30px minmax(0,1fr);
+    padding:10px;
+  }
+  .session-step-no{
+    width:28px;
+    height:28px;
+  }
+}

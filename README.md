@@ -780,3 +780,14 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - 録音入力フォームの詳細欄を「必要なときだけ追加」に変更。手入力DAM点数は旧入力・基本不要と明記。
 - 機種/採点モードは画像から取得できる場合は手入力不要と明記。
 - 目標通常運用: 録音 → DAM画像 → 必要時のみ人間確認。監査データは裏側で保持する。
+
+
+## G0 build16 — Daily operation route
+- ホームの主導線を2ボタン常設から「今回のカラオケを取り込む」1本へ変更。
+- カラオケ中はSongScopeを触らず、ボイスメモ＋DAMを通常利用する前提。
+- カラオケ後にsession intake sheetを開き、録音→DAM画像を追加。順番は任意。
+- 取り込み後は「いま必要なこと」にレビュー/録音対応/暫定AI読み取りなど、次の1操作だけを表示。
+- 通常UIでは`Binding`用語を「どの録音か確認」「対応済み/未確定」へ置換。append-only assertion構造自体は変更しない。
+- audit detailsではevidenceSet / SHA / source verification / Binding assertion等を引き続き保持。
+- 開発中の外部AI抽出だけは「ChatGPTに渡すファイルを作る → 読み取り結果を戻す」という暫定導線。
+- 録音フォームはファイル名を初期曲名として自動入力し、詳細条件は折りたたみ。今後はscoring evidenceから安全に補完できるメタデータをさらに手入力から外す。

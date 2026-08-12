@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260813-g0-15">
+<link rel="stylesheet" href="styles.css?v=20260813-g0-16">
 <title>SongScope</title>
 </head>
 <body>
@@ -28,21 +28,18 @@
 
   <div class="scroll" id="home-scroll">
     <div class="workflow-hero">
-      <div class="workflow-kicker">ふだん使う画面</div>
-      <h2>今日の歌唱を残す</h2>
-      <p>基本はこの2つだけ。細かい証拠IDや監査情報は下の「データ管理・監査」に隠しています。</p>
-      <div class="workflow-actions">
-        <button id="btn-add" class="primary big">① ボイスメモから録音を取り込む</button>
-        <button id="btn-scoring-evidence-add" class="primary big secondary-primary">② DAM採点画像を取り込む</button>
-      </div>
+      <div class="workflow-kicker">カラオケ後に使う</div>
+      <h2>今回のカラオケを取り込む</h2>
+      <p>歌っている最中はSongScopeを触らなくて大丈夫です。ボイスメモとDAMを普通に使い、終わってから今回分を整理します。</p>
+      <button id="btn-session-import" class="primary big workflow-main-action">今回の記録を取り込む</button>
       <input type="file" id="file-input" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf" hidden>
       <input type="file" id="scoring-evidence-input" accept="image/*" multiple hidden>
       <input type="file" id="scoring-structured-input" accept="application/json,.json" hidden>
-      <p class="workflow-hint">曲名・キーなどは、本人にしか分からず分析品質が上がる場合だけ確認します。</p>
+      <p class="workflow-hint"><b>普段の入力：</b>録音とDAM画像。キー・オクターブ・録音との対応などは、必要なときだけ確認します。</p>
     </div>
 
     <div class="card workflow-status-card" id="workflow-status-card">
-      <div class="section-head tight"><span>次にすること</span><span class="pill wait" id="workflow-status-pill">確認中</span></div>
+      <div class="section-head tight"><span>いま必要なこと</span><span class="pill wait" id="workflow-status-pill">確認中</span></div>
       <div id="workflow-status">
         <p class="small">保存状態から次の1操作を判定しています…</p>
       </div>
@@ -50,7 +47,7 @@
 
     <div class="section-head">
       <span>歌唱履歴</span>
-      <button id="btn-compare-open" class="link">比較する</button>
+      <button id="btn-compare-open" class="link">履歴を見る</button>
     </div>
     <div id="recording-list" class="list"></div>
 
@@ -83,7 +80,7 @@
     </details>
 
     <p class="footnote">SongScope v<span class="app-ver"></span> ／ 通常利用では入力を最小化し、監査情報は必要時だけ表示します。</p>
-  </div>>
+  </div>
 </section>
 
 <!-- ============ レビュー ============ -->
@@ -372,10 +369,39 @@
     <button class="primary" id="scoring-review-confirm">この抽出内容を確認する</button>
   </div>
 
+  <!-- G0 build16: normal-use karaoke-session intake -->
+  <div class="sheet" id="sheet-session-import" hidden>
+    <div class="sheet-head scoring-review-sticky-head"><span>今回のカラオケを取り込む</span><button class="sheet-close" data-close>閉じる</button></div>
+    <p class="sheet-sub">順番はどちらからでも大丈夫です。録音は1曲ずつ、DAM採点画像はまとめて選べます。取り込んだ後はSongScopeが「確認が必要なもの」だけホームに出します。</p>
+
+    <div class="session-import-step">
+      <div class="session-step-no">1</div>
+      <div class="session-step-body">
+        <b>ボイスメモの録音</b>
+        <p class="small">歌唱の原本です。曲名などは取り込み時に最低限だけ確認します。</p>
+        <button id="btn-session-add-recording" class="primary wide">録音を1曲追加</button>
+      </div>
+    </div>
+
+    <div class="session-import-step">
+      <div class="session-step-no">2</div>
+      <div class="session-step-body">
+        <b>DAM採点画像</b>
+        <p class="small">デンモクの採点履歴スクリーンショットを選びます。複数枚をまとめて選べます。</p>
+        <button id="btn-session-add-scoring" class="primary wide secondary-primary">DAM画像を追加</button>
+      </div>
+    </div>
+
+    <div class="note session-import-note">
+      <p class="small"><b>入力しなくてよいもの：</b>DAM点数、採点モード、証拠ID、SHA、JSON、Binding履歴。取得できるものはSongScope側で保持します。</p>
+    </div>
+    <button class="mini wide" data-close>今回はここまで</button>
+  </div>
+
   <!-- G0 build13: append-only Binding Assertion management -->
   <div class="sheet" id="sheet-binding" hidden>
-    <div class="sheet-head scoring-review-sticky-head"><span>録音とのBinding</span><button class="sheet-close" data-close>閉じる</button></div>
-    <p class="sheet-sub"><b>Bindingは「この採点証拠とこの録音が同じ1回の歌唱だった」というユーザー確認です。</b>候補表示だけではBindingされません。誤りは削除せずunbind履歴として撤回できます。</p>
+    <div class="sheet-head scoring-review-sticky-head"><span>この採点はどの録音？</span><button class="sheet-close" data-close>閉じる</button></div>
+    <p class="sheet-sub"><b>同じ1回の歌唱だった録音を選びます。</b>SongScopeは候補を出すだけで自動確定しません。分からない場合は「今は決めない」で大丈夫です。</p>
     <div id="binding-evidence-summary"></div>
     <div id="binding-current-state"></div>
     <div id="binding-search-wrap">
@@ -384,7 +410,7 @@
     </div>
     <div id="binding-candidate-list"></div>
     <div id="binding-history"></div>
-    <button class="mini wide" data-close>今はBindingしない</button>
+    <button class="mini wide" data-close>今は決めない</button>
   </div>
 
   <!-- 設定 -->
@@ -417,7 +443,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260813-g0-15"></script>
-<script src="app.js?v=20260813-g0-15"></script>
+<script src="zip.js?v=20260813-g0-16"></script>
+<script src="app.js?v=20260813-g0-16"></script>
 </body>
 </html>

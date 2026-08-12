@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.2';
-const BUILD_ID = '20260813-g0-15';
+const SCHEMA_VERSION = '0.17.3';
+const BUILD_ID = '20260813-g0-16';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -597,11 +597,11 @@ async function buildNormalWorkflowStatus() {
   if (!recordings.length && !formal.length) {
     next={kind:'add_recording',title:'まず録音を取り込む',detail:'カラオケ後、ボイスメモの録音を1つ選びます。',tone:'wait'};
   } else if (conflicts.length) {
-    next={kind:'binding_conflict',title:'Bindingの確認が必要です',detail:`競合している採点証拠が ${conflicts.length}件あります。`,tone:'err',evidenceSetId:conflicts[0].set.evidenceSetId};
+    next={kind:'binding_conflict',title:'録音との対応を確認してください',detail:`同じ採点結果に複数の録音候補が残っています。${conflicts.length}件を確認してください。`,tone:'err',evidenceSetId:conflicts[0].set.evidenceSetId};
   } else if (needsReview.length) {
     next={kind:'review',title:'採点画像の内容を確認する',detail:'元画像と抽出結果を見比べて、合っていれば1回だけ確認します。',tone:'wait',evidenceSetId:needsReview[0].set.evidenceSetId};
   } else if (needsBinding.length) {
-    next={kind:'binding',title:'録音との対応を確認する',detail:'SongScopeが候補を出します。同じ1回の歌唱だと分かる場合だけ確認します。',tone:'wait',evidenceSetId:needsBinding[0].set.evidenceSetId};
+    next={kind:'binding',title:'この採点がどの録音か確認する',detail:'候補をSongScopeが出します。同じ1回の歌唱だと自分で分かる場合だけ選びます。',tone:'wait',evidenceSetId:needsBinding[0].set.evidenceSetId};
   } else if (needsStructure.length || needsReextract.length) {
     const target=(needsStructure[0]||needsReextract[0]);
     next={kind:'structure',title:'採点画像を読み取る',detail:'開発版ではここだけChatGPT経由です。解析用ZIPを書き出し、返った構造化JSONを読み込みます。最終版では通常UIから隠す工程です。',tone:'wait',evidenceSetId:target.set.evidenceSetId};
@@ -624,15 +624,13 @@ async function renderNormalWorkflowStatus() {
   pill.className=`pill ${n.tone||'wait'}`;
   pill.textContent=n.tone==='ok'?'準備OK':n.tone==='err'?'要確認':'次の操作';
   let action='';
-  if (n.kind==='add_recording') action='<button class="primary wide" data-workflow-add-recording>録音を取り込む</button>';
-  else if (n.kind==='add_scoring') action='<button class="primary wide" data-workflow-add-scoring>DAM採点画像を取り込む</button>';
+  if (n.kind==='add_recording'||n.kind==='add_scoring') action='<button class="primary wide" data-workflow-session>今回の記録を取り込む</button>';
   else if (n.kind==='review') action=`<button class="primary wide" data-workflow-review="${escapeHtml(n.evidenceSetId)}">採点内容を確認する</button>`;
-  else if (n.kind==='binding'||n.kind==='binding_conflict') action=`<button class="primary wide" data-workflow-binding="${escapeHtml(n.evidenceSetId)}">録音との対応を確認する</button>`;
-  else if (n.kind==='structure') action=`<div class="workflow-dev-actions"><button class="primary wide" data-workflow-export="${escapeHtml(n.evidenceSetId)}">解析用ZIPを作る</button><button class="mini wide" data-workflow-import="${escapeHtml(n.evidenceSetId)}">返ってきたJSONを読み込む</button></div>`;
-  else action='<button class="primary wide" data-workflow-add-recording>次の録音を取り込む</button>';
-  box.innerHTML=`<p class="workflow-next-title"><b>${escapeHtml(n.title)}</b></p><p class="small">${escapeHtml(n.detail)}</p>${action}<p class="small workflow-counts">保存中: 録音 ${model.recordings}件 ／ DAM採点証拠 ${model.formalEvidence}件 ／ Binding済み ${model.bound}件${model.pending?` ／ 要確認 ${model.pending}件`:''}</p>`;
-  $$('[data-workflow-add-recording]').forEach(b=>b.addEventListener('click',()=>$('#file-input').click()));
-  $$('[data-workflow-add-scoring]').forEach(b=>b.addEventListener('click',()=>$('#scoring-evidence-input').click()));
+  else if (n.kind==='binding'||n.kind==='binding_conflict') action=`<button class="primary wide" data-workflow-binding="${escapeHtml(n.evidenceSetId)}">どの録音か確認する</button>`;
+  else if (n.kind==='structure') action=`<div class="workflow-dev-actions"><button class="primary wide" data-workflow-export="${escapeHtml(n.evidenceSetId)}">ChatGPTに渡すファイルを作る</button><button class="mini wide" data-workflow-import="${escapeHtml(n.evidenceSetId)}">読み取り結果をSongScopeへ戻す</button><p class="small">※ ここは開発中の暫定工程です。最終版では通常操作から消します。</p></div>`;
+  else action='<button class="primary wide" data-workflow-session>今回の記録を取り込む</button>';
+  box.innerHTML=`<p class="workflow-next-title"><b>${escapeHtml(n.title)}</b></p><p class="small">${escapeHtml(n.detail)}</p>${action}<p class="small workflow-counts">${model.pending?`確認待ち ${model.pending}件 ／ `:''}記録済み ${model.recordings}歌唱 ／ 採点付き ${model.bound}歌唱</p>`;
+  $$('[data-workflow-session]').forEach(b=>b.addEventListener('click',()=>openSheet('sheet-session-import')));
   $$('[data-workflow-review]').forEach(b=>b.addEventListener('click',async()=>{try{await openStandaloneStructuredReview(b.dataset.workflowReview);}catch(e){toast((e&&e.message)||'レビューを開けませんでした');}}));
   $$('[data-workflow-binding]').forEach(b=>b.addEventListener('click',async()=>{try{await openBindingSheet(b.dataset.workflowBinding);}catch(e){toast((e&&e.message)||'Binding管理を開けませんでした');}}));
   $$('[data-workflow-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.workflowExport)));
@@ -3893,8 +3891,8 @@ function bindingRecordingCardHtml(row,mode) {
     ? `<div class="binding-basis">${basis.map(x=>`<div><span class="pill">${escapeHtml(bindingBasisLabel(x))}</span> ${escapeHtml(x.detail||'')}</div>`).join('')}</div>`
     : '<div class="small">自動候補根拠なし。検索結果として表示。</div>';
   const action=mode==='active'
-    ? `<button class="mini danger wide" data-binding-unbind="${escapeHtml(rec.recordingId)}">このBindingを撤回</button>`
-    : `<button class="primary binding-confirm-btn" data-binding-bind="${escapeHtml(rec.recordingId)}">この録音と同じ歌唱として確認</button>`;
+    ? `<button class="mini danger wide" data-binding-unbind="${escapeHtml(rec.recordingId)}">この対応を取り消す</button>`
+    : `<button class="primary binding-confirm-btn" data-binding-bind="${escapeHtml(rec.recordingId)}">この録音で確定</button>`;
   return `<div class="binding-recording-card">
     <div class="binding-recording-title">${escapeHtml(rec.title||'(無題)')}</div>
     <div class="small">${escapeHtml(rec.artist||'')} ${rec.artist?'／ ':''}DAM ${escapeHtml(score)} ／ ${escapeHtml(modeText)}</div>
@@ -3919,15 +3917,15 @@ async function renderBindingSheet() {
   if (bs.status==='bound') {
     const active=bs.activeAssertions[0];
     const rec=resolveAssertionRecording(active);
-    stateBox.innerHTML=`<div class="note"><p><b>現在: bound</b></p><p class="small">この状態はscoringEvidenceSet本体ではなくappend-only assertionから導出されています。</p></div>${rec?bindingRecordingCardHtml({rec,basis:active.basisShownToUser||[]},'active'):`<p class="small warn-text">Binding先recordingが見つかりません: ${escapeHtml(active.recordingId)}</p>`}`;
+    stateBox.innerHTML=`<div class="note"><p><b>現在: この録音で確定済み</b></p><p class="small">この対応は確認履歴から導出されています。技術詳細はデータ管理・監査に保持します。</p></div>${rec?bindingRecordingCardHtml({rec,basis:active.basisShownToUser||[]},'active'):`<p class="small warn-text">Binding先recordingが見つかりません: ${escapeHtml(active.recordingId)}</p>`}`;
   } else if (bs.status==='binding_conflict') {
-    stateBox.innerHTML=`<div class="note warn"><p><b>Binding conflict</b></p><p class="small">同じ採点証拠に複数のactive bindがあります。SongScopeはどちらも採用しません。誤った方を明示的に撤回してください。</p></div>`+
+    stateBox.innerHTML=`<div class="note warn"><p><b>録音の対応を確認してください</b></p><p class="small">同じ採点結果に複数の録音が対応しています。正しくない方を取り消してください。</p></div>`+
       bs.activeAssertions.map(x=>{
         const rec=resolveAssertionRecording(x);
         return rec?bindingRecordingCardHtml({rec,basis:x.basisShownToUser||[]},'active'):`<p class="small">${escapeHtml(x.recordingId)}（録音なし）</p>`;
       }).join('');
   } else {
-    stateBox.innerHTML='<div class="note"><p><b>現在: unbound</b></p><p class="small">候補表示は自動Bindingではありません。実際に同じ歌唱だったと自分で確認できる場合だけ確定してください。</p></div>';
+    stateBox.innerHTML='<div class="note"><p><b>現在: まだ録音を決めていません</b></p><p class="small">実際に同じ歌唱だったと自分で確認できる場合だけ選んでください。</p></div>';
   }
   const searchWrap=$('#binding-search-wrap');
   searchWrap.hidden=bs.status!=='unbound';
@@ -3936,11 +3934,11 @@ async function renderBindingSheet() {
     results.innerHTML='';
   } else {
     const rows=await bindingCandidateRows(set,bindingUiState.query);
-    const title=bindingUiState.query?'検索結果':'候補（最大3件・自動確定なし）';
+    const title=bindingUiState.query?'検索結果':'録音候補（最大3件・自動確定なし）';
     results.innerHTML=`<div class="section-head tight"><span>${escapeHtml(title)}</span></div>`+
       (rows.length?rows.map(row=>bindingRecordingCardHtml(row,'candidate')).join(''):'<p class="small">候補がありません。曲名・録音名・DAM点数などで検索してください。</p>');
   }
-  $('#binding-history').innerHTML=`<details class="details"><summary>Binding履歴 ${bs.assertionCount}件</summary><pre class="binding-history-pre">${escapeHtml(JSON.stringify(assertions.filter(x=>x&&x.evidenceSetId===evidenceSetId).sort((a,b)=>bindingAssertionSortKey(a).localeCompare(bindingAssertionSortKey(b))),null,2))}</pre></details>`;
+  $('#binding-history').innerHTML=`<details class="details"><summary>対応履歴 ${bs.assertionCount}件</summary><pre class="binding-history-pre">${escapeHtml(JSON.stringify(assertions.filter(x=>x&&x.evidenceSetId===evidenceSetId).sort((a,b)=>bindingAssertionSortKey(a).localeCompare(bindingAssertionSortKey(b))),null,2))}</pre></details>`;
   $$('[data-binding-bind]').forEach(b=>b.addEventListener('click',()=>confirmBindingToRecording(b.dataset.bindingBind)));
   $$('[data-binding-unbind]').forEach(b=>b.addEventListener('click',()=>retractBindingFromRecording(b.dataset.bindingUnbind)));
 }
@@ -3987,7 +3985,7 @@ async function confirmBindingToRecording(recordingId) {
     state.scoringEvidenceCandidates=state.scoringEvidenceContext.legacyCandidateSets||[];
     renderEvaluationAnchor();
   }
-  toast('Bindingを追記しました。元データは変更していません。');
+  toast('録音との対応を保存しました。');
 }
 async function retractBindingFromRecording(recordingId) {
   const evidenceSetId=bindingUiState.evidenceSetId;
@@ -3996,7 +3994,7 @@ async function retractBindingFromRecording(recordingId) {
   if (!rec||!rec.audioSha256) throw new Error('撤回対象のraw audio identityを確認できません');
   const active=activeBindAssertionForAudioSha(current,rec.audioSha256);
   if (!active) throw new Error('撤回対象のactive Bindingが見つかりません');
-  const ok=confirm(`このBindingを撤回しますか？\n\n${rec&&rec.title||recordingId}\n\n過去のbind記録は削除せず、unbind assertionを追記します。`);
+  const ok=confirm(`この録音との対応を取り消しますか？\n\n${rec&&rec.title||recordingId}\n\n過去のbind記録は削除せず、unbind assertionを追記します。`);
   if (!ok) return;
   await appendBindingAssertion({
     evidenceSetId,recordingId,action:'unbind',
@@ -4011,7 +4009,7 @@ async function retractBindingFromRecording(recordingId) {
     state.scoringEvidenceCandidates=state.scoringEvidenceContext.legacyCandidateSets||[];
     renderEvaluationAnchor();
   }
-  toast('Bindingを撤回しました。履歴は保持されています。');
+  toast('録音との対応を取り消しました。履歴は保持しています。');
 }
 async function archiveStandaloneEvidenceSet(id) {
   const set=await dbGet('scoringEvidenceSets',id);
@@ -4068,9 +4066,9 @@ async function renderStandaloneEvidenceSets() {
     const candidateLine=legacyCount?`<div class="item-sub scoring-evidence-status">旧添付候補: ${legacyCount}録音（candidate only / NOT binding）</div>`:'';
     const bindingClass=bs.status==='bound'?'ok':bs.status==='binding_conflict'?'err':'wait';
     const bindingText=bs.status==='bound'
-      ? `Binding: bound → ${bs.recordingId}`
-      : (bs.status==='binding_conflict'?`Binding: CONFLICT (${bs.activeRecordingIds.length}録音)`:'Binding: unbound');
-    const bindingBtn=`<button class="mini ${bs.status==='bound'?'is-on':''}" data-ev-binding="${escapeHtml(p.evidenceSetId)}">Binding管理</button>`;
+      ? `対応済み → ${bs.recordingId}`
+      : (bs.status==='binding_conflict'?`対応要確認 (${bs.activeRecordingIds.length}録音)`:'録音との対応: 未確定');
+    const bindingBtn=`<button class="mini ${bs.status==='bound'?'is-on':''}" data-ev-binding="${escapeHtml(p.evidenceSetId)}">対応を確認</button>`;
     return `<div class="item scoring-evidence-item${lifecycle==='archived'?' is-archived':''}${supported?'':' is-legacy-source'}"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${escapeHtml(sourceLabel)} ／ ${p.imageCount}枚 ／ ${escapeHtml(lifecycle)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status"><span class="pill ${bindingClass}">${escapeHtml(bindingText)}</span></div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div>${candidateLine}</div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">${supported?'抽出ZIP':'証拠ZIP'}</button>${structuredBtn}${reviewBtn}${bindingBtn}${lifecycleBtn}</div></div>`;
   }).join('');
   $$('[data-ev-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.evExport)));
@@ -7605,8 +7603,9 @@ function cmpTick() {
  * イベント配線 / 初期化
  * ===================================================================== */
 function wireHome() {
-  $('#btn-add').addEventListener('click', () => $('#file-input').click());
-  $('#btn-scoring-evidence-add').addEventListener('click', () => $('#scoring-evidence-input').click());
+  $('#btn-session-import').addEventListener('click',()=>openSheet('sheet-session-import'));
+  $('#btn-session-add-recording').addEventListener('click',()=>$('#file-input').click());
+  $('#btn-session-add-scoring').addEventListener('click',()=>$('#scoring-evidence-input').click());
   $('#btn-scoring-archive-toggle').addEventListener('click', async () => { showArchivedScoringEvidence=!showArchivedScoringEvidence; await renderStandaloneEvidenceSets(); });
   $('#scoring-evidence-input').addEventListener('change', e => {
     // iOS Safariではinput.valueを空にするとFileList自体も空になる場合がある。
@@ -8005,7 +8004,7 @@ async function init() {
   state.confMin = settings.minimumConfidence;
   wireHome(); wireSheets(); wireReview(); wireCompare(); wireGlobal();
   $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
-  // build15もDB8を継続使用する。upgrade blocked/version mismatchをgeneric errorに落とさず、
+  // build16もDB8を継続使用する。upgrade blocked/version mismatchをgeneric errorに落とさず、
   // 『データを消す』誤対処を誘発しない専用案内にする。
   try { await db(); }
   catch (e) {
