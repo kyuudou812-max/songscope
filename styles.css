@@ -527,3 +527,88 @@ input[type=range]::-webkit-slider-thumb{
   border-radius:10px;
   padding:10px;
 }
+
+
+/* G0 build15 — normal-use workflow shell */
+.workflow-hero{
+  background:var(--bg-elev);
+  border-radius:18px;
+  padding:18px 16px 16px;
+  margin:2px 0 14px;
+  box-shadow:0 1px 0 var(--sep);
+}
+.workflow-kicker{
+  font-size:12px;
+  font-weight:700;
+  color:var(--accent);
+  margin-bottom:4px;
+}
+.workflow-hero h2{
+  margin:0 0 6px;
+  font-size:24px;
+  line-height:1.25;
+}
+.workflow-hero p{
+  margin:0;
+  color:var(--label-2);
+  font-size:14px;
+}
+.workflow-actions{
+  display:grid;
+  gap:10px;
+  margin:16px 0 10px;
+}
+.workflow-actions .primary.big{
+  width:100%;
+  min-height:54px;
+  margin:0;
+  line-height:1.25;
+  white-space:normal;
+}
+.secondary-primary{
+  background:var(--bg-sunken) !important;
+  color:var(--accent) !important;
+}
+.workflow-hint{
+  border-top:.5px solid var(--sep);
+  padding-top:10px;
+}
+.workflow-status-card{
+  margin-bottom:18px;
+}
+.workflow-next-title{
+  margin:4px 0 2px;
+  font-size:18px;
+}
+.workflow-counts{
+  color:var(--label-2);
+  margin-bottom:0;
+}
+.workflow-dev-actions{
+  display:grid;
+  gap:8px;
+  margin-top:10px;
+}
+.home-audit-details{
+  margin-top:18px;
+}
+.home-audit-details > summary{
+  font-weight:600;
+  color:var(--label-2);
+}
+.audit-subsection{
+  border-top:.5px solid var(--sep);
+  margin-top:14px;
+  padding-top:12px;
+}
+#home-data-details #scoring-evidence-list{
+  margin-top:8px;
+}
+@media (max-width:390px){
+  .workflow-hero{
+    padding:16px 14px 14px;
+  }
+  .workflow-hero h2{
+    font-size:22px;
+  }
+}

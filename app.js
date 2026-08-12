@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.1';
-const BUILD_ID = '20260813-g0-14';
+const SCHEMA_VERSION = '0.17.2';
+const BUILD_ID = '20260813-g0-15';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -564,6 +564,83 @@ function renderHome() {
     wrap.appendChild(el);
   }
   $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
+  renderNormalWorkflowStatus().catch(e=>console.warn('normal workflow status render failed',e));
+}
+
+
+async function buildNormalWorkflowStatus() {
+  const recordings=Array.isArray(state.recordings)?state.recordings:[];
+  const all=(await dbAll('scoringEvidenceSets').catch(()=>[])).filter(set=>standaloneLifecycleStatus(set)!=='archived');
+  const formal=all.filter(set=>standaloneSourceSupportedForG0(set));
+  const bindingStates=await loadBindingStateMap(all);
+  const rows=formal.map(set=>({
+    set,
+    sd:standaloneStructuredDescriptor(set),
+    bs:bindingStates.get(set.evidenceSetId)||deriveBindingStateFromAssertions(set.evidenceSetId,[])
+  }));
+
+  const conflicts=rows.filter(x=>x.bs.status==='binding_conflict');
+  const needsStructure=rows.filter(x=>x.sd.status!=='available');
+  const needsReextract=rows.filter(x=>x.sd.status==='available' && (!x.sd.schemaCurrent || !x.sd.verification || x.sd.verification.status!=='source_verified'));
+  const needsReview=rows.filter(x=>{
+    const review=x.sd.userReview&&x.sd.userReview.status||'unreviewed';
+    return x.sd.status==='available' && x.sd.schemaCurrent && x.sd.verification&&x.sd.verification.status==='source_verified' && review==='unreviewed';
+  });
+  const needsBinding=rows.filter(x=>{
+    const review=x.sd.userReview&&x.sd.userReview.status||'unreviewed';
+    const reviewed=review==='user_confirmed'||review==='user_confirmed_with_known_gaps';
+    return x.bs.status==='unbound' && x.sd.status==='available' && x.sd.schemaCurrent && x.sd.verification&&x.sd.verification.status==='source_verified' && reviewed;
+  });
+  const bound=rows.filter(x=>x.bs.status==='bound');
+
+  let next={kind:'ready',title:'次の歌唱を追加できます',detail:`録音 ${recordings.length}件 ／ 採点と結び付き済み ${bound.length}件`,tone:'ok'};
+  if (!recordings.length && !formal.length) {
+    next={kind:'add_recording',title:'まず録音を取り込む',detail:'カラオケ後、ボイスメモの録音を1つ選びます。',tone:'wait'};
+  } else if (conflicts.length) {
+    next={kind:'binding_conflict',title:'Bindingの確認が必要です',detail:`競合している採点証拠が ${conflicts.length}件あります。`,tone:'err',evidenceSetId:conflicts[0].set.evidenceSetId};
+  } else if (needsReview.length) {
+    next={kind:'review',title:'採点画像の内容を確認する',detail:'元画像と抽出結果を見比べて、合っていれば1回だけ確認します。',tone:'wait',evidenceSetId:needsReview[0].set.evidenceSetId};
+  } else if (needsBinding.length) {
+    next={kind:'binding',title:'録音との対応を確認する',detail:'SongScopeが候補を出します。同じ1回の歌唱だと分かる場合だけ確認します。',tone:'wait',evidenceSetId:needsBinding[0].set.evidenceSetId};
+  } else if (needsStructure.length || needsReextract.length) {
+    const target=(needsStructure[0]||needsReextract[0]);
+    next={kind:'structure',title:'採点画像を読み取る',detail:'開発版ではここだけChatGPT経由です。解析用ZIPを書き出し、返った構造化JSONを読み込みます。最終版では通常UIから隠す工程です。',tone:'wait',evidenceSetId:target.set.evidenceSetId};
+  } else if (recordings.length && !formal.length) {
+    next={kind:'add_scoring',title:'DAM採点画像があれば取り込む',detail:'無ければ次の歌唱まで何もしなくて大丈夫です。',tone:'wait'};
+  }
+  return {
+    recordings:recordings.length,
+    formalEvidence:formal.length,
+    bound:bound.length,
+    pending:conflicts.length+needsStructure.length+needsReextract.length+needsReview.length+needsBinding.length,
+    next
+  };
+}
+async function renderNormalWorkflowStatus() {
+  const box=$('#workflow-status'),pill=$('#workflow-status-pill');
+  if (!box||!pill) return;
+  const model=await buildNormalWorkflowStatus();
+  const n=model.next;
+  pill.className=`pill ${n.tone||'wait'}`;
+  pill.textContent=n.tone==='ok'?'準備OK':n.tone==='err'?'要確認':'次の操作';
+  let action='';
+  if (n.kind==='add_recording') action='<button class="primary wide" data-workflow-add-recording>録音を取り込む</button>';
+  else if (n.kind==='add_scoring') action='<button class="primary wide" data-workflow-add-scoring>DAM採点画像を取り込む</button>';
+  else if (n.kind==='review') action=`<button class="primary wide" data-workflow-review="${escapeHtml(n.evidenceSetId)}">採点内容を確認する</button>`;
+  else if (n.kind==='binding'||n.kind==='binding_conflict') action=`<button class="primary wide" data-workflow-binding="${escapeHtml(n.evidenceSetId)}">録音との対応を確認する</button>`;
+  else if (n.kind==='structure') action=`<div class="workflow-dev-actions"><button class="primary wide" data-workflow-export="${escapeHtml(n.evidenceSetId)}">解析用ZIPを作る</button><button class="mini wide" data-workflow-import="${escapeHtml(n.evidenceSetId)}">返ってきたJSONを読み込む</button></div>`;
+  else action='<button class="primary wide" data-workflow-add-recording>次の録音を取り込む</button>';
+  box.innerHTML=`<p class="workflow-next-title"><b>${escapeHtml(n.title)}</b></p><p class="small">${escapeHtml(n.detail)}</p>${action}<p class="small workflow-counts">保存中: 録音 ${model.recordings}件 ／ DAM採点証拠 ${model.formalEvidence}件 ／ Binding済み ${model.bound}件${model.pending?` ／ 要確認 ${model.pending}件`:''}</p>`;
+  $$('[data-workflow-add-recording]').forEach(b=>b.addEventListener('click',()=>$('#file-input').click()));
+  $$('[data-workflow-add-scoring]').forEach(b=>b.addEventListener('click',()=>$('#scoring-evidence-input').click()));
+  $$('[data-workflow-review]').forEach(b=>b.addEventListener('click',async()=>{try{await openStandaloneStructuredReview(b.dataset.workflowReview);}catch(e){toast((e&&e.message)||'レビューを開けませんでした');}}));
+  $$('[data-workflow-binding]').forEach(b=>b.addEventListener('click',async()=>{try{await openBindingSheet(b.dataset.workflowBinding);}catch(e){toast((e&&e.message)||'Binding管理を開けませんでした');}}));
+  $$('[data-workflow-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.workflowExport)));
+  $$('[data-workflow-import]').forEach(b=>b.addEventListener('click',()=>{
+    const inp=$('#scoring-structured-input');
+    inp.dataset.evidenceSetId=b.dataset.workflowImport;
+    inp.click();
+  }));
 }
 
 function escapeHtml(s) {
@@ -3962,7 +4039,11 @@ async function renderStandaloneEvidenceSets() {
     toggle.textContent=showArchivedScoringEvidence ? 'アーカイブ済みを隠す' : `アーカイブ済みを表示（${archivedCount}）`;
   }
   const rows=all.filter(r=>showArchivedScoringEvidence || standaloneLifecycleStatus(r)!=='archived');
-  if (!rows.length) { box.innerHTML='<p class="small">表示する採点証拠はありません。</p>'; return; }
+  if (!rows.length) {
+    box.innerHTML='<p class="small">表示する採点証拠はありません。</p>';
+    await renderNormalWorkflowStatus().catch(()=>{});
+    return;
+  }
   const bindingStates=await loadBindingStateMap(all);
   box.innerHTML=rows.map(r=>{
     const bs=bindingStates.get(r.evidenceSetId)||deriveBindingStateFromAssertions(r.evidenceSetId,[]);
@@ -3998,6 +4079,7 @@ async function renderStandaloneEvidenceSets() {
   $$('[data-ev-binding]').forEach(b=>b.addEventListener('click',async()=>{ try { await openBindingSheet(b.dataset.evBinding); } catch(e){ console.error(e); toast((e&&e.message)||'Binding管理を開けませんでした'); } }));
   $$('[data-ev-archive]').forEach(b=>b.addEventListener('click',()=>archiveStandaloneEvidenceSet(b.dataset.evArchive)));
   $$('[data-ev-restore]').forEach(b=>b.addEventListener('click',()=>restoreStandaloneEvidenceSet(b.dataset.evRestore)));
+  await renderNormalWorkflowStatus().catch(()=>{});
 }
 async function exportStandaloneEvidenceSet(id) {
   try {
@@ -7923,7 +8005,7 @@ async function init() {
   state.confMin = settings.minimumConfidence;
   wireHome(); wireSheets(); wireReview(); wireCompare(); wireGlobal();
   $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
-  // build13はDB8へupgradeする。upgrade blocked/version mismatchをgeneric errorに落とさず、
+  // build15もDB8を継続使用する。upgrade blocked/version mismatchをgeneric errorに落とさず、
   // 『データを消す』誤対処を誘発しない専用案内にする。
   try { await db(); }
   catch (e) {
@@ -7939,6 +8021,7 @@ async function init() {
   if (legacyScoringMigration&&legacyScoringMigration.examined) console.info('SongScope build10 legacy scoring migration',legacyScoringMigration);
   await loadRecordings();
   await renderStandaloneEvidenceSets();
+  await renderNormalWorkflowStatus().catch(()=>{});
   refreshStorageEstimate();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     registerSongScopeServiceWorker().catch(e=>console.warn('service worker registration failed',e));

@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260813-g0-14">
+<link rel="stylesheet" href="styles.css?v=20260813-g0-15">
 <title>SongScope</title>
 </head>
 <body>
@@ -27,47 +27,63 @@
   </header>
 
   <div class="scroll" id="home-scroll">
-    <p class="lead">録音を観測データに変換します。採点はしません。</p>
-
-    <div class="card note">
-      <p><b>音声は端末内で処理されます。</b>録音・解析結果を外部サーバーへ送信することはありません。</p>
+    <div class="workflow-hero">
+      <div class="workflow-kicker">ふだん使う画面</div>
+      <h2>今日の歌唱を残す</h2>
+      <p>基本はこの2つだけ。細かい証拠IDや監査情報は下の「データ管理・監査」に隠しています。</p>
+      <div class="workflow-actions">
+        <button id="btn-add" class="primary big">① ボイスメモから録音を取り込む</button>
+        <button id="btn-scoring-evidence-add" class="primary big secondary-primary">② DAM採点画像を取り込む</button>
+      </div>
+      <input type="file" id="file-input" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf" hidden>
+      <input type="file" id="scoring-evidence-input" accept="image/*" multiple hidden>
+      <input type="file" id="scoring-structured-input" accept="application/json,.json" hidden>
+      <p class="workflow-hint">曲名・キーなどは、本人にしか分からず分析品質が上がる場合だけ確認します。</p>
     </div>
 
-    <div class="card note warn" id="storage-note">
-      <p><b>この端末内のデータは長期保存を保証できません。</b>iOSは空き容量不足などで保存領域を削除する場合があります。大切な録音は「ボイスメモ」側に原本を残し、定期的にバックアップを書き出してください。</p>
-      <p class="mono small" id="storage-est"></p>
-      <div class="row gap wrap">
-        <button id="btn-persist" class="mini">永続化を要求</button>
-        <button id="btn-backup-all" class="mini">完全バックアップZIP</button>
-        <button id="btn-restore-all" class="mini">バックアップを復元</button>
-        <button id="btn-restore-selftest" class="mini">災害復旧セルフテスト</button>
-        <input type="file" id="restore-input" accept="application/zip,.zip" hidden>
-        <input type="file" id="restore-selftest-input" accept="application/zip,.zip" hidden>
+    <div class="card workflow-status-card" id="workflow-status-card">
+      <div class="section-head tight"><span>次にすること</span><span class="pill wait" id="workflow-status-pill">確認中</span></div>
+      <div id="workflow-status">
+        <p class="small">保存状態から次の1操作を判定しています…</p>
       </div>
     </div>
-
-
-    <div class="card note" id="scoring-evidence-card">
-      <p><b>採点証拠</b>は録音とは別の一次証拠として保存します。<b>新規追加はDAMデンモク採点履歴のみ</b>対応し、同じ歌唱だとユーザーが明示確認した場合だけ、append-onlyのBinding Assertionを保存します。誤りはunbind履歴で撤回でき、旧方式から移行したsource未分類の証拠は監査用として別表示します。</p>
-      <div class="row gap wrap">
-        <button id="btn-scoring-evidence-add" class="mini accent">採点履歴画像を追加（複数可）</button>
-        <button id="btn-scoring-archive-toggle" class="mini" hidden>アーカイブ済みを表示</button>
-        <input type="file" id="scoring-evidence-input" accept="image/*" multiple hidden>
-        <input type="file" id="scoring-structured-input" accept="application/json,.json" hidden>
-      </div>
-      <div id="scoring-evidence-list" class="list"><p class="small">表示する採点証拠はありません。</p></div>
-    </div>
-
-    <button id="btn-add" class="primary big">＋ 録音を追加</button>
-    <input type="file" id="file-input" accept="audio/*,.m4a,.mp3,.wav,.aac,.caf" hidden>
 
     <div class="section-head">
-      <span>録音</span>
-      <button id="btn-compare-open" class="link">A/B比較</button>
+      <span>歌唱履歴</span>
+      <button id="btn-compare-open" class="link">比較する</button>
     </div>
     <div id="recording-list" class="list"></div>
-    <p class="footnote">SongScope v<span class="app-ver"></span> ／ Version 0.1 は歌唱力を判定しません。</p>
-  </div>
+
+    <details class="card details home-audit-details" id="home-data-details">
+      <summary>データ管理・監査</summary>
+      <p class="small">普段は開かなくて大丈夫です。バックアップ、証拠の詳細、JSON、Binding履歴などを確認するときに使います。</p>
+
+      <div class="audit-subsection">
+        <p><b>端末内保存</b></p>
+        <p class="small">音声は端末内で処理します。iOSの保存領域は長期保存を保証しないため、ボイスメモ側の原本と定期バックアップを残してください。</p>
+        <p class="mono small" id="storage-est"></p>
+        <div class="row gap wrap">
+          <button id="btn-persist" class="mini">永続化を要求</button>
+          <button id="btn-backup-all" class="mini">完全バックアップZIP</button>
+          <button id="btn-restore-all" class="mini">バックアップを復元</button>
+          <button id="btn-restore-selftest" class="mini">災害復旧セルフテスト</button>
+          <input type="file" id="restore-input" accept="application/zip,.zip" hidden>
+          <input type="file" id="restore-selftest-input" accept="application/zip,.zip" hidden>
+        </div>
+      </div>
+
+      <div class="audit-subsection" id="scoring-evidence-card">
+        <div class="section-head tight">
+          <span>採点証拠の詳細</span>
+          <button id="btn-scoring-archive-toggle" class="mini" hidden>アーカイブ済みを表示</button>
+        </div>
+        <p class="small">evidenceSet / source verification / Binding / archiveなどの監査状態です。通常操作は上の「次にすること」から進めます。</p>
+        <div id="scoring-evidence-list" class="list"><p class="small">表示する採点証拠はありません。</p></div>
+      </div>
+    </details>
+
+    <p class="footnote">SongScope v<span class="app-ver"></span> ／ 通常利用では入力を最小化し、監査情報は必要時だけ表示します。</p>
+  </div>>
 </section>
 
 <!-- ============ レビュー ============ -->
@@ -322,15 +338,15 @@
     <div class="sheet-head"><span id="rec-sheet-title">録音を追加</span><button class="sheet-close" data-close>閉じる</button></div>
     <label class="field"><span>曲名 <b class="req">必須</b></span><input id="f-title" type="text" placeholder="眠り姫"></label>
     <details class="details">
-      <summary>詳細を追加</summary>
+      <summary>必要なときだけ追加（キー・オクターブ等）</summary>
       <label class="field"><span>歌手名</span><input id="f-artist" type="text"></label>
-      <label class="field"><span>DAM点数</span><input id="f-score" type="text" inputmode="decimal" placeholder="今回の点数（例 91.107）"></label>
+      <label class="field"><span>DAM点数 <span class="sub2">旧入力・基本不要</span></span><input id="f-score" type="text" inputmode="decimal" placeholder="今回の点数（例 91.107）"></label>
       <label class="field"><span>キー変更</span><select id="f-key"><option value="">不明</option><option value="0">原曲キー (0)</option><option value="-12">-12</option><option value="-11">-11</option><option value="-10">-10</option><option value="-9">-9</option><option value="-8">-8</option><option value="-7">-7</option><option value="-6">-6</option><option value="-5">-5</option><option value="-4">-4</option><option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option><option value="+1">+1</option><option value="+2">+2</option><option value="+3">+3</option><option value="+4">+4</option><option value="+5">+5</option><option value="+6">+6</option><option value="+7">+7</option><option value="+8">+8</option><option value="+9">+9</option><option value="+10">+10</option><option value="+11">+11</option><option value="+12">+12</option></select></label>
       <label class="field"><span>オクターブ</span><select id="f-octave"><option value="">不明</option><option value="-3">-3</option><option value="-2">-2</option><option value="-1">-1</option><option value="0">0</option><option value="+1">+1</option><option value="+2">+2</option><option value="+3">+3</option></select></label>
-      <label class="field"><span>機種</span><select id="f-device">
+      <label class="field"><span>機種 <span class="sub2">画像から分かるなら入力不要</span></span><select id="f-device">
         <option value="">不明</option><option value="DAM WAO!">DAM WAO!</option><option value="LIVE DAM AiR">LIVE DAM AiR</option><option value="LIVE DAM Ai">LIVE DAM Ai</option><option value="LIVE DAM STADIUM">LIVE DAM STADIUM</option><option value="__OTHER__">その他（比較不可）</option>
       </select></label>
-      <label class="field"><span>採点モード</span><select id="f-mode">
+      <label class="field"><span>採点モード <span class="sub2">画像から分かるなら入力不要</span></span><select id="f-mode">
         <option value="">不明</option><option value="精密採点Ai Heart">精密採点Ai Heart</option><option value="精密採点Ai">精密採点Ai</option><option value="精密採点DX-G">精密採点DX-G</option><option value="精密採点DX">精密採点DX</option><option value="__OTHER__">その他（比較不可）</option>
       </select></label>
       <div class="row gap wrap"><button type="button" class="mini" id="f-cond-prev">前回と同じ条件</button><button type="button" class="mini" id="f-cond-confirm">現在の4条件を確認</button></div>
@@ -401,7 +417,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260813-g0-14"></script>
-<script src="app.js?v=20260813-g0-14"></script>
+<script src="zip.js?v=20260813-g0-15"></script>
+<script src="app.js?v=20260813-g0-15"></script>
 </body>
 </html>

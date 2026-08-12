@@ -769,3 +769,14 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - `pattern_series.csv`へ`unknown_step_count`列を追加。
 - R2 schemaを`songscope-observed-direction-history-0.5.0`へ更新。
 - Binding Assertion設計・DB schema・scoring evidence semanticsは変更なし。
+
+
+## G0 build15 — Normal-use workflow shell
+- データモデルは変更せず、ホーム画面を「通常利用」と「データ管理・監査」に分離。
+- 通常利用の主操作を `① ボイスメモから録音を取り込む` / `② DAM採点画像を取り込む` の2つへ集約。
+- 保存状態から「次にすること」を自動判定し、レビュー・Binding・次の録音追加へ直接案内。
+- evidenceSetId / SHA / source verification / archive / backup / JSON等は通常画面から外し、「データ管理・監査」detailsへ退避。
+- 未構造化の採点画像だけは現開発版の制約として、通常statusから「解析用ZIPを作る → 返ったJSONを読み込む」の一時導線を表示。最終通常UIでは隠す対象。
+- 録音入力フォームの詳細欄を「必要なときだけ追加」に変更。手入力DAM点数は旧入力・基本不要と明記。
+- 機種/採点モードは画像から取得できる場合は手入力不要と明記。
+- 目標通常運用: 録音 → DAM画像 → 必要時のみ人間確認。監査データは裏側で保持する。
