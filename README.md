@@ -741,3 +741,20 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - R2 Observed Historyへassessment statusとsignal statusを別々に伝搬。
 - `not_assessable`は`no_missing_take_signal`として扱わない。
 - unbound/legacy candidate証拠をcompleteness判定へ黙って流用しない。ただし「除外された証拠が偽」という意味ではなく、将来の独立history/completeness evidence layerで扱う余地を明記。
+
+
+## G0 build13 — Append-only Binding Assertions
+- DB_VER 8。`bindingAssertions` storeを追加し、完全backup/restore/self-test対象へ含める。
+- Binding対象はmutableなrecordingIdではなく、exact raw audio `audioSha256`。recordingIdは確認時のUI参照としてassertionに併記。
+- `bind` / `unbind` は追記専用。過去assertionを上書き・削除しない。
+- `scoringEvidenceSets.bindingStatus` / `boundRecordingId` はlegacy compatibility fieldへ降格。current Bindingはassertion履歴から毎回導出。
+- 1 scoring evidenceが複数audio SHAへactive bindされた場合は`binding_conflict`としてOutcome利用を停止。
+- 同一raw audio SHAに複数scoring evidence setが明示Bindingされた場合も、duplicate解決までは`ambiguous_multiple_bound_scoring_evidence_sets`としてOutcome利用を停止。
+- iPhone向けBinding管理sheetを追加。候補は最大3件、検索可能、候補表示だけではBindingしない。
+- 候補順位に使えるのはuser-reviewed/source-verified structured resultと録音metadataの一致。`scoringPerformedAt`はtimezone未確定のため表示のみで候補順位には使わない。
+- user confirmation時に`basisShownToUser`とraw audio SHAを保存。
+- Binding撤回は`unbind` assertion追記。履歴は残る。
+- recording export / scoring evidence export / D2 exportにBinding assertion履歴とderived stateを含める。
+- F1/R2は、`dam_denmoku` + current schema + source_verified + user review + explicit Bindingが全部成立したstructured resultだけを録音Outcomeとして扱う。
+- structured scoring result v2の音程/表現力/抑揚/聴感、ロングトーン/ビブラート上手さ/安定性の離散表示、リズム位置、技法回数、ビブラートをObserved Historyへ変換可能にした。リズム位置・技法量・ビブラート量はnon-monotonicのまま。
+- Performance entity / performanceId永続storeはまだ作らない。

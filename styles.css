@@ -473,3 +473,57 @@ input[type=range]::-webkit-slider-thumb{
 .scoring-evidence-item.is-legacy-source .scoring-evidence-status{
   color:var(--label);
 }
+
+
+/* G0 build13 — append-only Binding Assertion UI */
+#sheet-binding{
+  max-height:calc(var(--songscope-vv-height) - 12px);
+  scroll-padding-top:64px;
+}
+#sheet-binding .scoring-review-sticky-head{
+  position:sticky;
+  top:0;
+  z-index:8;
+  background:var(--bg);
+  border-bottom:.5px solid var(--sep);
+  padding:10px 0 8px;
+}
+.binding-evidence-summary{
+  background:var(--bg-elev);
+  border-radius:12px;
+  padding:12px;
+  margin:8px 0 12px;
+  overflow-wrap:anywhere;
+}
+.binding-recording-card{
+  background:var(--bg-elev);
+  border-radius:12px;
+  padding:12px;
+  margin:8px 0;
+  overflow-wrap:anywhere;
+}
+.binding-recording-title{
+  font-size:16px;
+  font-weight:700;
+  margin-bottom:4px;
+}
+.binding-basis{
+  display:grid;
+  gap:5px;
+  margin:9px 0;
+  font-size:12px;
+  color:var(--label-2);
+}
+.binding-confirm-btn{
+  margin-top:10px;
+}
+.binding-history-pre{
+  max-height:240px;
+  overflow:auto;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  font-size:11px;
+  background:var(--bg-sunken);
+  border-radius:10px;
+  padding:10px;
+}

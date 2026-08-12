@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260812-g0-12">
+<link rel="stylesheet" href="styles.css?v=20260812-g0-13">
 <title>SongScope</title>
 </head>
 <body>
@@ -48,7 +48,7 @@
 
 
     <div class="card note" id="scoring-evidence-card">
-      <p><b>採点証拠</b>は録音とは別の一次証拠として保存します。<b>新規追加はDAMデンモク採点履歴のみ</b>対応し、同じ歌唱だと明示確認できるまで録音にはBindingしません。旧方式から移行したsource未分類の証拠は監査用として別表示します。</p>
+      <p><b>採点証拠</b>は録音とは別の一次証拠として保存します。<b>新規追加はDAMデンモク採点履歴のみ</b>対応し、同じ歌唱だとユーザーが明示確認した場合だけ、append-onlyのBinding Assertionを保存します。誤りはunbind履歴で撤回でき、旧方式から移行したsource未分類の証拠は監査用として別表示します。</p>
       <div class="row gap wrap">
         <button id="btn-scoring-evidence-add" class="mini accent">採点履歴画像を追加（複数可）</button>
         <button id="btn-scoring-archive-toggle" class="mini" hidden>アーカイブ済みを表示</button>
@@ -356,6 +356,21 @@
     <button class="primary" id="scoring-review-confirm">この抽出内容を確認する</button>
   </div>
 
+  <!-- G0 build13: append-only Binding Assertion management -->
+  <div class="sheet" id="sheet-binding" hidden>
+    <div class="sheet-head scoring-review-sticky-head"><span>録音とのBinding</span><button class="sheet-close" data-close>閉じる</button></div>
+    <p class="sheet-sub"><b>Bindingは「この採点証拠とこの録音が同じ1回の歌唱だった」というユーザー確認です。</b>候補表示だけではBindingされません。誤りは削除せずunbind履歴として撤回できます。</p>
+    <div id="binding-evidence-summary"></div>
+    <div id="binding-current-state"></div>
+    <div id="binding-search-wrap">
+      <label class="field"><span>録音を検索</span><input id="binding-search" type="search" placeholder="曲名・歌手名・DAM点数など"></label>
+      <p class="small">DAM採点日時はtimezone未確定のため、候補順位には使いません。</p>
+    </div>
+    <div id="binding-candidate-list"></div>
+    <div id="binding-history"></div>
+    <button class="mini wide" data-close>今はBindingしない</button>
+  </div>
+
   <!-- 設定 -->
   <div class="sheet" id="sheet-settings" hidden>
     <div class="sheet-head"><span>解析設定</span><button class="sheet-close" data-close>閉じる</button></div>
@@ -386,7 +401,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260812-g0-12"></script>
-<script src="app.js?v=20260812-g0-12"></script>
+<script src="zip.js?v=20260812-g0-13"></script>
+<script src="app.js?v=20260812-g0-13"></script>
 </body>
 </html>

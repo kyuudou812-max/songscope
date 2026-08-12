@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.16.7';
-const BUILD_ID = '20260812-g0-12';
+const SCHEMA_VERSION = '0.17.0';
+const BUILD_ID = '20260812-g0-13';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -193,7 +193,7 @@ function setFlag(key, val) {
 
 /* ---------------- IndexedDB ---------------- */
 const DB_NAME = 'songscope';
-const DB_VER = 7;
+const DB_VER = 8;
 let dbp = null;
 
 const DB_BLOCKED_CODE = 'SONGSCOPE_DB_UPGRADE_BLOCKED';
@@ -262,7 +262,16 @@ function ensureSongScopeStores(d, tx) {
   if (!d.objectStoreNames.contains('scoringEvidenceSets')) {
     const se = d.createObjectStore('scoringEvidenceSets', { keyPath: 'evidenceSetId' });
     se.createIndex('byCreatedAt', 'createdAt', { unique: false });
+    // Legacy non-authoritative field only. build13 derives binding from bindingAssertions.
     se.createIndex('byBindingStatus', 'bindingStatus', { unique: false });
+  }
+  // G0 build13: same-performance relationship is an append-only user assertion.
+  if (!d.objectStoreNames.contains('bindingAssertions')) {
+    const ba=d.createObjectStore('bindingAssertions',{keyPath:'assertionId'});
+    ba.createIndex('byEvidenceSetId','evidenceSetId',{unique:false});
+    ba.createIndex('byRecordingId','recordingId',{unique:false});
+    ba.createIndex('byAudioSha256','audioSha256',{unique:false});
+    ba.createIndex('byAssertedAt','assertedAt',{unique:false});
   }
 }
 function db() {
@@ -496,7 +505,8 @@ const state = {
   evaluationEvidenceImages: [], // legacy read-only: pre-G0 recording-attached scoring image set
   evaluationStructured: null, // legacy read-only: pre-G0 recording-attached structured JSON
   legacyScoringEvidenceMigration: null, // build10 migration audit marker from audio store
-  scoringEvidenceCandidates: [], // authoritative scoringEvidenceSets related only by legacy candidate relation; NOT a binding
+  scoringEvidenceCandidates: [], // legacy candidate-only subset retained for UI/audit
+  scoringEvidenceContext: null, // build13: derived bound/conflict/legacy relationships from bindingAssertions
   markerDraft: null,   // {timeSec, tag, memo, markerId?}
   segmentDraft: null,
   worker: null,
@@ -1447,7 +1457,8 @@ async function openRecording(id) {
   state.evaluationEvidenceImages = [];
   state.evaluationStructured = null;
   state.legacyScoringEvidenceMigration = null;
-  state.scoringEvidenceCandidates = [];
+  state.scoringEvidenceCandidates=[];
+  state.scoringEvidenceContext=null;
 
   showView('view-review');
   renderReviewHeader();
@@ -1460,8 +1471,9 @@ async function openRecording(id) {
     state.evaluationEvidenceImages = normalizeEvaluationEvidenceImages(a);
     state.evaluationImageMeta = state.evaluationEvidenceImages.length ? state.evaluationEvidenceImages[0].meta : null;
     state.evaluationStructured = a && a.evaluationStructured ? a.evaluationStructured : null;
-    state.legacyScoringEvidenceMigration = a && a.legacyScoringEvidenceMigration ? a.legacyScoringEvidenceMigration : null;
-    state.scoringEvidenceCandidates = await scoringEvidenceSetsForLegacyCandidateRecording(id);
+    state.legacyScoringEvidenceMigration=a&&a.legacyScoringEvidenceMigration?a.legacyScoringEvidenceMigration:null;
+    state.scoringEvidenceContext=await scoringEvidenceRelationsForRecording(id);
+    state.scoringEvidenceCandidates=state.scoringEvidenceContext.legacyCandidateSets||[];
     renderEvaluationAnchor();
   } catch (e) { toast('音声を読み込めませんでした'); }
 
@@ -1523,19 +1535,20 @@ function renderEvaluationAnchor() {
   const box=$('#rv-eval-status');
   if (!box||!state.rec) return;
   const score=parseStoredScore(state.rec.damScore);
-  const unified=recordingScoringEvidenceDescriptor(state.rec,state.scoringEvidenceCandidates);
+  const unified=recordingScoringEvidenceDescriptor(state.rec,state.scoringEvidenceContext);
   const mig=state.legacyScoringEvidenceMigration||{};
   const oldImageCount=(state.evaluationEvidenceImages||[]).length;
-  const candidateCount=Number(unified.candidateCount||0);
   const parts=[
     score===null?'DAM点数: 未登録':`DAM点数: ${score.toFixed(3)}`,
-    `独立scoringEvidence候補: ${candidateCount}件`,
+    `Binding: ${unified.status||'unavailable'}`,
+    `明示Binding済み証拠: ${Number(unified.boundEvidenceSetCount||0)}件`,
+    `旧添付candidate: ${Number(unified.legacyCandidateCount||0)}件`,
     `旧添付raw画像: ${oldImageCount}枚（read-only）`
   ];
   let status='旧添付なし';
   if (mig.status==='migrated_candidate_only') status=`移行済み → ${mig.evidenceSetId} / candidate only / NOT binding`;
   else if (mig.status) status=`移行状態: ${mig.status}${mig.error?' / '+mig.error:''}`;
-  box.innerHTML=`<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small"><b>build10 authoritative path:</b> ${escapeHtml(status)}</p><p class="small">旧audio store内の採点画像/JSONは災害復旧・監査のため削除していませんが、比較・履歴・exportの採点証拠consumerはscoringEvidenceSets側を参照します。旧添付関係は同一performanceの確認ではありません。</p>`;
+  box.innerHTML=`<p class="small">${parts.map(escapeHtml).join(' ／ ')}</p><p class="small"><b>build13 authoritative path:</b> ${escapeHtml(status)}</p><p class="small">旧audio store内の採点画像/JSONは災害復旧・監査のため削除していませんが、比較・履歴・exportはscoringEvidenceSets＋append-only bindingAssertionsから関係を導出します。旧添付関係は同一performanceの確認ではありません。</p>`;
   const rm=$('#btn-eval-image-remove'); if(rm)rm.hidden=true;
   const srm=$('#btn-eval-json-remove'); if(srm)srm.hidden=true;
 }
@@ -2594,7 +2607,7 @@ function buildSummaryJson(an) {
       recordingSetupPreset: rec.recordingSetupPreset || null
     },
     metadataProvenance: normalizedMetadataProvenance(rec),
-    evaluationAnchors: buildUnifiedRecordingEvaluationAnchors(rec, state.scoringEvidenceCandidates),
+    evaluationAnchors: buildUnifiedRecordingEvaluationAnchors(rec,state.scoringEvidenceContext),
     recordingLimitations: {
       containsAccompaniment: 'likely',
       note: ACCOMP_NOTE_EN,
@@ -2654,9 +2667,10 @@ function buildReportMd(an) {
   L.push(`DAM Score: ${rec.damScore || ''}`);
   L.push(`DAM Score provenance: ${((normalizedMetadataProvenance(rec).damScore || {}).source) || ''}`);
   L.push(`RecordedAt provenance: ${((normalizedMetadataProvenance(rec).recordedAt || {}).source) || ''}`);
-  const scoringEvidence=recordingScoringEvidenceDescriptor(rec,state.scoringEvidenceCandidates);
-  L.push(`Scoring evidence candidate sets: ${scoringEvidence.candidateCount||0}`);
+  const scoringEvidence=recordingScoringEvidenceDescriptor(rec,state.scoringEvidenceContext);
   L.push(`Scoring relationship status: ${scoringEvidence.status||'unavailable'}`);
+  L.push(`Explicitly bound scoring evidence sets: ${scoringEvidence.boundEvidenceSetCount||0}`);
+  L.push(`Legacy attachment candidates: ${scoringEvidence.legacyCandidateCount||0}`);
   L.push('Legacy recording-attached scoring evidence is preserved read-only but is not treated as a binding.');
   L.push(`Key: ${rec.keyChange || ''}`);
   L.push(`Octave: ${rec.octave || ''}`);
@@ -2756,7 +2770,7 @@ function buildReportMd(an) {
   } else L.push('(none)');
   L.push('', '## Files', '');
   L.push('summary.json', 'analysis_history.json', 'evaluation_anchors.json', 'frames.csv', 'markers.csv', 'user_segments.csv', 'detected_segments.csv', '');
-  if ((state.scoringEvidenceCandidates||[]).length) L.push('evaluation/scoring_evidence_candidates.json');
+  if (state.scoringEvidenceContext && ((state.scoringEvidenceContext.boundSets||[]).length || (state.scoringEvidenceContext.conflictSets||[]).length || (state.scoringEvidenceContext.legacyCandidateSets||[]).length)) L.push('evaluation/scoring_evidence_relations.json');
   L.push('waveform.png', 'loudness.png', 'pitch.png', 'spectrogram.png');
   L.push('', '## Important', '');
   L.push('This application does not diagnose singing ability.');
@@ -2790,7 +2804,8 @@ async function doExport() {
     const binaryAsset=await dbGet('audio',rec.recordingId).catch(()=>null);
     // Legacy fields stay read-only in the audio row; export consumers use scoringEvidenceSets.
     state.legacyScoringEvidenceMigration=binaryAsset&&binaryAsset.legacyScoringEvidenceMigration||null;
-    state.scoringEvidenceCandidates=await scoringEvidenceSetsForLegacyCandidateRecording(rec.recordingId);
+    state.scoringEvidenceContext=await scoringEvidenceRelationsForRecording(rec.recordingId);
+    state.scoringEvidenceCandidates=state.scoringEvidenceContext.legacyCandidateSets||[];
 
     files.push({ name: 'report.md', data: buildReportMd(an) });
     files.push({ name: 'summary.json', data: JSON.stringify(buildSummaryJson(an), null, 2) });
@@ -2801,29 +2816,38 @@ async function doExport() {
       latestAnalysisId: rec.latestAnalysisId || (an && an.analysisId) || null,
       analyses: analysisHistory
     }, null, 2) });
-    files.push({name:'evaluation_anchors.json',data:JSON.stringify(buildUnifiedRecordingEvaluationAnchors(rec,state.scoringEvidenceCandidates),null,2)});
-    if (state.scoringEvidenceCandidates.length) {
-      files.push({name:'evaluation/scoring_evidence_candidates.json',data:JSON.stringify({
-        schemaVersion:'songscope-recording-scoring-evidence-candidates-v1',
+    files.push({name:'evaluation_anchors.json',data:JSON.stringify(buildUnifiedRecordingEvaluationAnchors(rec,state.scoringEvidenceContext),null,2)});
+    const scoringCtx=state.scoringEvidenceContext||{boundSets:[],conflictSets:[],legacyCandidateSets:[],bindingStates:new Map(),assertions:[]};
+    const relationSetMap=new Map();
+    for (const set of [...(scoringCtx.boundSets||[]),...(scoringCtx.conflictSets||[]),...(scoringCtx.legacyCandidateSets||[])]) {
+      if (set&&set.evidenceSetId) relationSetMap.set(set.evidenceSetId,set);
+    }
+    const relationSets=Array.from(relationSetMap.values());
+    if (relationSets.length) {
+      files.push({name:'evaluation/scoring_evidence_relations.json',data:JSON.stringify({
+        schemaVersion:'songscope-recording-scoring-evidence-relations-v2',
         recordingId:rec.recordingId,
-        relationPolicy:'legacy_attachment_candidate_only_not_binding',
-        candidates:state.scoringEvidenceCandidates.map(set=>({
-          evidenceSet:standaloneEvidenceSetPublic(set),
-          relationship:legacyCandidatePublic(legacyCandidateForRecording(set,rec.recordingId)),
-          structuredScoringResult:recordingScoringEvidenceDescriptor(rec,[set]).structuredScoringResult
-        }))
+        current:recordingScoringEvidenceDescriptor(rec,scoringCtx),
+        bindingAssertions:(scoringCtx.assertions||[]).filter(x=>x&&x.recordingId===rec.recordingId),
+        policy:'Current binding state is derived from append-only bindingAssertions. Legacy attachment candidates are not bindings.'
       },null,2)});
-      for (const set of state.scoringEvidenceCandidates) {
-        const root=`evaluation/candidates/${set.evidenceSetId}`;
-        files.push({name:`${root}/evidence_set.json`,data:JSON.stringify(standaloneEvidenceSetPublic(set),null,2)});
+      for (const set of relationSets) {
+        const bs=scoringCtx.bindingStates instanceof Map?scoringCtx.bindingStates.get(set.evidenceSetId):null;
+        const root=`evaluation/relations/${set.evidenceSetId}`;
+        files.push({name:`${root}/evidence_set.json`,data:JSON.stringify(standaloneEvidenceSetPublic(set,bs),null,2)});
         const cand=legacyCandidateForRecording(set,rec.recordingId);
         if (cand) files.push({name:`${root}/legacy_attachment_candidate.json`,data:JSON.stringify(legacyCandidatePublic(cand),null,2)});
+        const setAssertions=(scoringCtx.assertions||[]).filter(x=>x&&x.evidenceSetId===set.evidenceSetId).sort((a,b)=>bindingAssertionSortKey(a).localeCompare(bindingAssertionSortKey(b)));
+        files.push({name:`${root}/binding_assertions.json`,data:JSON.stringify({currentState:bs||null,assertions:setAssertions},null,2)});
+        if (set.structuredScoringResult) {
+          files.push({name:`${root}/structured_scoring_result.json`,data:JSON.stringify(structuredEvaluationDocument(set.structuredScoringResult),null,2)});
+        }
         for (let i=0;i<(set.images||[]).length;i++) {
           const x=set.images[i];
           if (!x||!x.blob) continue;
           const ab=await x.blob.arrayBuffer();
           const got=(await sha256Hex(ab)).toLowerCase();
-          if (got!==String(x.meta&&x.meta.sha256||'').toLowerCase()) throw new Error(`candidate ${set.evidenceSetId} image SHA mismatch`);
+          if (got!==String(x.meta&&x.meta.sha256||'').toLowerCase()) throw new Error(`relation ${set.evidenceSetId} image SHA mismatch`);
           files.push({name:`${root}/images/${String(i+1).padStart(2,'0')}_${x.imageId}${imageExtFromMeta(x.meta)}`,data:new Uint8Array(ab)});
         }
       }
@@ -2879,6 +2903,210 @@ function scoringEvidenceSourceKey(set) {
 }
 function standaloneSourceSupportedForG0(set) {
   return scoringEvidenceSourceKey(set)==='dam_denmoku';
+}
+
+const BINDING_ASSERTION_SCHEMA='songscope-binding-assertion-v1';
+function bindingAssertionSortKey(x) {
+  return `${String(x&&x.assertedAt||'')}\n${String(x&&x.assertionId||'')}`;
+}
+function deriveBindingStateFromAssertions(evidenceSetId,assertions) {
+  const rows=(assertions||[])
+    .filter(x=>x&&x.evidenceSetId===evidenceSetId&&(x.action==='bind'||x.action==='unbind')&&(x.audioSha256||x.recordingId))
+    .slice().sort((a,b)=>bindingAssertionSortKey(a).localeCompare(bindingAssertionSortKey(b)));
+  const latestByAudioIdentity=new Map();
+  for (const x of rows) {
+    const target=x.audioSha256?`sha256:${String(x.audioSha256).toLowerCase()}`:`legacy_recording_id:${x.recordingId}`;
+    latestByAudioIdentity.set(target,x);
+  }
+  const active=Array.from(latestByAudioIdentity.values()).filter(x=>x.action==='bind');
+  let status='unbound';
+  if (active.length===1) status='bound';
+  else if (active.length>1) status='binding_conflict';
+  return {
+    schemaVersion:'songscope-derived-binding-state-v2',
+    evidenceSetId,
+    status,
+    recordingId:active.length===1?active[0].recordingId:null,
+    audioSha256:active.length===1?(active[0].audioSha256||null):null,
+    activeRecordingIds:active.map(x=>x.recordingId).filter(Boolean).sort(),
+    activeAudioSha256s:Array.from(new Set(active.map(x=>x.audioSha256&&String(x.audioSha256).toLowerCase()).filter(Boolean))).sort(),
+    activeAssertions:active.map(x=>({
+      assertionId:x.assertionId,recordingId:x.recordingId,audioSha256:x.audioSha256||null,assertedAt:x.assertedAt,
+      source:x.source||null,basisShownToUser:x.basisShownToUser||[]
+    })),
+    assertionCount:rows.length,
+    derivedAt:nowIso(),
+    targetIdentity:'raw_audio_sha256',
+    source:'bindingAssertions_append_only'
+  };
+}
+async function allBindingAssertions() {
+  return dbAll('bindingAssertions').catch(()=>[]);
+}
+async function bindingStateForEvidenceSet(evidenceSetId) {
+  return deriveBindingStateFromAssertions(evidenceSetId,await allBindingAssertions());
+}
+function bindingStateMapFromAssertions(assertions,sets) {
+  const m=new Map();
+  for (const set of (sets||[])) m.set(set.evidenceSetId,deriveBindingStateFromAssertions(set.evidenceSetId,assertions||[]));
+  return m;
+}
+async function loadBindingStateMap(sets) {
+  return bindingStateMapFromAssertions(await allBindingAssertions(),sets||[]);
+}
+function bindingStateLabel(state) {
+  if (!state) return 'unknown';
+  if (state.status==='bound') return `bound → ${state.recordingId}`;
+  if (state.status==='binding_conflict') return `CONFLICT → ${state.activeRecordingIds.join(', ')}`;
+  return 'unbound';
+}
+function activeBindAssertionForAudioSha(state,audioSha256) {
+  const sha=String(audioSha256||'').toLowerCase();
+  return state&&Array.isArray(state.activeAssertions)?state.activeAssertions.find(x=>String(x.audioSha256||'').toLowerCase()===sha)||null:null;
+}
+function activeBindAssertionForRecording(state,recordingId) {
+  return state&&Array.isArray(state.activeAssertions)?state.activeAssertions.find(x=>x.recordingId===recordingId)||null:null;
+}
+async function appendBindingAssertion({evidenceSetId,recordingId,action,basisShownToUser,supersedesAssertionId,reason}) {
+  if (!evidenceSetId||!recordingId) throw new Error('Binding assertionのevidenceSetId/recordingIdが不足しています');
+  if (action!=='bind'&&action!=='unbind') throw new Error('Binding assertion actionが不正です');
+  const set=await dbGet('scoringEvidenceSets',evidenceSetId);
+  const rec=await dbGet('recordings',recordingId);
+  if (!set) throw new Error('採点証拠セットが見つかりません');
+  if (!rec) throw new Error('録音が見つかりません');
+  const audioSha256=String(rec.audioSha256||'').toLowerCase();
+  if (!audioSha256) throw new Error('この録音はraw audio SHA-256を確認できないためBinding対象にできません');
+  const assertion={
+    schemaVersion:BINDING_ASSERTION_SCHEMA,
+    assertionId:uid('bnd'),
+    evidenceSetId,
+    recordingId,
+    audioSha256,
+    targetIdentity:'raw_audio_sha256',
+    action,
+    assertedAt:nowIso(),
+    source:'user_explicit_confirmation',
+    reason:reason||null,
+    basisShownToUser:Array.isArray(basisShownToUser)?basisShownToUser:[],
+    supersedesAssertionId:supersedesAssertionId||null,
+    appVersion:APP_VERSION,
+    buildId:BUILD_ID
+  };
+  await dbPut('bindingAssertions',assertion);
+  return assertion;
+}
+function bindingComparableText(v) {
+  return normalizeSongIdentityText(v||'');
+}
+function bindingTitleLooseMatch(a,b) {
+  const x=bindingComparableText(a),y=bindingComparableText(b);
+  if (!x||!y||x===y) return false;
+  const strip=s=>s.replace(/[\s　]*(?:take|テイク)?[\s　]*[a-z0-9０-９]+$/iu,'').trim();
+  const sx=strip(x),sy=strip(y);
+  return !!sx&&sx===sy;
+}
+function bindingCandidateBasis(set,rec) {
+  const sd=standaloneStructuredDescriptor(set);
+  const reviewed=!!(sd&&sd.userReview&&(sd.userReview.status==='user_confirmed'||sd.userReview.status==='user_confirmed_with_known_gaps'));
+  const eligibleForSuggestion=!!(sd&&sd.status==='available'&&sd.schemaCurrent&&sd.verification&&sd.verification.status==='source_verified'&&reviewed);
+  const result=eligibleForSuggestion?(sd.result||{}):{};
+  const basis=[];
+  let rankScore=0;
+  const rt=bindingComparableText(result.title),rrt=bindingComparableText(rec&&rec.title);
+  if (rt&&rrt&&rt===rrt) {
+    rankScore+=60; basis.push({key:'song_title_exact',detail:`${result.title} = ${rec.title}`,agreed:true,source:'displayed_scoring_result_vs_recording_metadata'});
+  } else if (result.title&&rec&&rec.title&&bindingTitleLooseMatch(result.title,rec.title)) {
+    rankScore+=20; basis.push({key:'song_title_loose_candidate',detail:`${result.title} ↔ ${rec.title}`,agreed:true,source:'candidate_ordering_only'});
+  }
+  const ra=bindingComparableText(result.artist),rra=bindingComparableText(rec&&rec.artist);
+  if (ra&&rra&&ra===rra) {
+    rankScore+=25; basis.push({key:'artist_exact',detail:`${result.artist} = ${rec.artist}`,agreed:true,source:'displayed_scoring_result_vs_recording_metadata'});
+  }
+  const score=Number(result.overallScore),manual=Number(rec&&rec.damScore);
+  if (isFinite(score)&&isFinite(manual)&&Math.abs(score-manual)<=0.001) {
+    const prov=normalizedMetadataProvenance(rec||{}).damScore||{};
+    rankScore+=70; basis.push({key:'overall_score_exact',detail:`${score.toFixed(3)} = ${manual.toFixed(3)}`,agreed:true,source:'scoring_result_vs_recording_metadata',recordingMetadataConfirmation:prov.confirmation||'unknown'});
+  }
+  const sm=bindingComparableText(result.scoringMode),rsm=bindingComparableText(rec&&rec.scoringMode);
+  if (sm&&rsm&&sm===rsm) {
+    rankScore+=15; basis.push({key:'scoring_mode_exact',detail:`${result.scoringMode}`,agreed:true,source:'scoring_result_vs_recording_metadata'});
+  }
+  const recordedProv=normalizedMetadataProvenance(rec||{}).recordedAt||{};
+  if (rec&&rec.recordedAt) {
+    basis.push({
+      key:'recorded_at_context_only',
+      detail:`recordedAt ${rec.recordedAt}`,
+      agreed:null,
+      source:'recording_metadata',
+      confirmation:recordedProv.confirmation||'unknown',
+      bindingUse:'display_only_not_ranked'
+    });
+  }
+  if (result.scoringPerformedAt&&result.scoringPerformedAt.localDateTime) {
+    basis.push({
+      key:'scoring_performed_at_context_only',
+      detail:`DAM local ${result.scoringPerformedAt.localDateTime}`,
+      agreed:null,
+      source:'displayed_by_dam_denmoku',
+      timeZone:result.scoringPerformedAt.timeZone??null,
+      bindingUse:'display_only_not_ranked_until_timezone_context_confirmed'
+    });
+  }
+  return {rankScore,basis};
+}
+function bindingRecordingDisplay(rec) {
+  return {
+    recordingId:rec.recordingId,
+    title:rec.title||'',
+    artist:rec.artist||'',
+    damScore:rec.damScore||null,
+    scoringMode:rec.scoringMode||null,
+    recordedAt:rec.recordedAt||null,
+    fileName:rec.fileName||null
+  };
+}
+async function bindingCandidateRows(set,query) {
+  const recs=await dbAll('recordings').catch(()=>[]);
+  const q=bindingComparableText(query||'');
+  const bySha=new Map();
+  for (const rec of recs) {
+    if (!rec||!rec.recordingId||!rec.audioSha256) continue;
+    const {rankScore,basis}=bindingCandidateBasis(set,rec);
+    const hay=bindingComparableText([rec.title,rec.artist,rec.fileName,rec.damScore,rec.recordingId,rec.audioSha256].filter(Boolean).join(' '));
+    if (q && !hay.includes(q)) continue;
+    if (!q && rankScore<=0) continue;
+    const sha=String(rec.audioSha256).toLowerCase();
+    const row={rec,rankScore,basis,aliasRecordingIds:[]};
+    if (!bySha.has(sha)) bySha.set(sha,row);
+    else {
+      const cur=bySha.get(sha);
+      cur.aliasRecordingIds.push(rec.recordingId);
+      if (rankScore>cur.rankScore) {
+        row.aliasRecordingIds=[cur.rec.recordingId,...cur.aliasRecordingIds];
+        bySha.set(sha,row);
+      }
+    }
+  }
+  const rows=Array.from(bySha.values());
+  rows.sort((a,b)=>b.rankScore-a.rankScore||String(b.rec.updatedAt||'').localeCompare(String(a.rec.updatedAt||'')));
+  return rows.slice(0,q?20:3);
+}
+async function scoringEvidenceRelationsForRecording(recordingId) {
+  const sets=await dbAll('scoringEvidenceSets').catch(()=>[]);
+  const assertions=await allBindingAssertions();
+  const states=bindingStateMapFromAssertions(assertions,sets);
+  const rec=await dbGet('recordings',recordingId).catch(()=>null);
+  const recSha=String(rec&&rec.audioSha256||'').toLowerCase();
+  const boundSets=[];
+  const conflictSets=[];
+  const legacyCandidateSets=[];
+  for (const set of sets) {
+    const st=states.get(set.evidenceSetId);
+    if (st&&st.status==='bound'&&recSha&&String(st.audioSha256||'').toLowerCase()===recSha) boundSets.push(set);
+    if (st&&st.status==='binding_conflict'&&recSha&&st.activeAudioSha256s.includes(recSha)) conflictSets.push(set);
+    if (legacyCandidateForRecording(set,recordingId)) legacyCandidateSets.push(set);
+  }
+  return {recordingId,audioSha256:recSha||null,allSets:sets,assertions,bindingStates:states,boundSets,conflictSets,legacyCandidateSets};
 }
 function legacyAttachmentCandidates(set) {
   return Array.isArray(set&&set.legacyAttachmentCandidates) ? set.legacyAttachmentCandidates.filter(x=>x&&x.recordingId) : [];
@@ -3027,83 +3255,164 @@ async function migrateLegacyRecordingAttachedScoringEvidence() {
   }
   return summary;
 }
-function recordingScoringEvidenceDescriptor(rec,sets) {
+function recordingScoringEvidenceDescriptor(rec,context) {
   const recordingId=rec&&rec.recordingId||null;
-  const relevant=(sets||[]).filter(set=>!!legacyCandidateForRecording(set,recordingId));
-  const candidates=relevant.map(set=>({
-    evidenceSet:standaloneEvidenceSetPublic(set),
+  const ctx=context&&typeof context==='object'&&!Array.isArray(context)
+    ? context
+    : {boundSets:[],conflictSets:[],legacyCandidateSets:Array.isArray(context)?context:[],bindingStates:new Map()};
+  const boundSets=Array.isArray(ctx.boundSets)?ctx.boundSets:[];
+  const conflictSets=Array.isArray(ctx.conflictSets)?ctx.conflictSets:[];
+  const legacySets=Array.isArray(ctx.legacyCandidateSets)?ctx.legacyCandidateSets:[];
+  const states=ctx.bindingStates instanceof Map?ctx.bindingStates:new Map();
+  const legacyCandidates=legacySets.map(set=>({
+    evidenceSet:standaloneEvidenceSetPublic(set,states.get(set.evidenceSetId)),
     relationship:legacyCandidatePublic(legacyCandidateForRecording(set,recordingId))
   }));
-  if (!relevant.length) return {
-    status:'unavailable',recordingId,candidateCount:0,candidates:[],
-    structuredScoringResult:{status:'unavailable',verification:{status:'unavailable'}},
-    policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
-  };
-  if (relevant.length!==1) return {
-    status:'ambiguous_multiple_legacy_candidates',recordingId,candidateCount:relevant.length,candidates,
-    structuredScoringResult:{
-      status:'available',
-      verification:{status:'legacy_attachment_candidate_conflict_multiple_sets'},
-      relationship:{status:'legacy_attachment_candidate_unbound'},
-      result:null,
-      note:'Multiple legacy scoring evidence sets point to this recording as candidates. SongScope does not choose one silently.'
-    },
-    policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
-  };
-  const set=relevant[0],candidate=legacyCandidateForRecording(set,recordingId);
-  const current=standaloneStructuredDescriptor(set);
-  let doc=null,sourceVerification='unavailable',structuredSource='none',userReview=null;
-  if (current.status==='available'&&current.verification&&current.verification.status==='source_verified') {
-    doc=structuredEvaluationDocument(set.structuredScoringResult);
-    sourceVerification='source_verified';
-    structuredSource='current_scoring_evidence_set_structured_result';
-    userReview=current.userReview||null;
-  } else if (candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document) {
-    doc=candidate.legacyStructuredScoringResult.document;
-    sourceVerification=candidate.legacyStructuredScoringResult.sourceVerificationAtMigration&&candidate.legacyStructuredScoringResult.sourceVerificationAtMigration.status||'unavailable';
-    structuredSource='legacy_recording_attached_structured_result_preserved_at_migration';
-    userReview=doc&&doc.extraction&&doc.extraction.userReview||null;
+  const boundRelationships=boundSets.map(set=>({
+    evidenceSet:standaloneEvidenceSetPublic(set,states.get(set.evidenceSetId)),
+    relationship:{
+      status:'bound_user_confirmed',
+      evidenceSetId:set.evidenceSetId,
+      recordingId,
+      assertion:activeBindAssertionForAudioSha(states.get(set.evidenceSetId),rec&&rec.audioSha256),
+      explicitBindingConfirmed:true
+    }
+  }));
+  if (conflictSets.length) {
+    return {
+      status:'binding_conflict',
+      recordingId,
+      boundEvidenceSetCount:boundSets.length,
+      conflictEvidenceSetCount:conflictSets.length,
+      legacyCandidateCount:legacySets.length,
+      boundRelationships,
+      conflictEvidenceSets:conflictSets.map(set=>standaloneEvidenceSetPublic(set,states.get(set.evidenceSetId))),
+      legacyCandidates,
+      structuredScoringResult:{status:'unavailable',verification:{status:'binding_conflict'},result:null},
+      policy:{explicitBindingRequired:true,conflictsBlockOutcomeUse:true,legacyAttachmentIsNotBinding:true}
+    };
+  }
+  if (boundSets.length>1) {
+    return {
+      status:'ambiguous_multiple_bound_scoring_evidence_sets',
+      recordingId,
+      boundEvidenceSetCount:boundSets.length,
+      legacyCandidateCount:legacySets.length,
+      boundRelationships,legacyCandidates,
+      structuredScoringResult:{
+        status:'unavailable',
+        verification:{status:'multiple_bound_evidence_sets_for_one_recording'},
+        result:null,
+        note:'Multiple independently identified scoring evidence sets are explicitly bound to this recording. SongScope does not assume they are duplicates of the same scoring result.'
+      },
+      policy:{explicitBindingRequired:true,multipleBoundSetsBlockOutcomeUse:true,legacyAttachmentIsNotBinding:true}
+    };
+  }
+  if (boundSets.length===1) {
+    const set=boundSets[0];
+    const bs=states.get(set.evidenceSetId);
+    const sd=standaloneStructuredDescriptor(set);
+    const eligibleSource=standaloneSourceSupportedForG0(set);
+    const sourceVerified=sd.status==='available'&&sd.verification&&sd.verification.status==='source_verified';
+    const schemaCurrent=!!sd.schemaCurrent;
+    const reviewed=!!(sd.userReview&&(sd.userReview.status==='user_confirmed'||sd.userReview.status==='user_confirmed_with_known_gaps'));
+    const doc=structuredEvaluationDocument(set.structuredScoringResult);
+    return {
+      status:'bound_user_confirmed',
+      recordingId,
+      boundEvidenceSetCount:1,
+      legacyCandidateCount:legacySets.length,
+      boundRelationships,legacyCandidates,
+      structuredScoringResult:{
+        status:doc?'available':'unavailable',
+        schemaVersion:doc&&doc.schemaVersion||null,
+        sourceEvidence:doc&&doc.sourceEvidence||null,
+        extraction:doc&&doc.extraction||null,
+        fieldStatus:doc&&doc.fieldStatus||null,
+        result:doc&&doc.result||null,
+        verification:{
+          status:eligibleSource&&sourceVerified&&schemaCurrent?'source_verified':'bound_but_not_eligible_source_verified_result',
+          sourceVerification:sd.verification&&sd.verification.status||'unavailable',
+          schemaCurrent,
+          sourceSupportedForG0:eligibleSource
+        },
+        relationship:{
+          status:'bound_user_confirmed',
+          evidenceSetId:set.evidenceSetId,
+          recordingId,
+          bindingState:bs?{status:bs.status,assertionCount:bs.assertionCount}:null,
+          activeBindAssertion:activeBindAssertionForAudioSha(bs,rec&&rec.audioSha256),
+          explicitBindingConfirmed:true
+        },
+        userReview:sd.userReview||null,
+        outcomeEligibility:{
+          eligible:!!(eligibleSource&&sourceVerified&&schemaCurrent&&reviewed),
+          requires:['explicit_user_binding','dam_denmoku_source','source_verified_structured_result','current_schema','user_review'],
+          userReviewSatisfied:reviewed,
+          note:'Binding proves only the user-confirmed same-performance relationship. It does not by itself certify extraction correctness or scoring-condition comparability.'
+        }
+      },
+      policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
+    };
+  }
+
+  if (legacySets.length) {
+    const set=legacySets.length===1?legacySets[0]:null;
+    const candidate=set?legacyCandidateForRecording(set,recordingId):null;
+    return {
+      status:legacySets.length===1?'legacy_attachment_candidate_unbound':'ambiguous_multiple_legacy_candidates',
+      recordingId,
+      boundEvidenceSetCount:0,
+      legacyCandidateCount:legacySets.length,
+      boundRelationships:[],
+      legacyCandidates,
+      structuredScoringResult:{
+        status:candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document?'available':'unavailable',
+        schemaVersion:candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document&&candidate.legacyStructuredScoringResult.document.schemaVersion||null,
+        sourceEvidence:candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document&&candidate.legacyStructuredScoringResult.document.sourceEvidence||null,
+        extraction:candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document&&candidate.legacyStructuredScoringResult.document.extraction||null,
+        result:candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document&&candidate.legacyStructuredScoringResult.document.result||null,
+        verification:{
+          status:legacySets.length===1?'legacy_attachment_candidate_unbound':'legacy_attachment_candidate_conflict_multiple_sets',
+          sourceVerificationBeforeRelationshipCheck:candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.sourceVerificationAtMigration&&candidate.legacyStructuredScoringResult.sourceVerificationAtMigration.status||'unavailable'
+        },
+        relationship:{
+          status:'legacy_attachment_candidate_unbound',
+          evidenceSetId:set&&set.evidenceSetId||null,
+          recordingId,
+          basis:candidate&&candidate.relationshipBasis||null,
+          explicitBindingConfirmed:false
+        },
+        userReview:candidate&&candidate.legacyStructuredScoringResult&&candidate.legacyStructuredScoringResult.document&&candidate.legacyStructuredScoringResult.document.extraction&&candidate.legacyStructuredScoringResult.document.extraction.userReview||null,
+        outcomeEligibility:{eligible:false,reason:'legacy_attachment_candidate_is_not_binding'}
+      },
+      policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
+    };
   }
   return {
-    status:'legacy_attachment_candidate_unbound',
-    recordingId,candidateCount:1,candidates,
-    structuredScoringResult:{
-      status:doc?'available':'unavailable',
-      schemaVersion:doc&&doc.schemaVersion||null,
-      sourceEvidence:doc&&doc.sourceEvidence||null,
-      extraction:doc&&doc.extraction||null,
-      result:doc&&doc.result||null,
-      verification:{
-        status:'legacy_attachment_candidate_unbound',
-        sourceVerificationBeforeRelationshipCheck:sourceVerification
-      },
-      relationship:{
-        status:'legacy_attachment_candidate_unbound',
-        evidenceSetId:set.evidenceSetId,
-        recordingId,
-        basis:candidate&&candidate.relationshipBasis||null,
-        explicitBindingConfirmed:false
-      },
-      userReview,
-      note:'Raw/structured scoring evidence may be source-verified, but its relationship to this recording is only a migrated legacy attachment candidate. It is not eligible as a bound performance outcome.'
-    },
+    status:'unavailable',
+    recordingId,
+    boundEvidenceSetCount:0,legacyCandidateCount:0,
+    boundRelationships:[],legacyCandidates:[],
+    structuredScoringResult:{status:'unavailable',verification:{status:'unavailable'},result:null},
     policy:{explicitBindingRequired:true,legacyAttachmentIsNotBinding:true}
   };
 }
-function buildUnifiedRecordingEvaluationAnchors(rec,sets) {
+function buildUnifiedRecordingEvaluationAnchors(rec,context) {
   const prov=normalizedMetadataProvenance(rec||{});
   return {
-    schemaVersion:'songscope-recording-scoring-evidence-candidates-v1',
+    schemaVersion:'songscope-recording-scoring-evidence-relations-v2',
     recordingId:rec&&rec.recordingId||null,
     manualDamScore:{
       value:parseStoredScore(rec&&rec.damScore),
       rawStoredValue:rec&&rec.damScore||null,
       provenance:prov.damScore||{source:'absent',confirmation:'unknown'}
     },
-    scoringEvidence:recordingScoringEvidenceDescriptor(rec,sets),
+    scoringEvidence:recordingScoringEvidenceDescriptor(rec,context),
     policy:{
       scoringEvidenceStoredIndependently:true,
-      noRecordingAttachedScoringEvidenceConsumer:true,
+      bindingStateDerivedOnlyFromAppendOnlyBindingAssertions:true,
+      legacyStoredBindingFieldsAreNonAuthoritative:true,
       legacyAttachmentCandidateDoesNotEqualBinding:true,
       explicitBindingRequiredBeforePerformanceOutcomeUse:true
     }
@@ -3112,15 +3421,29 @@ function buildUnifiedRecordingEvaluationAnchors(rec,sets) {
 function standaloneLifecycleStatus(set) {
   return set && set.lifecycleStatus === 'archived' ? 'archived' : 'active';
 }
-function standaloneEvidenceSetPublic(set) {
+function standaloneEvidenceSetPublic(set,bindingState) {
   if (!set) return null;
   const sourceKey=scoringEvidenceSourceKey(set);
+  const bs=bindingState||null;
   return {
-    schemaVersion:'songscope-scoring-evidence-set-v1',
+    schemaVersion:'songscope-scoring-evidence-set-v2',
     evidenceSetId:set.evidenceSetId,
     source:set.source,
-    bindingStatus:set.bindingStatus||'unbound',
-    boundRecordingId:set.boundRecordingId||null,
+    bindingState:bs?{
+      status:bs.status,
+      recordingId:bs.recordingId||null,
+      audioSha256:bs.audioSha256||null,
+      activeRecordingIds:bs.activeRecordingIds||[],
+      activeAudioSha256s:bs.activeAudioSha256s||[],
+      assertionCount:Number(bs.assertionCount||0),
+      source:'bindingAssertions_append_only'
+    }:{status:'not_computed',recordingId:null,activeRecordingIds:[],assertionCount:null,source:'bindingAssertions_not_loaded'},
+    legacyStoredBindingFields:{
+      bindingStatus:set.bindingStatus||null,
+      boundRecordingId:set.boundRecordingId||null,
+      authoritative:false,
+      note:'Pre-build13 compatibility fields only; never use these to determine current binding.'
+    },
     lifecycleStatus:standaloneLifecycleStatus(set),
     archivedAt:set.archivedAt||null,
     createdAt:set.createdAt,
@@ -3128,8 +3451,8 @@ function standaloneEvidenceSetPublic(set) {
     images:(set.images||[]).map(x=>({imageId:x.imageId,meta:x.meta})),
     legacyAttachmentCandidates:legacyAttachmentCandidates(set).map(legacyCandidatePublic),
     interpretation:sourceKey==='dam_denmoku'
-      ? 'A DAMデンモク scoring-history evidence set is an independent primary evidence object. It is not a recording and must not be treated as the same performance until an explicit binding is confirmed.'
-      : 'Legacy scoring image evidence migrated from the old recording-attached path. Source classification and same-performance relationship are intentionally NOT asserted.'
+      ? 'A DAMデンモク scoring-history evidence set is independent primary evidence. Same-performance relationship is derived only from append-only user bindingAssertions.'
+      : 'Legacy scoring image evidence migrated from the old recording-attached path. Source classification and same-performance relationship are intentionally NOT asserted unless a later explicit bindingAssertion exists.'
   };
 }
 function standaloneFieldStatusTemplate() {
@@ -3148,8 +3471,8 @@ function standaloneResultTemplate() {
     vocalRange:null, pitchGraphVisibleMarkers:null, analysisReportText:null
   };
 }
-function standaloneExtractionRequest(set) {
-  const pub = standaloneEvidenceSetPublic(set);
+function standaloneExtractionRequest(set,bindingState) {
+  const pub=standaloneEvidenceSetPublic(set,bindingState);
   return {
     schemaVersion: 'songscope-evaluation-extraction-request-v5',
     evidenceSet: pub,
@@ -3180,7 +3503,7 @@ function standaloneExtractionRequest(set) {
     },
     bindingPolicy: {
       recordingBindingRequiredForPerformanceClaims: true,
-      currentBindingStatus: pub.bindingStatus,
+      currentBindingStatus: pub.bindingState.status,
       doNotInventRecordingId: true,
       doNotAssumeTheseImagesBelongToAnyExistingRecording: true
     },
@@ -3454,6 +3777,165 @@ async function openStandaloneStructuredReview(evidenceSetId) {
   btn.textContent=imageErrors.length ? '元画像を確認できないため確定不可' : (gaps.length?'確認する（既知の未抽出あり）':'この抽出内容を確認する');
   openSheet('sheet-scoring-review');
 }
+const bindingUiState={evidenceSetId:null,query:''};
+let bindingSearchTimer=null;
+function bindingBasisLabel(row) {
+  if (!row) return '';
+  const labels={
+    song_title_exact:'曲名一致',
+    song_title_loose_candidate:'曲名が近い（候補順のみ）',
+    artist_exact:'歌手名一致',
+    overall_score_exact:'DAM点数一致',
+    scoring_mode_exact:'採点モード一致',
+    recorded_at_context_only:'録音日時（表示のみ）',
+    scoring_performed_at_context_only:'DAM採点日時（TZ未確定・照合未使用）'
+  };
+  return labels[row.key]||row.key||'';
+}
+function bindingEvidenceSummaryHtml(set) {
+  const sd=standaloneStructuredDescriptor(set);
+  const r=sd&&sd.result||{};
+  const score=isFinite(Number(r.overallScore))?Number(r.overallScore).toFixed(3):'—';
+  const dt=r.scoringPerformedAt&&r.scoringPerformedAt.localDateTime?r.scoringPerformedAt.localDateTime:'—';
+  const tz=r.scoringPerformedAt&&r.scoringPerformedAt.timeZone?r.scoringPerformedAt.timeZone:'未確定';
+  return `<div class="binding-evidence-summary">
+    <div><b>${escapeHtml(r.title||'(曲名未抽出)')}</b>${r.artist?`<span class="sub2">${escapeHtml(r.artist)}</span>`:''}</div>
+    <div class="small">DAM ${escapeHtml(score)} ／ ${escapeHtml(r.scoringMode||'採点モード未抽出')}</div>
+    <div class="small">採点日時: ${escapeHtml(dt)} ／ timezone: ${escapeHtml(tz)}</div>
+    <div class="small mono">${escapeHtml(set.evidenceSetId)}</div>
+  </div>`;
+}
+function bindingRecordingCardHtml(row,mode) {
+  const rec=row.rec||row;
+  const basis=row.basis||[];
+  const prov=normalizedMetadataProvenance(rec||{});
+  const score=rec.damScore!==null&&rec.damScore!==undefined&&String(rec.damScore)!==''?String(rec.damScore):'—';
+  const modeText=rec.scoringMode||'—';
+  const recorded=rec.recordedAt||'—';
+  const reasonHtml=basis.length
+    ? `<div class="binding-basis">${basis.map(x=>`<div><span class="pill">${escapeHtml(bindingBasisLabel(x))}</span> ${escapeHtml(x.detail||'')}</div>`).join('')}</div>`
+    : '<div class="small">自動候補根拠なし。検索結果として表示。</div>';
+  const action=mode==='active'
+    ? `<button class="mini danger wide" data-binding-unbind="${escapeHtml(rec.recordingId)}">このBindingを撤回</button>`
+    : `<button class="primary binding-confirm-btn" data-binding-bind="${escapeHtml(rec.recordingId)}">この録音と同じ歌唱として確認</button>`;
+  return `<div class="binding-recording-card">
+    <div class="binding-recording-title">${escapeHtml(rec.title||'(無題)')}</div>
+    <div class="small">${escapeHtml(rec.artist||'')} ${rec.artist?'／ ':''}DAM ${escapeHtml(score)} ／ ${escapeHtml(modeText)}</div>
+    <div class="small">recordedAt: ${escapeHtml(recorded)} <span class="sub">(${escapeHtml((prov.recordedAt&&prov.recordedAt.confirmation)||'unknown')})</span></div>
+    <div class="small mono">${escapeHtml(rec.recordingId||'')}</div>
+    <div class="small mono">audio SHA: ${escapeHtml(String(rec.audioSha256||'').slice(0,16))}…${row.aliasRecordingIds&&row.aliasRecordingIds.length?` ／ alias rows ${row.aliasRecordingIds.length}`:''}</div>
+    ${reasonHtml}
+    ${action}
+  </div>`;
+}
+async function renderBindingSheet() {
+  const evidenceSetId=bindingUiState.evidenceSetId;
+  const set=await dbGet('scoringEvidenceSets',evidenceSetId);
+  if (!set) throw new Error('採点証拠セットが見つかりません');
+  const assertions=await allBindingAssertions();
+  const bs=deriveBindingStateFromAssertions(evidenceSetId,assertions);
+  const recs=await dbAll('recordings').catch(()=>[]);
+  const recById=new Map(recs.map(r=>[r.recordingId,r]));
+  const resolveAssertionRecording=(active)=>recById.get(active&&active.recordingId)||recs.find(r=>String(r&&r.audioSha256||'').toLowerCase()===String(active&&active.audioSha256||'').toLowerCase())||null;
+  $('#binding-evidence-summary').innerHTML=bindingEvidenceSummaryHtml(set);
+  const stateBox=$('#binding-current-state');
+  if (bs.status==='bound') {
+    const active=bs.activeAssertions[0];
+    const rec=resolveAssertionRecording(active);
+    stateBox.innerHTML=`<div class="note"><p><b>現在: bound</b></p><p class="small">この状態はscoringEvidenceSet本体ではなくappend-only assertionから導出されています。</p></div>${rec?bindingRecordingCardHtml({rec,basis:active.basisShownToUser||[]},'active'):`<p class="small warn-text">Binding先recordingが見つかりません: ${escapeHtml(active.recordingId)}</p>`}`;
+  } else if (bs.status==='binding_conflict') {
+    stateBox.innerHTML=`<div class="note warn"><p><b>Binding conflict</b></p><p class="small">同じ採点証拠に複数のactive bindがあります。SongScopeはどちらも採用しません。誤った方を明示的に撤回してください。</p></div>`+
+      bs.activeAssertions.map(x=>{
+        const rec=resolveAssertionRecording(x);
+        return rec?bindingRecordingCardHtml({rec,basis:x.basisShownToUser||[]},'active'):`<p class="small">${escapeHtml(x.recordingId)}（録音なし）</p>`;
+      }).join('');
+  } else {
+    stateBox.innerHTML='<div class="note"><p><b>現在: unbound</b></p><p class="small">候補表示は自動Bindingではありません。実際に同じ歌唱だったと自分で確認できる場合だけ確定してください。</p></div>';
+  }
+  const searchWrap=$('#binding-search-wrap');
+  searchWrap.hidden=bs.status!=='unbound';
+  const results=$('#binding-candidate-list');
+  if (bs.status!=='unbound') {
+    results.innerHTML='';
+  } else {
+    const rows=await bindingCandidateRows(set,bindingUiState.query);
+    const title=bindingUiState.query?'検索結果':'候補（最大3件・自動確定なし）';
+    results.innerHTML=`<div class="section-head tight"><span>${escapeHtml(title)}</span></div>`+
+      (rows.length?rows.map(row=>bindingRecordingCardHtml(row,'candidate')).join(''):'<p class="small">候補がありません。曲名・録音名・DAM点数などで検索してください。</p>');
+  }
+  $('#binding-history').innerHTML=`<details class="details"><summary>Binding履歴 ${bs.assertionCount}件</summary><pre class="binding-history-pre">${escapeHtml(JSON.stringify(assertions.filter(x=>x&&x.evidenceSetId===evidenceSetId).sort((a,b)=>bindingAssertionSortKey(a).localeCompare(bindingAssertionSortKey(b))),null,2))}</pre></details>`;
+  $$('[data-binding-bind]').forEach(b=>b.addEventListener('click',()=>confirmBindingToRecording(b.dataset.bindingBind)));
+  $$('[data-binding-unbind]').forEach(b=>b.addEventListener('click',()=>retractBindingFromRecording(b.dataset.bindingUnbind)));
+}
+async function openBindingSheet(evidenceSetId) {
+  const set=await dbGet('scoringEvidenceSets',evidenceSetId);
+  if (!set) throw new Error('採点証拠セットが見つかりません');
+  bindingUiState.evidenceSetId=evidenceSetId;
+  bindingUiState.query='';
+  const input=$('#binding-search');
+  if (input) input.value='';
+  openSheet('sheet-binding');
+  await renderBindingSheet();
+}
+async function confirmBindingToRecording(recordingId) {
+  const evidenceSetId=bindingUiState.evidenceSetId;
+  const set=await dbGet('scoringEvidenceSets',evidenceSetId);
+  const rec=await dbGet('recordings',recordingId);
+  if (!set||!rec) throw new Error('採点証拠または録音が見つかりません');
+  const current=await bindingStateForEvidenceSet(evidenceSetId);
+  if (current.status!=='unbound') throw new Error('Binding状態が変わりました。画面を更新してください');
+  const {basis}=bindingCandidateBasis(set,rec);
+  const recCtx=await scoringEvidenceRelationsForRecording(recordingId);
+  const otherBound=(recCtx.boundSets||[]).filter(x=>x&&x.evidenceSetId!==evidenceSetId);
+  const duplicateWarning=otherBound.length
+    ? `\n\n注意: このraw audioには別の採点証拠 ${otherBound.length}件が既にBindingされています。追加するとSongScopeは重複/競合解決までOutcome利用を保留します。`
+    : '';
+  const ok=confirm(`この2つが「同じ1回の歌唱」だったと、あなた自身が確認できますか？\n\n採点証拠: ${set.evidenceSetId}\n録音: ${rec.title||'(無題)'}\n${rec.recordingId}\nraw audio SHA: ${String(rec.audioSha256||'').slice(0,24)}…${duplicateWarning}\n\n似ている・時刻が近いだけでは確定しないでください。`);
+  if (!ok) return;
+  const basisShownToUser=basis.concat([
+    {key:'raw_audio_sha256_target',detail:String(rec.audioSha256||''),agreed:true,source:'SongScope raw audio identity'},
+    {
+    key:'user_explicit_same_performance_confirmation',
+    detail:'User explicitly confirmed that this scoring evidence and recording refer to the same single singing performance.',
+    agreed:true,source:'user'
+  }]);
+  await appendBindingAssertion({
+    evidenceSetId,recordingId,action:'bind',basisShownToUser,
+    reason:'user_explicit_same_performance_confirmation'
+  });
+  await renderBindingSheet();
+  await renderStandaloneEvidenceSets();
+  if (state.rec&&state.rec.recordingId===recordingId) {
+    state.scoringEvidenceContext=await scoringEvidenceRelationsForRecording(recordingId);
+    state.scoringEvidenceCandidates=state.scoringEvidenceContext.legacyCandidateSets||[];
+    renderEvaluationAnchor();
+  }
+  toast('Bindingを追記しました。元データは変更していません。');
+}
+async function retractBindingFromRecording(recordingId) {
+  const evidenceSetId=bindingUiState.evidenceSetId;
+  const current=await bindingStateForEvidenceSet(evidenceSetId);
+  const rec=await dbGet('recordings',recordingId);
+  if (!rec||!rec.audioSha256) throw new Error('撤回対象のraw audio identityを確認できません');
+  const active=activeBindAssertionForAudioSha(current,rec.audioSha256);
+  if (!active) throw new Error('撤回対象のactive Bindingが見つかりません');
+  const ok=confirm(`このBindingを撤回しますか？\n\n${rec&&rec.title||recordingId}\n\n過去のbind記録は削除せず、unbind assertionを追記します。`);
+  if (!ok) return;
+  await appendBindingAssertion({
+    evidenceSetId,recordingId,action:'unbind',
+    basisShownToUser:[{key:'user_explicit_binding_retraction',detail:'User explicitly retracted the prior same-performance binding.',agreed:true,source:'user'}],
+    supersedesAssertionId:active.assertionId,
+    reason:'user_explicit_binding_retraction'
+  });
+  await renderBindingSheet();
+  await renderStandaloneEvidenceSets();
+  if (state.rec&&state.rec.recordingId===recordingId) {
+    state.scoringEvidenceContext=await scoringEvidenceRelationsForRecording(recordingId);
+    state.scoringEvidenceCandidates=state.scoringEvidenceContext.legacyCandidateSets||[];
+    renderEvaluationAnchor();
+  }
+  toast('Bindingを撤回しました。履歴は保持されています。');
+}
 async function archiveStandaloneEvidenceSet(id) {
   const set=await dbGet('scoringEvidenceSets',id);
   if (!set) return;
@@ -3480,9 +3962,11 @@ async function renderStandaloneEvidenceSets() {
     toggle.textContent=showArchivedScoringEvidence ? 'アーカイブ済みを隠す' : `アーカイブ済みを表示（${archivedCount}）`;
   }
   const rows=all.filter(r=>showArchivedScoringEvidence || standaloneLifecycleStatus(r)!=='archived');
-  if (!rows.length) { box.innerHTML='<p class="small">表示するDAMデンモク採点履歴はありません。</p>'; return; }
+  if (!rows.length) { box.innerHTML='<p class="small">表示する採点証拠はありません。</p>'; return; }
+  const bindingStates=await loadBindingStateMap(all);
   box.innerHTML=rows.map(r=>{
-    const p=standaloneEvidenceSetPublic(r),sd=standaloneStructuredDescriptor(r);
+    const bs=bindingStates.get(r.evidenceSetId)||deriveBindingStateFromAssertions(r.evidenceSetId,[]);
+    const p=standaloneEvidenceSetPublic(r,bs),sd=standaloneStructuredDescriptor(r);
     const lifecycle=standaloneLifecycleStatus(r),sourceKey=scoringEvidenceSourceKey(r);
     const supported=standaloneSourceSupportedForG0(r);
     const legacyCount=legacyAttachmentCandidates(r).length;
@@ -3501,11 +3985,17 @@ async function renderStandaloneEvidenceSets() {
     const structuredBtn=supported&&lifecycle!=='archived'?`<button class="mini" data-ev-structured="${escapeHtml(p.evidenceSetId)}">構造化JSON</button>`:'';
     const sourceLabel=supported?'DAMデンモク':'旧方式・source未分類';
     const candidateLine=legacyCount?`<div class="item-sub scoring-evidence-status">旧添付候補: ${legacyCount}録音（candidate only / NOT binding）</div>`:'';
-    return `<div class="item scoring-evidence-item${lifecycle==='archived'?' is-archived':''}${supported?'':' is-legacy-source'}"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${escapeHtml(sourceLabel)} ／ ${p.imageCount}枚 ／ binding: ${escapeHtml(p.bindingStatus)} ／ ${escapeHtml(lifecycle)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div>${candidateLine}</div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">${supported?'抽出ZIP':'証拠ZIP'}</button>${structuredBtn}${reviewBtn}${lifecycleBtn}</div></div>`;
+    const bindingClass=bs.status==='bound'?'ok':bs.status==='binding_conflict'?'err':'wait';
+    const bindingText=bs.status==='bound'
+      ? `Binding: bound → ${bs.recordingId}`
+      : (bs.status==='binding_conflict'?`Binding: CONFLICT (${bs.activeRecordingIds.length}録音)`:'Binding: unbound');
+    const bindingBtn=`<button class="mini ${bs.status==='bound'?'is-on':''}" data-ev-binding="${escapeHtml(p.evidenceSetId)}">Binding管理</button>`;
+    return `<div class="item scoring-evidence-item${lifecycle==='archived'?' is-archived':''}${supported?'':' is-legacy-source'}"><div class="item-main scoring-evidence-main"><div class="item-title scoring-evidence-id">${escapeHtml(p.evidenceSetId)}</div><div class="item-sub scoring-evidence-meta">${escapeHtml(sourceLabel)} ／ ${p.imageCount}枚 ／ ${escapeHtml(lifecycle)}<br>${escapeHtml(String(p.createdAt||''))}</div><div class="item-sub scoring-evidence-status"><span class="pill ${bindingClass}">${escapeHtml(bindingText)}</span></div><div class="item-sub scoring-evidence-status">${escapeHtml(structuredText)}</div>${candidateLine}</div><div class="item-actions scoring-evidence-actions"><button class="mini" data-ev-export="${escapeHtml(p.evidenceSetId)}">${supported?'抽出ZIP':'証拠ZIP'}</button>${structuredBtn}${reviewBtn}${bindingBtn}${lifecycleBtn}</div></div>`;
   }).join('');
   $$('[data-ev-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.evExport)));
   $$('[data-ev-structured]').forEach(b=>b.addEventListener('click',()=>{ const inp=$('#scoring-structured-input'); inp.dataset.evidenceSetId=b.dataset.evStructured; inp.click(); }));
   $$('[data-ev-review]').forEach(b=>b.addEventListener('click',async()=>{ try { await openStandaloneStructuredReview(b.dataset.evReview); } catch(e){ toast((e&&e.message)||'レビューを開けませんでした'); } }));
+  $$('[data-ev-binding]').forEach(b=>b.addEventListener('click',async()=>{ try { await openBindingSheet(b.dataset.evBinding); } catch(e){ console.error(e); toast((e&&e.message)||'Binding管理を開けませんでした'); } }));
   $$('[data-ev-archive]').forEach(b=>b.addEventListener('click',()=>archiveStandaloneEvidenceSet(b.dataset.evArchive)));
   $$('[data-ev-restore]').forEach(b=>b.addEventListener('click',()=>restoreStandaloneEvidenceSet(b.dataset.evRestore)));
 }
@@ -3513,11 +4003,15 @@ async function exportStandaloneEvidenceSet(id) {
   try {
     const set=await dbGet('scoringEvidenceSets',id);
     if (!set) throw new Error('証拠セットが見つかりません');
+    const allAssertions=await allBindingAssertions();
+    const setAssertions=allAssertions.filter(x=>x&&x.evidenceSetId===id).sort((a,b)=>bindingAssertionSortKey(a).localeCompare(bindingAssertionSortKey(b)));
+    const bs=deriveBindingStateFromAssertions(id,setAssertions);
     const files=[
-      {name:'evaluation/evidence_set.json',data:JSON.stringify(standaloneEvidenceSetPublic(set),null,2)}
+      {name:'evaluation/evidence_set.json',data:JSON.stringify(standaloneEvidenceSetPublic(set,bs),null,2)},
+      {name:'evaluation/binding_assertions.json',data:JSON.stringify({schemaVersion:'songscope-binding-assertion-history-v1',evidenceSetId:id,currentState:bs,assertions:setAssertions},null,2)}
     ];
     if (standaloneSourceSupportedForG0(set)) {
-      files.push({name:'evaluation/extraction_request.json',data:JSON.stringify(standaloneExtractionRequest(set),null,2)});
+      files.push({name:'evaluation/extraction_request.json',data:JSON.stringify(standaloneExtractionRequest(set,bs),null,2)});
     }
     if (legacyAttachmentCandidates(set).length) {
       files.push({name:'evaluation/legacy_attachment_candidates.json',data:JSON.stringify({
@@ -3570,7 +4064,7 @@ const FULL_BACKUP_SCHEMA = 'songscope-full-backup-v1';
 const FULL_BACKUP_BINARY_TAG = '__songscopeBackupBinaryV1';
 const FULL_BACKUP_STORE_NAMES = [
   'recordings', 'audio', 'analysis', 'analysisHistory', 'markers', 'segments',
-  'alignmentFeatures', 'alignmentDiagnostics', 'alignmentResults', 'pairContexts', 'scoringEvidenceSets'
+  'alignmentFeatures', 'alignmentDiagnostics', 'alignmentResults', 'pairContexts', 'scoringEvidenceSets', 'bindingAssertions'
 ];
 
 function backupPathToken(v) {
@@ -3828,6 +4322,19 @@ async function validateFullBackupEvidence(parsed, opts = {}) {
       if (got.toLowerCase()!==String(x.meta.sha256).toLowerCase()) throw new Error(`独立採点証拠セットSHA-256不一致: ${set.evidenceSetId}`);
     }
   }
+  const setIds=new Set((parsed.stores.scoringEvidenceSets||[]).map(x=>x&&x.evidenceSetId).filter(Boolean));
+  const recordingRows=parsed.stores.recordings||[];
+  const backupRecById=new Map(recordingRows.map(x=>[x&&x.recordingId,x]).filter(x=>x[0]));
+  for (const a of parsed.stores.bindingAssertions||[]) {
+    if (!a||!a.assertionId||a.schemaVersion!==BINDING_ASSERTION_SCHEMA) throw new Error('Binding assertionが不完全です');
+    if (!setIds.has(a.evidenceSetId)) throw new Error(`Binding assertionのevidenceSetIdが存在しません: ${a.assertionId}`);
+    if (a.action!=='bind'&&a.action!=='unbind') throw new Error(`Binding assertion action不正: ${a.assertionId}`);
+    const sha=String(a.audioSha256||'').toLowerCase();
+    if (!sha) throw new Error(`Binding assertionにaudioSha256がありません: ${a.assertionId}`);
+    const rec=a.recordingId?backupRecById.get(a.recordingId):null;
+    if (rec&&rec.audioSha256&&String(rec.audioSha256).toLowerCase()!==sha) throw new Error(`Binding assertionのrecordingIdとaudioSha256が矛盾しています: ${a.assertionId}`);
+    // A deleted/aliased recording row may be absent while the historical raw-audio target identity remains valid.
+  }
   // 通常restoreでは、同じrecordingIdに異なる既存SHAがある場合だけ自動mergeを止める。
   if (opts.checkExistingConflicts !== false) {
     for (const rec of parsed.stores.recordings || []) {
@@ -3844,7 +4351,8 @@ async function validateFullBackupEvidence(parsed, opts = {}) {
 const FULL_BACKUP_KEY_PATHS = {
   recordings: 'recordingId', audio: 'recordingId', analysis: 'recordingId', analysisHistory: 'analysisId',
   markers: 'markerId', segments: 'segmentId', alignmentFeatures: 'featureKey',
-  alignmentDiagnostics: 'diagnosticId', alignmentResults: 'pairKey', pairContexts: 'audioPairKey', scoringEvidenceSets: 'evidenceSetId'
+  alignmentDiagnostics:'diagnosticId',alignmentResults:'pairKey',pairContexts:'audioPairKey',
+  scoringEvidenceSets:'evidenceSetId',bindingAssertions:'assertionId'
 };
 
 function backupRowKey(store, row) {
@@ -4387,8 +4895,8 @@ async function loadCmpSide(side, id) {
     audio = new Audio(url);
     audio.preload = 'metadata';
   }
-  const scoringEvidenceCandidates=await scoringEvidenceSetsForLegacyCandidateRecording(id);
-  cmp[side]={rec,an,audio,url,asset:au||null,scoringEvidenceCandidates};
+  const scoringEvidenceContext=await scoringEvidenceRelationsForRecording(id);
+  cmp[side]={rec,an,audio,url,asset:au||null,scoringEvidenceContext,scoringEvidenceCandidates:scoringEvidenceContext.legacyCandidateSets||[]};
   drawCompare();
   refreshE4ContextUi().catch(() => { });
 }
@@ -5125,7 +5633,7 @@ function d2RecordingDescriptor(side) {
     metadataProvenance: normalizedMetadataProvenance(rec),
     evaluationEvidence:Object.assign(
       {consumerSource:'scoringEvidenceSets',legacyRecordingAttachedFieldsIgnored:true},
-      recordingScoringEvidenceDescriptor(rec,d.scoringEvidenceCandidates||[])
+      recordingScoringEvidenceDescriptor(rec,d.scoringEvidenceContext)
     )
   };
 }
@@ -5349,7 +5857,11 @@ function d2EvaluationAnchors(descA, descB, strictConditions = null) {
 
 /* ---------------- Phase E3: pairwise outcome evidence ---------------- */
 function e3StructuredIsSourceVerified(desc) {
-  return !!(desc && desc.status === 'available' && desc.verification && desc.verification.status === 'source_verified');
+  if (!(desc&&desc.status==='available'&&desc.verification&&desc.verification.status==='source_verified')) return false;
+  // build13: a source-verified scoring result is a recording outcome only after explicit user Binding.
+  if (desc.relationship&&desc.relationship.status!=='bound_user_confirmed') return false;
+  if (desc.outcomeEligibility&&desc.outcomeEligibility.eligible===false) return false;
+  return true;
 }
 function e3ReadableNumber(node, valueKey = 'value') {
   if (!node || node.status !== 'readable') return null;
@@ -5502,12 +6014,88 @@ function e4ProgressionObservation(descA, descB, resultA, resultB, verifiedA, ver
     ]
   };
 }
+function e3AdaptStructuredResultForComparison(st) {
+  if (!st||!st.result||typeof st.result!=='object') return {};
+  if (st.schemaVersion!==STANDALONE_SCORING_RESULT_SCHEMA) return st.result;
+  const r=st.result,fs=st.fieldStatus||{};
+  const readable=(key,val)=>{
+    if (fs[key]!=='extracted') return {status:'unavailable'};
+    const n=Number(val); return isFinite(n)?{status:'readable',value:n}:{status:'unavailable'};
+  };
+  const metrics=[];
+  const pushMetric=(key,label,field,val,unit)=>{
+    const x=readable(field,val); if(x.status==='readable') metrics.push({key,label,status:'readable',value:x.value,unit});
+  };
+  pushMetric('pitch_accuracy','音程正確率','pitchAccuracy',r.pitchAccuracy,'percent');
+  pushMetric('expression_score','表現力','expressionScore',r.expressionScore,'points');
+  pushMetric('dynamics_score','抑揚','dynamicsScore',r.dynamicsScore,'points');
+  pushMetric('listening_score','聴感','listeningScore',r.listeningScore,'points');
+  const discrete=[
+    ['longToneSkillDiscrete','long_tone_skill','ロングトーン上手さ'],
+    ['vibratoSkillDiscrete','vibrato_skill','ビブラート上手さ'],
+    ['stabilityDiscrete','stability_display','安定性']
+  ];
+  for (const [field,key,label] of discrete) {
+    const x=r[field];
+    if (fs[field]==='extracted'&&x&&isFinite(Number(x.observedLit))) metrics.push({
+      key,label,status:'readable',value:Number(x.observedLit),unit:'lit_count',
+      observedTotal:isFinite(Number(x.observedTotal))?Number(x.observedTotal):null
+    });
+  }
+  if (fs.rhythmDiscrete==='extracted'&&r.rhythmDiscrete&&isFinite(Number(r.rhythmDiscrete.observedPositionIndex))) {
+    metrics.push({
+      key:'rhythm_position',label:'リズム表示位置',status:'readable',
+      value:Number(r.rhythmDiscrete.observedPositionIndex),unit:'ordinal_position',
+      observedPositionCount:isFinite(Number(r.rhythmDiscrete.observedPositionCount))?Number(r.rhythmDiscrete.observedPositionCount):null,
+      directionality:'non_monotonic'
+    });
+  }
+  const techniques=[];
+  if (fs.techniques==='extracted'&&r.techniques&&typeof r.techniques==='object') {
+    const map=[
+      ['shakuriCount','shakuri','しゃくり'],['kobushiCount','kobushi','こぶし'],['fallCount','fall','フォール'],
+      ['accentCount','accent','アクセント'],['hammeringCount','hammering','ハンマリング']
+    ];
+    for (const [src,key,label] of map) {
+      const n=Number(r.techniques[src]); if(isFinite(n)) techniques.push({key,label,status:'readable',count:n,unit:'count'});
+    }
+  }
+  const vibrato=fs.vibrato==='extracted'&&r.vibrato?{
+    status:'readable',
+    totalDurationSec:isFinite(Number(r.vibrato.durationSec))?Number(r.vibrato.durationSec):null,
+    count:isFinite(Number(r.vibrato.count))?Number(r.vibrato.count):null,
+    type:r.vibrato.type||null
+  }:{status:'unavailable'};
+  const ranking=r.ranking&&isFinite(Number(r.ranking.rank))&&isFinite(Number(r.ranking.population))
+    ? {status:'readable',position:Number(r.ranking.rank),total:Number(r.ranking.population)}
+    : {status:'unavailable'};
+  const bonus=r.bonus&&isFinite(Number(r.bonus.value))?{status:'readable',value:Number(r.bonus.value)}:{status:'unavailable'};
+  return {
+    overallScore:readable('overallScore',r.overallScore),
+    personalBest:readable('personalBest',r.personalBest),
+    nationalAverage:readable('nationalAverage',r.nationalAverage),
+    heartBonus:bonus,
+    ranking,metrics,techniques,vibrato,
+    scoringDate:{status:'unavailable'},
+    scoringPerformedAt:r.scoringPerformedAt||null
+  };
+}
+function e3StructuredUserReviewStatus(st) {
+  return st&&st.userReview&&st.userReview.status
+    ? st.userReview.status
+    : (st&&st.extraction&&st.extraction.userReview)||'unknown';
+}
+function e3StructuredImageShaList(st) {
+  if (!st||!st.sourceEvidence) return [];
+  if (Array.isArray(st.sourceEvidence.images)) return st.sourceEvidence.images.map(x=>x&&x.sha256).filter(Boolean);
+  return st.sourceEvidence.sha256?[st.sourceEvidence.sha256]:[];
+}
 function e3OutcomeComparison(descA, descB, pairContext = null, chronology = null, conditionsOverride = null) {
   const stA = descA && descA.evaluationEvidence && descA.evaluationEvidence.structuredScoringResult || { status: 'unavailable' };
   const stB = descB && descB.evaluationEvidence && descB.evaluationEvidence.structuredScoringResult || { status: 'unavailable' };
   const verifiedA = e3StructuredIsSourceVerified(stA), verifiedB = e3StructuredIsSourceVerified(stB);
-  const resultA = verifiedA && stA.result && typeof stA.result === 'object' ? stA.result : {};
-  const resultB = verifiedB && stB.result && typeof stB.result === 'object' ? stB.result : {};
+  const resultA=verifiedA?e3AdaptStructuredResultForComparison(stA):{};
+  const resultB=verifiedB?e3AdaptStructuredResultForComparison(stB):{};
   const conditions = conditionsOverride || e3StrictScoringConditionComparability(descA, descB, pairContext);
   const resolvedChronology = chronology || e4ResolveChronology(descA, descB, pairContext);
 
@@ -5557,15 +6145,17 @@ function e3OutcomeComparison(descA, descB, pairContext = null, chronology = null
         recordingId: descA && descA.recordingId || null,
         structuredStatus: stA.status || 'unavailable',
         verificationStatus: stA.verification && stA.verification.status || 'unavailable',
-        scoringImageSha256: stA.sourceEvidence && stA.sourceEvidence.sha256 || null,
-        userReview: stA.extraction && stA.extraction.userReview || 'unknown'
+        scoringImageSha256: e3StructuredImageShaList(stA).length===1?e3StructuredImageShaList(stA)[0]:null,
+        scoringImageSha256s:e3StructuredImageShaList(stA),
+        userReview:e3StructuredUserReviewStatus(stA)
       },
       b: {
         recordingId: descB && descB.recordingId || null,
         structuredStatus: stB.status || 'unavailable',
         verificationStatus: stB.verification && stB.verification.status || 'unavailable',
-        scoringImageSha256: stB.sourceEvidence && stB.sourceEvidence.sha256 || null,
-        userReview: stB.extraction && stB.extraction.userReview || 'unknown'
+        scoringImageSha256: e3StructuredImageShaList(stB).length===1?e3StructuredImageShaList(stB)[0]:null,
+        scoringImageSha256s:e3StructuredImageShaList(stB),
+        userReview:e3StructuredUserReviewStatus(stB)
       }
     },
     scoringConditionComparability: conditions,
@@ -5615,7 +6205,7 @@ function e3OutcomeComparison(descA, descB, pairContext = null, chronology = null
  * analysisHistoryの再解析runは「別歌唱」として数えない。
  * chronological orderは証拠制約から解き、曖昧/矛盾時は無理に並べない。
  * ===================================================================== */
-function f1DescriptorFromStored(rec,an,asset,audioIdentity,scoringEvidenceCandidates) {
+function f1DescriptorFromStored(rec,an,asset,audioIdentity,scoringEvidenceContext) {
   rec = rec || {}; an = an || {}; asset = asset || {}; audioIdentity = audioIdentity || {};
   const effectiveSha = audioIdentity.sha256 || rec.audioSha256 || an.audioSha256 || null;
   return {
@@ -5656,7 +6246,7 @@ function f1DescriptorFromStored(rec,an,asset,audioIdentity,scoringEvidenceCandid
     metadataProvenance: normalizedMetadataProvenance(rec),
     evaluationEvidence:Object.assign(
       {consumerSource:'scoringEvidenceSets',legacyRecordingAttachedFieldsIgnored:true},
-      recordingScoringEvidenceDescriptor(rec,scoringEvidenceCandidates||[])
+      recordingScoringEvidenceDescriptor(rec,scoringEvidenceContext)
     )
   };
 }
@@ -5679,8 +6269,8 @@ async function f1LoadDescriptorsForSong(songId) {
         hashComputationError = (e && e.message) ? String(e.message) : String(e);
       }
     }
-    const scoringEvidenceCandidates=await scoringEvidenceSetsForLegacyCandidateRecording(rec.recordingId);
-    out.push(f1DescriptorFromStored(rec,an,asset,{sha256:sha,source,hashComputationError},scoringEvidenceCandidates));
+    const scoringEvidenceContext=await scoringEvidenceRelationsForRecording(rec.recordingId);
+    out.push(f1DescriptorFromStored(rec,an,asset,{sha256:sha,source,hashComputationError},scoringEvidenceContext));
   }
   // このsortは表示/JSON安定化だけ。chronologyの証拠には使わない。
   out.sort((a,b) => String(a.recordingId || '').localeCompare(String(b.recordingId || '')));
@@ -5704,8 +6294,10 @@ function f1VerifiedOutcomeSignature(desc) {
   const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult;
   if (!e3StructuredIsSourceVerified(st)) return null;
   return JSON.stringify({
-    sourceImageSha256: st.sourceEvidence && st.sourceEvidence.sha256 || null,
-    result: st.result || null
+    sourceImageBindings:st.sourceEvidence&&Array.isArray(st.sourceEvidence.images)
+      ? st.sourceEvidence.images.map(x=>({imageId:x&&x.imageId||null,sha256:x&&x.sha256||null})).sort((a,b)=>String(a.imageId).localeCompare(String(b.imageId)))
+      : [{imageId:null,sha256:st.sourceEvidence&&st.sourceEvidence.sha256||null}],
+    result:st.result||null
   });
 }
 function f1ResolvePhysicalRecordings(descs) {
@@ -5785,6 +6377,83 @@ function f1VerifiedResult(desc) {
   const st = desc && desc.evaluationEvidence && desc.evaluationEvidence.structuredScoringResult;
   return e3StructuredIsSourceVerified(st) && st.result && typeof st.result === 'object' ? st.result : null;
 }
+function f1OutcomeFromStandaloneScoringV2(st) {
+  if (!e3StructuredIsSourceVerified(st)) return null;
+  const r=st&&st.result||{};
+  const fs=st&&st.fieldStatus||{};
+  const readableNumber=(key)=>{
+    if (fs&&fs[key]&&fs[key]!=='extracted') return null;
+    const n=Number(r[key]); return isFinite(n)?n:null;
+  };
+  const metrics={};
+  const addMetric=(key,label,value,unit,classification,directionality,meta)=>{
+    const n=Number(value); if(!isFinite(n)) return;
+    metrics[key]={key,label,value:n,unit:unit||null,classification:classification||'external_scoring_metric',directionality:directionality||'metric_specific_not_assumed',meta:meta||null};
+  };
+  addMetric('pitch_accuracy','音程正確率',readableNumber('pitchAccuracy'),'percent','external_scoring_metric','higher_external_outcome_only');
+  addMetric('expression_score','表現力',readableNumber('expressionScore'),'points','external_scoring_metric','higher_external_outcome_only');
+  addMetric('dynamics_score','抑揚',readableNumber('dynamicsScore'),'points','external_scoring_metric','higher_external_outcome_only');
+  addMetric('listening_score','聴感',readableNumber('listeningScore'),'points','external_scoring_metric','higher_external_outcome_only');
+  const discrete=[
+    ['longToneSkillDiscrete','long_tone_skill','ロングトーン上手さ','higher_external_outcome_only'],
+    ['vibratoSkillDiscrete','vibrato_skill','ビブラート上手さ','higher_external_outcome_only'],
+    ['stabilityDiscrete','stability_display','安定性','higher_external_outcome_only']
+  ];
+  for (const [field,key,label,directionality] of discrete) {
+    const x=r[field];
+    if (fs&&fs[field]==='extracted'&&x&&isFinite(Number(x.observedLit))&&isFinite(Number(x.observedTotal))) {
+      addMetric(key,label,Number(x.observedLit),'lit_count','external_discrete_display',directionality,{observedTotal:Number(x.observedTotal),displayOnly:true});
+    }
+  }
+  const rhythm=r.rhythmDiscrete;
+  if (fs&&fs.rhythmDiscrete==='extracted'&&rhythm&&isFinite(Number(rhythm.observedPositionIndex))&&isFinite(Number(rhythm.observedPositionCount))) {
+    addMetric('rhythm_position','リズム表示位置',Number(rhythm.observedPositionIndex),'ordinal_position','external_discrete_display','non_monotonic',{
+      observedPositionCount:Number(rhythm.observedPositionCount),leftLabel:rhythm.leftLabel||null,rightLabel:rhythm.rightLabel||null,displayOnly:true
+    });
+  }
+  const techniques={};
+  if (fs&&fs.techniques==='extracted'&&r.techniques&&typeof r.techniques==='object') {
+    const map=[
+      ['shakuriCount','shakuri','しゃくり'],['kobushiCount','kobushi','こぶし'],['fallCount','fall','フォール'],
+      ['accentCount','accent','アクセント'],['hammeringCount','hammering','ハンマリング']
+    ];
+    for (const [src,key,label] of map) {
+      const n=Number(r.techniques[src]); if(isFinite(n)) techniques[key]={key,label,count:n,unit:'count'};
+    }
+  }
+  let vibrato=null;
+  if (fs&&fs.vibrato==='extracted'&&r.vibrato&&typeof r.vibrato==='object') {
+    vibrato={
+      totalDurationSec:isFinite(Number(r.vibrato.durationSec))?Number(r.vibrato.durationSec):null,
+      count:isFinite(Number(r.vibrato.count))?Number(r.vibrato.count):null,
+      type:r.vibrato.type?String(r.vibrato.type):null
+    };
+  }
+  const rank=r.ranking&&typeof r.ranking==='object'&&isFinite(Number(r.ranking.rank))&&isFinite(Number(r.ranking.population))
+    ? {position:Number(r.ranking.rank),total:Number(r.ranking.population)}:null;
+  const bonus=r.bonus&&typeof r.bonus==='object'&&isFinite(Number(r.bonus.value))?Number(r.bonus.value):null;
+  const sourceImageSha256s=st.sourceEvidence&&Array.isArray(st.sourceEvidence.images)
+    ? st.sourceEvidence.images.map(x=>x&&x.sha256).filter(Boolean):[];
+  return {
+    status:'source_verified_structured_outcome',
+    sourceVerification:'source_verified',
+    sourceImageSha256:sourceImageSha256s.length===1?sourceImageSha256s[0]:null,
+    sourceImageSha256s,
+    userReview:st.userReview&&st.userReview.status||'unknown',
+    scoringDate:null,
+    scoringPerformedAt:r.scoringPerformedAt||null,
+    overallScore:readableNumber('overallScore'),
+    personalBest:readableNumber('personalBest'),
+    nationalAverage:readableNumber('nationalAverage'),
+    heartBonus:bonus,
+    ranking:rank,
+    metrics,techniques,vibrato,
+    fieldStatus:fs,
+    evidenceSetId:st.relationship&&st.relationship.evidenceSetId||null,
+    bindingAssertionId:st.relationship&&st.relationship.activeBindAssertion&&st.relationship.activeBindAssertion.assertionId||null,
+    note:'External DAM scoring observations from a source-verified structured result explicitly bound by the user to this recording. These remain observations, not a causal or durable skill-change claim.'
+  };
+}
 function f1OutcomeObservation(desc) {
   const st=desc&&desc.evaluationEvidence&&desc.evaluationEvidence.structuredScoringResult||{status:'unavailable'};
   if (st.relationship&&st.relationship.status==='legacy_attachment_candidate_unbound') {
@@ -5803,6 +6472,21 @@ function f1OutcomeObservation(desc) {
       sourceVerification: 'conflict',
       sourceImageSha256: null, userReview: 'unknown', scoringDate: null, overallScore: null, nationalAverage: null, heartBonus: null, ranking: null, metrics: {}, techniques: {}, vibrato: null,
       note: 'Multiple source-verified structured outcomes are attached to recordingId aliases of the same exact raw audio. SongScope does not choose one silently for history analysis.'
+    };
+  }
+  if (st&&st.schemaVersion===STANDALONE_SCORING_RESULT_SCHEMA) {
+    const v2=f1OutcomeFromStandaloneScoringV2(st);
+    if (v2) return v2;
+    return {
+      status:'structured_outcome_not_eligible',
+      sourceVerification:st.verification&&st.verification.status||'unavailable',
+      sourceImageSha256:null,
+      sourceImageSha256s:e3StructuredImageShaList(st),
+      userReview:e3StructuredUserReviewStatus(st),
+      scoringDate:null,overallScore:null,personalBest:null,nationalAverage:null,heartBonus:null,ranking:null,metrics:{},techniques:{},vibrato:null,
+      evidenceSetId:st.relationship&&st.relationship.evidenceSetId||null,
+      eligibility:st.outcomeEligibility||null,
+      note:'A current-schema structured scoring result exists, but it is not eligible as a recording outcome under the current binding/source-review rules.'
     };
   }
   const result = f1VerifiedResult(desc);
@@ -5969,7 +6653,8 @@ function f1FlatNumericOutcome(obs) {
   add('overall_score','総合点',obs.overallScore,'points','overall_external_score','higher_external_outcome_only');
   add('heart_bonus','ハートボーナス',obs.heartBonus,'points','external_score_component','descriptive_only');
   for (const key of Object.keys(obs.metrics||{})) {
-    const x=obs.metrics[key]; add('metric:'+key,x.label||key,x.value,x.unit||null,'external_scoring_metric','metric_specific_not_assumed');
+    const x=obs.metrics[key];
+    add('metric:'+key,x.label||key,x.value,x.unit||null,x.classification||'external_scoring_metric',x.directionality||'metric_specific_not_assumed');
   }
   for (const key of Object.keys(obs.techniques||{})) {
     const x=obs.techniques[key]; add('technique:'+key,x.label||key,x.count,'count','technique_occurrence_count','non_monotonic');
@@ -6638,20 +7323,25 @@ async function exportD2DiagnosticPackage() {
     ];
     for (const pair of [['A',cmp.a],['B',cmp.b]]) {
       const label=pair[0],d=pair[1];
-      const sets=d&&Array.isArray(d.scoringEvidenceCandidates)?d.scoringEvidenceCandidates:[];
+      const ctx=d&&d.scoringEvidenceContext?d.scoringEvidenceContext:{boundSets:[],conflictSets:[],legacyCandidateSets:[],bindingStates:new Map(),assertions:[]};
       files.push({name:`evaluation/${label}_scoring_evidence_relation.json`,data:JSON.stringify(
-        d&&d.rec?recordingScoringEvidenceDescriptor(d.rec,sets):{status:'unavailable'},null,2)});
-      for (const set of sets) {
-        const root=`evaluation/${label}_candidates/${set.evidenceSetId}`;
-        files.push({name:`${root}/evidence_set.json`,data:JSON.stringify(standaloneEvidenceSetPublic(set),null,2)});
+        d&&d.rec?recordingScoringEvidenceDescriptor(d.rec,ctx):{status:'unavailable'},null,2)});
+      const map=new Map();
+      for (const set of [...(ctx.boundSets||[]),...(ctx.conflictSets||[]),...(ctx.legacyCandidateSets||[])]) if(set&&set.evidenceSetId) map.set(set.evidenceSetId,set);
+      for (const set of map.values()) {
+        const bs=ctx.bindingStates instanceof Map?ctx.bindingStates.get(set.evidenceSetId):null;
+        const root=`evaluation/${label}_relations/${set.evidenceSetId}`;
+        files.push({name:`${root}/evidence_set.json`,data:JSON.stringify(standaloneEvidenceSetPublic(set,bs),null,2)});
         const candidate=d&&d.rec?legacyCandidateForRecording(set,d.rec.recordingId):null;
         if (candidate) files.push({name:`${root}/legacy_attachment_candidate.json`,data:JSON.stringify(legacyCandidatePublic(candidate),null,2)});
+        const setAssertions=(ctx.assertions||[]).filter(x=>x&&x.evidenceSetId===set.evidenceSetId).sort((a,b)=>bindingAssertionSortKey(a).localeCompare(bindingAssertionSortKey(b)));
+        files.push({name:`${root}/binding_assertions.json`,data:JSON.stringify({currentState:bs||null,assertions:setAssertions},null,2)});
         for (let i=0;i<(set.images||[]).length;i++) {
           const x=set.images[i];
           if (!x||!x.blob) continue;
           const ab=await x.blob.arrayBuffer();
           const got=(await sha256Hex(ab)).toLowerCase();
-          if (got!==String(x.meta&&x.meta.sha256||'').toLowerCase()) throw new Error(`${label} candidate ${set.evidenceSetId}: image SHA mismatch`);
+          if (got!==String(x.meta&&x.meta.sha256||'').toLowerCase()) throw new Error(`${label} relation ${set.evidenceSetId}: image SHA mismatch`);
           files.push({name:`${root}/images/${String(i+1).padStart(2,'0')}_${x.imageId}${imageExtFromMeta(x.meta)}`,data:new Uint8Array(ab)});
         }
       }
@@ -6896,6 +7586,11 @@ function wireSheets() {
       const review=set&&set.structuredScoringUserReview;
       toast(review&&review.status==='user_confirmed_with_known_gaps'?'確認済み（既知の未抽出あり）':'抽出内容を確認済みにしました');
     } catch(err) { toast((err&&err.message)||'確認状態を保存できませんでした'); }
+  });
+  $('#binding-search').addEventListener('input',e=>{
+    bindingUiState.query=String(e.target.value||'').trim();
+    if (bindingSearchTimer) clearTimeout(bindingSearchTimer);
+    bindingSearchTimer=setTimeout(()=>{ renderBindingSheet().catch(err=>{ console.error(err); toast('Binding候補を更新できませんでした'); }); },180);
   });
   $('#f-recat-confirm').addEventListener('click', confirmRecordedAtInForm);
   $('#f-recdate-confirm').addEventListener('click', confirmRecordedDateInForm);
@@ -7218,7 +7913,7 @@ async function init() {
   state.confMin = settings.minimumConfidence;
   wireHome(); wireSheets(); wireReview(); wireCompare(); wireGlobal();
   $$('.app-ver').forEach(e => e.textContent = APP_VERSION + ' / ' + BUILD_ID);
-  // R1はDB6へupgradeする。upgrade blocked/version mismatchをgeneric errorに落とさず、
+  // build13はDB8へupgradeする。upgrade blocked/version mismatchをgeneric errorに落とさず、
   // 『データを消す』誤対処を誘発しない専用案内にする。
   try { await db(); }
   catch (e) {
