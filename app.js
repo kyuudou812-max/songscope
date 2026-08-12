@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.0';
-const BUILD_ID = '20260812-g0-13';
+const SCHEMA_VERSION = '0.17.1';
+const BUILD_ID = '20260813-g0-14';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -6895,11 +6895,13 @@ function f2DisplayResolution(series) {
   return {step:null,basis:'display resolution not declared for this field',semantic:'unknown'};
 }
 function f2DirectionFromDelta(delta,displayResolution) {
+  // Missing is missing. Never allow Number(null) / Number('') to become an observed zero-delta.
+  if (delta===null || delta===undefined || delta==='') return 'unknown';
   const n=Number(delta);
-  if(!isFinite(n)) return null;
+  if(!Number.isFinite(n)) return 'unknown';
   const step=Number(displayResolution&&displayResolution.step);
   // Only absorb floating-point noise far below one display step. A one-step change remains a real observed display change.
-  const eps=isFinite(step)&&step>0?Math.max(1e-9,step*1e-6):1e-6;
+  const eps=Number.isFinite(step)&&step>0?Math.max(1e-9,step*1e-6):1e-6;
   if(n>eps) return 'higher';
   if(n<-eps) return 'lower';
   return 'same';
@@ -6918,7 +6920,7 @@ function f2LongestDirectionRun(directions) {
   const ds=directions||[];
   for(let i=0;i<ds.length;i++) {
     const d=ds[i];
-    if(!d) { cur=null; continue; }
+    if(d!=='higher'&&d!=='lower'&&d!=='same') { cur=null; continue; }
     if(cur!==d) { cur=d; start=i; }
     const len=i-start+1;
     if(len>best.length) best={direction:d,length:len,startStepIndex:start+1,endStepIndex:i+1};
@@ -6934,7 +6936,8 @@ function f2MetricPattern(series,evidenceVolume) {
   const directions=steps.map(s=>f2DirectionFromDelta(s&&s.deltaLaterMinusEarlier,displayResolution));
   const counts=f2DirectionCounts(directions);
   const longestRun=f2LongestDirectionRun(directions);
-  const completeDirections=directions.length===Math.max(0,points.length-1) && directions.every(Boolean);
+  const completeDirections=directions.length===Math.max(0,points.length-1)
+    && directions.every(d=>d==='higher'||d==='lower'||d==='same');
   const nonSameDirections=directions.filter(d=>d==='higher'||d==='lower');
   const uniqueNonSame=Array.from(new Set(nonSameDirections));
   const allAdjacentDirectionalSame = completeDirections && directions.length>=2 && directions.every(d=>d==='higher'||d==='lower') && uniqueNonSame.length===1;
@@ -6969,15 +6972,21 @@ function f2MetricPattern(series,evidenceVolume) {
     firstValue,lastValue,netDeltaLaterMinusEarlier:netDelta,
     directionCounts:counts,longestSameDirectionRun:longestRun,
     points:points.map(p=>({chronologyIndex:p.chronologyIndex,recordingId:p.recordingId,title:p.title||'',value:p.value})),
-    adjacentSteps:steps.map((x,i)=>({
-      stepIndex:i+1,earlierRecordingId:x.earlierRecordingId,laterRecordingId:x.laterRecordingId,
-      earlier:x.earlier,later:x.later,deltaLaterMinusEarlier:x.deltaLaterMinusEarlier,
-      deltaInDisplaySteps:(displayResolution.step&&isFinite(Number(x.deltaLaterMinusEarlier)))
-        ? +((Number(x.deltaLaterMinusEarlier)/displayResolution.step).toFixed(6)):null,
-      isSmallestNonzeroVisibleChange:(displayResolution.step&&isFinite(Number(x.deltaLaterMinusEarlier)))
-        ? Math.abs(Math.abs(Number(x.deltaLaterMinusEarlier))-displayResolution.step)<=displayResolution.step*1e-6:false,
-      observedDirection:directions[i],scoringConditionComparability:x.scoringConditionComparability
-    })),
+    adjacentSteps:steps.map((x,i)=>{
+      const rawDelta=x&&x.deltaLaterMinusEarlier;
+      const hasNumericDelta=rawDelta!==null&&rawDelta!==undefined&&rawDelta!==''&&Number.isFinite(Number(rawDelta));
+      const numericDelta=hasNumericDelta?Number(rawDelta):null;
+      const hasResolution=Number.isFinite(Number(displayResolution.step))&&Number(displayResolution.step)>0;
+      return {
+        stepIndex:i+1,earlierRecordingId:x.earlierRecordingId,laterRecordingId:x.laterRecordingId,
+        earlier:x.earlier,later:x.later,deltaLaterMinusEarlier:hasNumericDelta?numericDelta:null,
+        deltaInDisplaySteps:hasNumericDelta&&hasResolution
+          ? +((numericDelta/Number(displayResolution.step)).toFixed(6)):null,
+        isSmallestNonzeroVisibleChange:hasNumericDelta&&hasResolution
+          ? Math.abs(Math.abs(numericDelta)-Number(displayResolution.step))<=Number(displayResolution.step)*1e-6:false,
+        observedDirection:directions[i],scoringConditionComparability:x.scoringConditionComparability
+      };
+    }),
     interpretation: directionality==='non_monotonic'
       ? 'Descriptive sequence only. More or less of this technique quantity is not automatically better or worse.'
       : directionality==='descriptive_only'
@@ -7036,7 +7045,7 @@ function f2BuildPatternEvidence(historyPkg) {
     interpretation:x.interpretation
   })) : [];
   return {
-    schemaVersion:'songscope-observed-direction-history-0.4.0',
+    schemaVersion:'songscope-observed-direction-history-0.5.0',
     packageType:'same_song_observed_take_direction_history',
     generatedAt:nowIso(),appVersion:APP_VERSION,buildId:BUILD_ID,
     song:{
@@ -7092,6 +7101,7 @@ function f2BuildPatternEvidence(historyPkg) {
     interpretationGuardrails:[
       'R2 summarizes only SongScope-observed/imported physical recordings; missing real-world karaoke takes may exist between observations. R2 carries forward both explicit missing-take signals and not-assessable completeness states. not_assessable is never treated as no_missing_take_signal.',
       'Display resolution is measurement/display granularity only. A one-step visible score change is an observation, not a threshold for meaningful skill change.',
+      'A missing metric or missing adjacent-step delta is unknown, never zero and never same-direction evidence.',
       'Two observed recordings are never described as a cross-step directional history. At least three observed takes are required.',
       'A same non-zero direction across observed adjacent steps is a descriptive compression only; it is not called a trend or signal and has no statistical-significance claim.',
       'All-same values are not promoted as directional evidence.',
@@ -7104,12 +7114,12 @@ function f2BuildPatternEvidence(historyPkg) {
   };
 }
 function f2PatternSeriesCsv(pkg) {
-  const head=['metric_key','label','unit','classification','directionality','display_resolution_step','display_resolution_basis','status','evidence_volume','consistent_observed_direction','eligible_for_directional_summary','physical_recording_count','adjacent_step_count','first_value','last_value','net_delta_later_minus_earlier','higher_step_count','lower_step_count','same_step_count','longest_run_direction','longest_run_length'];
+  const head=['metric_key','label','unit','classification','directionality','display_resolution_step','display_resolution_basis','status','evidence_volume','consistent_observed_direction','eligible_for_directional_summary','physical_recording_count','adjacent_step_count','first_value','last_value','net_delta_later_minus_earlier','higher_step_count','lower_step_count','same_step_count','unknown_step_count','longest_run_direction','longest_run_length'];
   const rows=[head.join(',')];
   for(const x of (pkg&&pkg.metricPatterns)||[]) {
     const c=x.directionCounts||{}, r=x.longestSameDirectionRun||{};
     const dr=x.displayResolution||{};
-    const vals=[x.key,x.label,x.unit||'',x.classification||'',x.directionality||'',dr.step??'',dr.basis||'',x.status||'',x.evidenceVolume||'',x.consistentObservedDirection||'',x.eligibleForDirectionalSummary?'true':'false',x.physicalRecordingCount,x.adjacentStepCount,x.firstValue,x.lastValue,x.netDeltaLaterMinusEarlier,c.higher||0,c.lower||0,c.same||0,r.direction||'',r.length||0];
+    const vals=[x.key,x.label,x.unit||'',x.classification||'',x.directionality||'',dr.step??'',dr.basis||'',x.status||'',x.evidenceVolume||'',x.consistentObservedDirection||'',x.eligibleForDirectionalSummary?'true':'false',x.physicalRecordingCount,x.adjacentStepCount,x.firstValue,x.lastValue,x.netDeltaLaterMinusEarlier,c.higher||0,c.lower||0,c.same||0,c.unknown||0,r.direction||'',r.length||0];
     rows.push(vals.map(v=>v===null||v===undefined?'':csvEscape(v)).join(','));
   }
   return rows.join('\n');

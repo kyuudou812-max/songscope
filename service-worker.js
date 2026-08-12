@@ -2,8 +2,8 @@
  * IndexedDBの証拠データは扱わない。アプリ資産のoffline fallbackのみ担当する。
  * install時にskipWaitingしない: 実行中ページと新workerのversion skewを避ける。
  */
-const CACHE = 'songscope-v0.2.0-g0-20260812-g0-13';
-const BUILD_ID = '20260812-g0-13';
+const CACHE = 'songscope-v0.2.0-g0-20260813-g0-14';
+const BUILD_ID = '20260813-g0-14';
 const SHELL = [
   './',
   './index.html',

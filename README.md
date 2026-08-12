@@ -758,3 +758,14 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - F1/R2は、`dam_denmoku` + current schema + source_verified + user review + explicit Bindingが全部成立したstructured resultだけを録音Outcomeとして扱う。
 - structured scoring result v2の音程/表現力/抑揚/聴感、ロングトーン/ビブラート上手さ/安定性の離散表示、リズム位置、技法回数、ビブラートをObserved Historyへ変換可能にした。リズム位置・技法量・ビブラート量はnon-monotonicのまま。
 - Performance entity / performanceId永続storeはまだ作らない。
+
+
+## G0 build14 — R2 missing-delta semantics
+- `f2DirectionFromDelta`で`null / undefined / empty string / non-numeric`を明示的に`unknown`へ分類。
+- JavaScriptの`Number(null) === 0`による「未観測 → same」の誤変換を禁止。
+- missing deltaでは`deltaInDisplaySteps = null`、`isSmallestNonzeroVisibleChange = false`。
+- `directionCounts.unknown`へ集計し、`same`へは加算しない。
+- `unknown`はcomplete adjacent directionとして扱わず、longest direction runにも含めない。
+- `pattern_series.csv`へ`unknown_step_count`列を追加。
+- R2 schemaを`songscope-observed-direction-history-0.5.0`へ更新。
+- Binding Assertion設計・DB schema・scoring evidence semanticsは変更なし。
