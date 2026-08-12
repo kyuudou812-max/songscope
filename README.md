@@ -791,3 +791,11 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - audit detailsではevidenceSet / SHA / source verification / Binding assertion等を引き続き保持。
 - 開発中の外部AI抽出だけは「ChatGPTに渡すファイルを作る → 読み取り結果を戻す」という暫定導線。
 - 録音フォームはファイル名を初期曲名として自動入力し、詳細条件は折りたたみ。今後はscoring evidenceから安全に補完できるメタデータをさらに手入力から外す。
+
+
+## G0 build17 — iPhone Safari sheet scroll stability
+- build09で導入した`visualViewport.offsetTop/offsetLeft`追従を停止。
+- Safariのアドレスバー/ツールバー伸縮に伴うVisualViewport scrollイベントで、上スワイプ時にmodal sheet全体が下へ移動する不具合を修正。
+- modal geometryは`100dvh`へ一本化し、fixed wrapperを`inset:0`へ固定。
+- sheet内部へ`overscroll-behavior: contain`、wrapperへ`overscroll-behavior: none`を追加し、nested scrollのbackground/browser側への連鎖を抑制。
+- sticky header / raw evidence review / Binding / daily session intakeのデータモデルと意味論は変更なし。

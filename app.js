@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.3';
-const BUILD_ID = '20260813-g0-16';
+const SCHEMA_VERSION = '0.17.4';
+const BUILD_ID = '20260813-g0-17';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -431,20 +431,17 @@ async function refreshStorageEstimate() {
 
 /* ---------------- シート制御 ---------------- */
 function syncSongScopeVisualViewport() {
+  // build17:
+  // Do NOT translate fixed sheets with visualViewport.offsetTop/offsetLeft.
+  // On iPhone Safari those offsets change while browser chrome expands/collapses,
+  // which made an upward swipe visibly push the whole sheet downward.
+  // CSS 100dvh owns sheet geometry; this function remains for call-site compatibility only.
   const root=document.documentElement;
-  const vv=window.visualViewport;
   if (!root) return;
-  if (vv) {
-    root.style.setProperty('--songscope-vv-top', `${Math.max(0,Number(vv.offsetTop)||0)}px`);
-    root.style.setProperty('--songscope-vv-left', `${Math.max(0,Number(vv.offsetLeft)||0)}px`);
-    root.style.setProperty('--songscope-vv-height', `${Math.max(1,Number(vv.height)||window.innerHeight||1)}px`);
-    root.style.setProperty('--songscope-vv-width', `${Math.max(1,Number(vv.width)||window.innerWidth||1)}px`);
-  } else {
-    root.style.setProperty('--songscope-vv-top','0px');
-    root.style.setProperty('--songscope-vv-left','0px');
-    root.style.setProperty('--songscope-vv-height', `${Math.max(1,window.innerHeight||1)}px`);
-    root.style.setProperty('--songscope-vv-width', `${Math.max(1,window.innerWidth||1)}px`);
-  }
+  root.style.setProperty('--songscope-vv-top','0px');
+  root.style.setProperty('--songscope-vv-left','0px');
+  root.style.setProperty('--songscope-vv-height','100dvh');
+  root.style.setProperty('--songscope-vv-width','100vw');
 }
 function openSheet(id) {
   syncSongScopeVisualViewport();
@@ -8029,10 +8026,6 @@ async function init() {
 document.addEventListener('DOMContentLoaded', init);
 
 
-// build09: keep modal sheets inside Safari's actually visible viewport as browser chrome changes.
+// build17: CSS dynamic viewport units own modal geometry.
+// In particular, never follow visualViewport scroll/offset changes on iPhone Safari.
 syncSongScopeVisualViewport();
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', syncSongScopeVisualViewport, {passive:true});
-  window.visualViewport.addEventListener('scroll', syncSongScopeVisualViewport, {passive:true});
-}
-window.addEventListener('resize', syncSongScopeVisualViewport, {passive:true});

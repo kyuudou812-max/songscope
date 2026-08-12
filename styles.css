@@ -678,3 +678,35 @@ input[type=range]::-webkit-slider-thumb{
     height:28px;
   }
 }
+
+
+/* G0 build17 — iPhone Safari modal scroll stability
+   Fixed sheets must not track visualViewport.offsetTop while Safari chrome animates. */
+.sheet-wrap{
+  inset:0 !important;
+  top:0 !important;
+  left:0 !important;
+  right:0 !important;
+  bottom:0 !important;
+  width:100% !important;
+  height:100dvh !important;
+  overscroll-behavior:none;
+}
+.sheet{
+  max-height:min(88dvh, calc(100dvh - 12px)) !important;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+  touch-action:pan-y;
+}
+#sheet-scoring-review,
+#sheet-binding,
+#sheet-session-import{
+  max-height:calc(100dvh - 12px) !important;
+}
+@supports not (height:100dvh){
+  .sheet-wrap{height:100vh !important;}
+  .sheet{max-height:min(88vh, calc(100vh - 12px)) !important;}
+  #sheet-scoring-review,
+  #sheet-binding,
+  #sheet-session-import{max-height:calc(100vh - 12px) !important;}
+}
