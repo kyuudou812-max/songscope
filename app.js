@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.9';
-const BUILD_ID = '20260814-g0-22';
+const SCHEMA_VERSION = '0.18.0';
+const BUILD_ID = '20260814-g0-23';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -433,14 +433,69 @@ async function refreshStorageEstimate() {
 let songScopeSheetPageScrollY=0;
 let songScopeSheetKeyboardActive=false;
 let songScopeSheetViewportTimer=null;
+let songScopeSheetOpenViewportHeight=0;
+let songScopeSheetFocusedControl=null;
 
 function songScopeVisibleViewportHeight() {
   const vv=window.visualViewport;
   const h=vv&&Number(vv.height);
   return Math.max(1,Math.floor(Number.isFinite(h)&&h>0?h:(window.innerHeight||1)));
 }
-function applySongScopeSheetViewportHeight() {
-  document.documentElement.style.setProperty('--songscope-sheet-vh',`${songScopeVisibleViewportHeight()}px`);
+function applySongScopeSheetViewportHeight(heightOverride) {
+  const h=Math.max(1,Math.floor(Number(heightOverride)||songScopeVisibleViewportHeight()));
+  document.documentElement.style.setProperty('--songscope-sheet-vh',`${h}px`);
+}
+function freezeSongScopeSheetViewportHeight() {
+  songScopeSheetOpenViewportHeight=songScopeVisibleViewportHeight();
+  applySongScopeSheetViewportHeight(songScopeSheetOpenViewportHeight);
+  document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
+}
+function songScopeCurrentVisualViewportRect() {
+  const vv=window.visualViewport;
+  if (!vv) return {top:0,bottom:window.innerHeight||songScopeSheetOpenViewportHeight||1,height:window.innerHeight||1};
+  const top=Math.max(0,Number(vv.offsetTop)||0);
+  const height=Math.max(1,Number(vv.height)||window.innerHeight||1);
+  return {top,bottom:top+height,height};
+}
+function updateSongScopeKeyboardInset() {
+  const vv=songScopeCurrentVisualViewportRect();
+  const base=Math.max(1,songScopeSheetOpenViewportHeight||songScopeVisibleViewportHeight());
+  const inset=Math.max(0,Math.round(base-vv.height));
+  document.documentElement.style.setProperty('--songscope-keyboard-inset',`${inset}px`);
+  return inset;
+}
+function ensureSongScopeFocusedControlVisible(target) {
+  const sheet=activeSongScopeSheet();
+  if (!sheet||!target||!sheet.contains(target)) return;
+  const vv=songScopeCurrentVisualViewportRect();
+  const sheetRect=sheet.getBoundingClientRect();
+  const targetRect=target.getBoundingClientRect();
+  const head=sheet.querySelector('.sheet-head');
+  const headRect=head?head.getBoundingClientRect():null;
+  const margin=16;
+  const visibleTop=Math.max(
+    sheetRect.top,
+    vv.top,
+    headRect?headRect.bottom:sheetRect.top
+  )+margin;
+  const visibleBottom=Math.min(sheetRect.bottom,vv.bottom)-margin;
+  if (!(visibleBottom>visibleTop)) return;
+
+  let delta=0;
+  if (targetRect.bottom>visibleBottom) delta=targetRect.bottom-visibleBottom;
+  else if (targetRect.top<visibleTop) delta=targetRect.top-visibleTop;
+
+  if (Math.abs(delta)>0.5) {
+    sheet.scrollTop=Math.max(0,sheet.scrollTop+delta);
+  }
+}
+function scheduleSongScopeFocusedControlVisibility(target) {
+  if (songScopeSheetViewportTimer) clearTimeout(songScopeSheetViewportTimer);
+  songScopeSheetViewportTimer=setTimeout(()=>{
+    songScopeSheetViewportTimer=null;
+    if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
+    ensureSongScopeFocusedControlVisible(target||songScopeSheetFocusedControl||document.activeElement);
+  },160);
 }
 function songScopeSheetIsOpen() {
   const wrap=$('#sheet-wrap');
@@ -474,8 +529,9 @@ function unlockPageForSheet() {
 function openSheet(id) {
   // Freeze the currently visible viewport height at open. Normal Safari toolbar
   // expansion/collapse while scrolling must not reposition or resize the sheet.
-  applySongScopeSheetViewportHeight();
+  freezeSongScopeSheetViewportHeight();
   songScopeSheetKeyboardActive=false;
+  songScopeSheetFocusedControl=null;
   lockPageForSheet();
   $('#sheet-wrap').hidden=false;
   $$('.sheet').forEach(s=>{
@@ -490,6 +546,9 @@ function closeSheet() {
   $('#sheet-wrap').hidden=true;
   $$('.sheet').forEach(s=>{s.hidden=true;});
   songScopeSheetKeyboardActive=false;
+  songScopeSheetFocusedControl=null;
+  songScopeSheetOpenViewportHeight=0;
+  document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
   if (songScopeSheetViewportTimer) {
     clearTimeout(songScopeSheetViewportTimer);
     songScopeSheetViewportTimer=null;
@@ -501,30 +560,43 @@ function closeSheet() {
 function handleSongScopeSheetFocusIn(e) {
   if (!songScopeSheetIsOpen()||!elementIsInsideActiveSheet(e.target)) return;
   const tag=String(e.target&&e.target.tagName||'').toLowerCase();
-  const editable=tag==='input'||tag==='textarea'||tag==='select'||e.target&&e.target.isContentEditable;
+  const editable=tag==='input'||tag==='textarea'||tag==='select'||(e.target&&e.target.isContentEditable);
   if (!editable) return;
   songScopeSheetKeyboardActive=true;
-  // visualViewport resize will follow when the keyboard appears.
+  songScopeSheetFocusedControl=e.target;
+  // Do not resize/reposition the sheet. Wait for Safari's keyboard viewport resize,
+  // then scroll only the active sheet enough to reveal the focused control.
+  scheduleSongScopeFocusedControlVisibility(e.target);
 }
 function handleSongScopeSheetFocusOut() {
   if (!songScopeSheetIsOpen()) return;
   if (songScopeSheetViewportTimer) clearTimeout(songScopeSheetViewportTimer);
   songScopeSheetViewportTimer=setTimeout(()=>{
-    if (elementIsInsideActiveSheet(document.activeElement)) return;
+    songScopeSheetViewportTimer=null;
+    if (elementIsInsideActiveSheet(document.activeElement)) {
+      songScopeSheetFocusedControl=document.activeElement;
+      return;
+    }
     songScopeSheetKeyboardActive=false;
-    // Re-freeze after the keyboard has settled.
-    applySongScopeSheetViewportHeight();
+    songScopeSheetFocusedControl=null;
+    document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
+    // Sheet geometry remains the original frozen open height.
   },450);
 }
 function handleSongScopeVisualViewportResize() {
   if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
-  // Resize only for an active form control (software keyboard). Normal browser
-  // chrome changes while swiping are deliberately ignored.
-  applySongScopeSheetViewportHeight();
+  // Keyboard changes the visual viewport on iPhone Safari. Keep modal geometry frozen;
+  // only reserve the occluded bottom area and reveal the focused control by internal scroll.
+  updateSongScopeKeyboardInset();
+  scheduleSongScopeFocusedControlVisibility(songScopeSheetFocusedControl||document.activeElement);
 }
 function handleSongScopeOrientationChange() {
   if (!songScopeSheetIsOpen()) return;
-  setTimeout(()=>applySongScopeSheetViewportHeight(),450);
+  setTimeout(()=>{
+    // Never capture keyboard-shortened height as the modal's new base height.
+    if (songScopeSheetKeyboardActive) return;
+    freezeSongScopeSheetViewportHeight();
+  },450);
 }
 function busy(title, msg, pct) {
   $('#busy-title').textContent = title;

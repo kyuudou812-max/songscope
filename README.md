@@ -849,3 +849,15 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - `.sheet-head`のz-indexを20へ統一し、左右padding領域まで背景を覆うpseudo-elementを追加。
 - scroll、viewport freeze、keyboard、background lockのbuild21 canonical platformは変更なし。
 - データモデル/Binding/evidence/daily workflowは変更なし。
+
+
+## G0 build23 — Keyboard Platform Stabilization
+- build22実機UI-P07で、input focus時にmodal sheet自体が下へ落ちる/入力欄がkeyboard裏へ隠れることを確認。
+- 原因: keyboard出現時の`visualViewport.resize`で`--songscope-sheet-vh`をkeyboard後の小さいheightへ更新し、bottom-anchored sheet geometryそのものを縮めていた。
+- sheet heightはopen時のvisible viewport heightでfreezeし、keyboard中は一切変更しない。
+- keyboard中の`visualViewport.height/offsetTop`は「現在見えている範囲の計算」にだけ利用。sheet位置決定には利用しない。
+- focused controlがkeyboardに隠れる場合は、active `.sheet`の`scrollTop`だけを必要量調整。
+- `--songscope-keyboard-inset`はscroll-padding/scroll-margin用途だけに使用。
+- focusout後もsheet geometryはopen時のfreeze値を維持。
+- orientation changeはkeyboard非表示時だけviewport base heightを再取得。
+- データモデル/Binding/evidence/daily workflowは変更なし。

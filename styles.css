@@ -226,6 +226,7 @@ input[type=range]::-webkit-slider-thumb{
    JS freezes visible viewport height while the sheet is open; only keyboard/orientation may update it. */
 :root{
   --songscope-sheet-vh:100svh;
+  --songscope-keyboard-inset:0px;
 }
 @supports not (height:100svh){
   :root{--songscope-sheet-vh:100vh;}
@@ -706,4 +707,18 @@ body.songscope-sheet-open{
   bottom:0;
   z-index:-1;
   background:var(--bg);
+}
+
+
+/* G0 build23 — keyboard visibility invariant
+   Keyboard must never resize/reposition the sheet. It only increases internal
+   scroll reserve so the focused field can be brought above the keyboard. */
+.sheet{
+  scroll-padding-bottom:calc(var(--songscope-keyboard-inset) + 24px);
+}
+.sheet input,
+.sheet textarea,
+.sheet select{
+  scroll-margin-top:88px;
+  scroll-margin-bottom:calc(var(--songscope-keyboard-inset) + 24px);
 }
