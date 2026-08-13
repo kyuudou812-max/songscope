@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.5';
-const BUILD_ID = '20260814-g0-18';
+const SCHEMA_VERSION = '0.17.6';
+const BUILD_ID = '20260814-g0-19';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -431,19 +431,15 @@ async function refreshStorageEstimate() {
 
 /* ---------------- シート制御 ---------------- */
 let songScopeSheetPageScrollY=0;
-let songScopeSheetLastTouchY=null;
 
 function syncSongScopeVisualViewport() {
-  // build18:
-  // Use ONLY the currently visible viewport HEIGHT. Never apply offsetTop/offsetLeft.
-  // This keeps the sheet tall enough to scroll internally without following Safari chrome motion.
+  // build19:
+  // Height only. Never offset the sheet with Safari's visualViewport position.
   const root=document.documentElement;
   if (!root) return;
   const vv=window.visualViewport;
   const h=Math.max(1,Math.floor(vv&&Number(vv.height)||window.innerHeight||1));
   const w=Math.max(1,Math.floor(vv&&Number(vv.width)||window.innerWidth||1));
-  root.style.setProperty('--songscope-vv-top','0px');
-  root.style.setProperty('--songscope-vv-left','0px');
   root.style.setProperty('--songscope-vv-height',`${h}px`);
   root.style.setProperty('--songscope-vv-width',`${w}px`);
 }
@@ -464,33 +460,6 @@ function unlockPageForSheet() {
   const y=songScopeSheetPageScrollY;
   songScopeSheetPageScrollY=0;
   window.scrollTo(0,y);
-}
-
-function activeSongScopeSheet() {
-  return Array.from(document.querySelectorAll('.sheet')).find(s=>!s.hidden)||null;
-}
-
-function onSongScopeSheetTouchStart(e) {
-  const t=e.touches&&e.touches[0];
-  songScopeSheetLastTouchY=t?Number(t.clientY):null;
-}
-
-function onSongScopeSheetTouchMove(e) {
-  const sheet=activeSongScopeSheet();
-  const t=e.touches&&e.touches[0];
-  if (!sheet||!t||songScopeSheetLastTouchY===null) return;
-  const y=Number(t.clientY);
-  const dy=y-songScopeSheetLastTouchY;
-  songScopeSheetLastTouchY=y;
-  const max=Math.max(0,sheet.scrollHeight-sheet.clientHeight);
-  const atTop=sheet.scrollTop<=0.5;
-  const atBottom=sheet.scrollTop>=max-0.5;
-  // Block only boundary overscroll. Normal upward/downward scrolling inside the sheet remains native.
-  if ((atTop&&dy>0)||(atBottom&&dy<0)) e.preventDefault();
-}
-
-function onSongScopeSheetTouchEnd() {
-  songScopeSheetLastTouchY=null;
 }
 
 function openSheet(id) {
@@ -8095,10 +8064,3 @@ window.addEventListener('resize',()=>{
   syncSongScopeVisualViewport();
 },{passive:true});
 
-const songScopeSheetWrap=document.getElementById('sheet-wrap');
-if (songScopeSheetWrap) {
-  songScopeSheetWrap.addEventListener('touchstart',onSongScopeSheetTouchStart,{passive:true});
-  songScopeSheetWrap.addEventListener('touchmove',onSongScopeSheetTouchMove,{passive:false});
-  songScopeSheetWrap.addEventListener('touchend',onSongScopeSheetTouchEnd,{passive:true});
-  songScopeSheetWrap.addEventListener('touchcancel',onSongScopeSheetTouchEnd,{passive:true});
-}

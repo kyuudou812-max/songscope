@@ -809,3 +809,12 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - touch boundary guardを追加し、sheet先頭から下へ引く/末尾からさらに上へ引くoverscrollだけpreventDefault。通常の縦scrollはnativeのまま。
 - Safari pull-to-refreshへgestureが漏れないことを目的とする。
 - データモデル・Binding・evidence semantics・daily workflowは変更なし。
+
+
+## G0 build19 — Native sheet scrolling
+- build18のtouch boundary guardを撤去。Safariの`touchmove`をJavaScriptでpreventDefaultしない。
+- 背面documentのscroll lockだけを維持し、modal sheet内部はiOS Safari標準のnative scrollへ戻す。
+- sheetを`visualViewport.height - 12px`の固定client heightにして、contentが長い場合に必ず`scrollHeight > clientHeight`となる構造へ変更。
+- `overflow-y: scroll` / `-webkit-overflow-scrolling: touch`を明示。
+- visualViewportはheight/widthのみ利用し、offsetTop/offsetLeftは使用しない。
+- データモデル・daily workflow・Binding/evidence semanticsは変更なし。

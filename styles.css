@@ -751,3 +751,34 @@ body.songscope-sheet-open{
 #sheet-session-import{
   max-height:calc(var(--songscope-vv-height) - 12px) !important;
 }
+
+
+/* G0 build19 — native iPhone Safari sheet scrolling
+   Keep the background locked, but do not intercept touchmove inside the sheet. */
+.sheet-wrap{
+  position:fixed !important;
+  inset:0 !important;
+  width:100% !important;
+  height:var(--songscope-vv-height) !important;
+  overflow:hidden !important;
+  display:flex !important;
+  align-items:flex-end !important;
+}
+.sheet{
+  box-sizing:border-box !important;
+  width:100% !important;
+  height:calc(var(--songscope-vv-height) - 12px) !important;
+  max-height:none !important;
+  min-height:0 !important;
+  overflow-y:scroll !important;
+  overflow-x:hidden !important;
+  -webkit-overflow-scrolling:touch !important;
+  touch-action:auto !important;
+  overscroll-behavior-y:contain;
+}
+#sheet-scoring-review,
+#sheet-binding,
+#sheet-session-import{
+  height:calc(var(--songscope-vv-height) - 12px) !important;
+  max-height:none !important;
+}
