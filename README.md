@@ -799,3 +799,13 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - modal geometryは`100dvh`へ一本化し、fixed wrapperを`inset:0`へ固定。
 - sheet内部へ`overscroll-behavior: contain`、wrapperへ`overscroll-behavior: none`を追加し、nested scrollのbackground/browser側への連鎖を抑制。
 - sticky header / raw evidence review / Binding / daily session intakeのデータモデルと意味論は変更なし。
+
+
+## G0 build18 — Safari internal sheet scrolling
+- build17でsheet位置暴走は停止したが、`100dvh`固定だけではSafari実表示領域と合わず、sheet内部がscrollせずgestureがrootへ漏れてpull-to-refreshになる実機症状を修正。
+- `visualViewport`は`height/width`だけ使用。`offsetTop/offsetLeft`は引き続き一切使用しない。
+- sheet open中は背面documentをposition fixedでscroll lockし、close時に元scroll位置へ復帰。
+- sheet wrapperをvisible viewport heightへ合わせ、sheet本体だけ`overflow-y:auto`でscroll。
+- touch boundary guardを追加し、sheet先頭から下へ引く/末尾からさらに上へ引くoverscrollだけpreventDefault。通常の縦scrollはnativeのまま。
+- Safari pull-to-refreshへgestureが漏れないことを目的とする。
+- データモデル・Binding・evidence semantics・daily workflowは変更なし。

@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.4';
-const BUILD_ID = '20260813-g0-17';
+const SCHEMA_VERSION = '0.17.5';
+const BUILD_ID = '20260814-g0-18';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -430,27 +430,82 @@ async function refreshStorageEstimate() {
 }
 
 /* ---------------- シート制御 ---------------- */
+let songScopeSheetPageScrollY=0;
+let songScopeSheetLastTouchY=null;
+
 function syncSongScopeVisualViewport() {
-  // build17:
-  // Do NOT translate fixed sheets with visualViewport.offsetTop/offsetLeft.
-  // On iPhone Safari those offsets change while browser chrome expands/collapses,
-  // which made an upward swipe visibly push the whole sheet downward.
-  // CSS 100dvh owns sheet geometry; this function remains for call-site compatibility only.
+  // build18:
+  // Use ONLY the currently visible viewport HEIGHT. Never apply offsetTop/offsetLeft.
+  // This keeps the sheet tall enough to scroll internally without following Safari chrome motion.
   const root=document.documentElement;
   if (!root) return;
+  const vv=window.visualViewport;
+  const h=Math.max(1,Math.floor(vv&&Number(vv.height)||window.innerHeight||1));
+  const w=Math.max(1,Math.floor(vv&&Number(vv.width)||window.innerWidth||1));
   root.style.setProperty('--songscope-vv-top','0px');
   root.style.setProperty('--songscope-vv-left','0px');
-  root.style.setProperty('--songscope-vv-height','100dvh');
-  root.style.setProperty('--songscope-vv-width','100vw');
+  root.style.setProperty('--songscope-vv-height',`${h}px`);
+  root.style.setProperty('--songscope-vv-width',`${w}px`);
 }
+
+function lockPageForSheet() {
+  if (document.documentElement.classList.contains('songscope-sheet-open')) return;
+  songScopeSheetPageScrollY=window.scrollY||window.pageYOffset||0;
+  document.documentElement.classList.add('songscope-sheet-open');
+  document.body.classList.add('songscope-sheet-open');
+  document.body.style.top=`-${songScopeSheetPageScrollY}px`;
+}
+
+function unlockPageForSheet() {
+  if (!document.documentElement.classList.contains('songscope-sheet-open')) return;
+  document.documentElement.classList.remove('songscope-sheet-open');
+  document.body.classList.remove('songscope-sheet-open');
+  document.body.style.top='';
+  const y=songScopeSheetPageScrollY;
+  songScopeSheetPageScrollY=0;
+  window.scrollTo(0,y);
+}
+
+function activeSongScopeSheet() {
+  return Array.from(document.querySelectorAll('.sheet')).find(s=>!s.hidden)||null;
+}
+
+function onSongScopeSheetTouchStart(e) {
+  const t=e.touches&&e.touches[0];
+  songScopeSheetLastTouchY=t?Number(t.clientY):null;
+}
+
+function onSongScopeSheetTouchMove(e) {
+  const sheet=activeSongScopeSheet();
+  const t=e.touches&&e.touches[0];
+  if (!sheet||!t||songScopeSheetLastTouchY===null) return;
+  const y=Number(t.clientY);
+  const dy=y-songScopeSheetLastTouchY;
+  songScopeSheetLastTouchY=y;
+  const max=Math.max(0,sheet.scrollHeight-sheet.clientHeight);
+  const atTop=sheet.scrollTop<=0.5;
+  const atBottom=sheet.scrollTop>=max-0.5;
+  // Block only boundary overscroll. Normal upward/downward scrolling inside the sheet remains native.
+  if ((atTop&&dy>0)||(atBottom&&dy<0)) e.preventDefault();
+}
+
+function onSongScopeSheetTouchEnd() {
+  songScopeSheetLastTouchY=null;
+}
+
 function openSheet(id) {
   syncSongScopeVisualViewport();
-  $('#sheet-wrap').hidden = false;
-  $$('.sheet').forEach(s => { s.hidden = s.id !== id; });
+  lockPageForSheet();
+  $('#sheet-wrap').hidden=false;
+  $$('.sheet').forEach(s=>{
+    s.hidden=s.id!==id;
+    if (!s.hidden) s.scrollTop=0;
+  });
 }
 function closeSheet() {
-  $('#sheet-wrap').hidden = true;
-  $$('.sheet').forEach(s => { s.hidden = true; });
+  $('#sheet-wrap').hidden=true;
+  $$('.sheet').forEach(s=>{s.hidden=true;});
+  unlockPageForSheet();
   if (typeof clearStandaloneReviewImageUrls === 'function') clearStandaloneReviewImageUrls();
 }
 function busy(title, msg, pct) {
@@ -8026,6 +8081,24 @@ async function init() {
 document.addEventListener('DOMContentLoaded', init);
 
 
-// build17: CSS dynamic viewport units own modal geometry.
-// In particular, never follow visualViewport scroll/offset changes on iPhone Safari.
+// build18: visible viewport HEIGHT may change as Safari chrome expands/collapses.
+// Updating height is safe; position is never derived from visualViewport offsets.
 syncSongScopeVisualViewport();
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize',()=>{
+    if (!$('#sheet-wrap') || $('#sheet-wrap').hidden) return;
+    syncSongScopeVisualViewport();
+  },{passive:true});
+}
+window.addEventListener('resize',()=>{
+  if (!$('#sheet-wrap') || $('#sheet-wrap').hidden) return;
+  syncSongScopeVisualViewport();
+},{passive:true});
+
+const songScopeSheetWrap=document.getElementById('sheet-wrap');
+if (songScopeSheetWrap) {
+  songScopeSheetWrap.addEventListener('touchstart',onSongScopeSheetTouchStart,{passive:true});
+  songScopeSheetWrap.addEventListener('touchmove',onSongScopeSheetTouchMove,{passive:false});
+  songScopeSheetWrap.addEventListener('touchend',onSongScopeSheetTouchEnd,{passive:true});
+  songScopeSheetWrap.addEventListener('touchcancel',onSongScopeSheetTouchEnd,{passive:true});
+}
