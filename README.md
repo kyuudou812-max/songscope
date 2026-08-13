@@ -910,3 +910,15 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - 設定sheetに一時的な「UI診断 build27」detailsを追加し、reset/export JSONを提供。
 - このログにより「SongScope配置後にSafariがsheet.scrollTopを再変更しているか」「visualViewport eventなしのlate scrollがあるか」を判定する。
 - データモデル/Binding/evidence/daily workflowは変更なし。
+
+
+## G0 build28 — Keyboard whole-form reachability
+- build27実機診断で、`frameSizeMs=40`へfocusした際にdynamic reserveが0へ戻り、sheetの`scrollHeight`が1254→974へ縮小した結果、`minimumConfidence`まで手動scrollしてtapできないことを確認。
+- 診断ではkeyboard安定時にbase visible height約641px、keyboard時usable height約280px、sheet clientHeight約633pxを観測。reserve消失時のmax scrollは`974-633=341px`で、下部fieldへ到達不能だった。
+- build28では「focused fieldだけを見せる」モデルを廃止。
+- keyboard表示中は、active sheet全体に`baseHeight - stableUsableHeight`のglobal reach reserveを維持する。focused fieldを切り替えてもreserveを消さない。
+- Safariが一時的に`visualViewport.height=103px`のような過渡値を返しても、`max(visualViewport.height, window.innerHeight)`からusable heightを求め、過大reserveを作らない。
+- focused controlは既に見えていれば動かさない。隠れている場合だけ最小deltaで内部scrollする。focusごとの決定論的snap配置は廃止。
+- user manual scrollを優先し、keyboard中でも`frameSizeMs → minimumConfidence → preset → 保存`まで自由に移動できることを新UI-P07不変条件とする。
+- build27の一時UI診断panel/event loggerは削除。
+- data model / Binding / evidence / daily workflowは変更なし。

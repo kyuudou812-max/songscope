@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.18.4';
-const BUILD_ID = '20260814-g0-27';
+const SCHEMA_VERSION = '0.18.5';
+const BUILD_ID = '20260814-g0-28';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -437,18 +437,6 @@ let songScopeSheetOpenViewportHeight=0;
 let songScopeSheetFocusedControl=null;
 let songScopeKeyboardSettleToken=0;
 
-/* build27 temporary UI-P07 diagnostics.
-   Observation only: these logs must not alter sheet geometry or scroll behavior. */
-const songScopeUiDiag={
-  enabled:true,
-  startedAt:new Date().toISOString(),
-  startedPerf:(typeof performance!=='undefined'&&performance.now)?performance.now():0,
-  seq:0,
-  events:[],
-  maxEvents:2500,
-  delayedSnapshotToken:0
-};
-
 function songScopeVisibleViewportHeight() {
   const vv=window.visualViewport;
   const h=vv&&Number(vv.height);
@@ -458,127 +446,6 @@ function applySongScopeSheetViewportHeight(heightOverride) {
   const h=Math.max(1,Math.floor(Number(heightOverride)||songScopeVisibleViewportHeight()));
   document.documentElement.style.setProperty('--songscope-sheet-vh',`${h}px`);
 }
-
-function songScopeUiDiagRect(el) {
-  if (!el || typeof el.getBoundingClientRect!=='function') return null;
-  const r=el.getBoundingClientRect();
-  const n=v=>Number.isFinite(Number(v))?Math.round(Number(v)*10)/10:null;
-  return {top:n(r.top),bottom:n(r.bottom),left:n(r.left),right:n(r.right),width:n(r.width),height:n(r.height)};
-}
-function songScopeUiDiagCssVars() {
-  // Read inline variables only; keyboard platform writes all four inline.
-  // Avoid getComputedStyle here so diagnostics do not force extra style resolution.
-  const st=document.documentElement.style;
-  return {
-    sheetVh:st.getPropertyValue('--songscope-sheet-vh').trim(),
-    keyboardInset:st.getPropertyValue('--songscope-keyboard-inset').trim(),
-    keyboardShiftY:st.getPropertyValue('--songscope-keyboard-shift-y').trim(),
-    keyboardReserve:st.getPropertyValue('--songscope-keyboard-reserve').trim()
-  };
-}
-function songScopeUiDiagSnapshot(eventName,extra) {
-  if (!songScopeUiDiag.enabled) return null;
-  const sheet=activeSongScopeSheet();
-  const head=sheet&&sheet.querySelector('.sheet-head');
-  const active=document.activeElement;
-  const focused=songScopeSheetFocusedControl;
-  const vv=window.visualViewport;
-  const n=v=>Number.isFinite(Number(v))?Math.round(Number(v)*10)/10:null;
-  const evt={
-    seq:++songScopeUiDiag.seq,
-    tMs:n(((typeof performance!=='undefined'&&performance.now)?performance.now():0)-songScopeUiDiag.startedPerf),
-    event:String(eventName||'snapshot'),
-    activeSheetId:sheet&&sheet.id||null,
-    keyboardActive:!!songScopeSheetKeyboardActive,
-    activeElementId:active&&active.id||null,
-    activeElementTag:active&&active.tagName||null,
-    focusedControlId:focused&&focused.id||null,
-    window:{scrollY:n(window.scrollY||window.pageYOffset||0),innerHeight:n(window.innerHeight),innerWidth:n(window.innerWidth)},
-    visualViewport:vv?{
-      height:n(vv.height),width:n(vv.width),
-      offsetTop:n(vv.offsetTop),offsetLeft:n(vv.offsetLeft),
-      pageTop:n(vv.pageTop),pageLeft:n(vv.pageLeft),scale:n(vv.scale)
-    }:null,
-    sheet:sheet?{
-      scrollTop:n(sheet.scrollTop),scrollHeight:n(sheet.scrollHeight),clientHeight:n(sheet.clientHeight),
-      rect:songScopeUiDiagRect(sheet)
-    }:null,
-    headerRect:songScopeUiDiagRect(head),
-    activeElementRect:songScopeUiDiagRect(active&&sheet&&sheet.contains(active)?active:null),
-    focusedControlRect:songScopeUiDiagRect(focused&&sheet&&sheet.contains(focused)?focused:null),
-    wrapperRect:songScopeUiDiagRect($('#sheet-wrap')),
-    css:songScopeUiDiagCssVars(),
-    extra:extra||null
-  };
-  songScopeUiDiag.events.push(evt);
-  if (songScopeUiDiag.events.length>songScopeUiDiag.maxEvents) {
-    songScopeUiDiag.events.splice(0,songScopeUiDiag.events.length-songScopeUiDiag.maxEvents);
-  }
-  // Do not mutate visible DOM for every event; that would perturb layout/timing.
-  return evt;
-}
-function songScopeUiDiagReset() {
-  songScopeUiDiag.startedAt=new Date().toISOString();
-  songScopeUiDiag.startedPerf=(typeof performance!=='undefined'&&performance.now)?performance.now():0;
-  songScopeUiDiag.seq=0;
-  songScopeUiDiag.events.length=0;
-  songScopeUiDiag.delayedSnapshotToken++;
-  songScopeUiDiagSnapshot('diagnostic_reset');
-  const count=$('#ui-diag-count');
-  if (count) count.textContent='0 events（記録中）';
-  toast('UI診断ログをリセットしました');
-}
-function songScopeUiDiagScheduleDelayedSnapshots(reason,target) {
-  const token=++songScopeUiDiag.delayedSnapshotToken;
-  const delays=[50,100,200,400,800,1200,1800];
-  for (const delay of delays) {
-    setTimeout(()=>{
-      if (token!==songScopeUiDiag.delayedSnapshotToken) return;
-      songScopeUiDiagSnapshot('delayed_snapshot',{
-        reason:String(reason||''),
-        delayMs:delay,
-        targetId:target&&target.id||null
-      });
-    },delay);
-  }
-}
-async function exportSongScopeUiDiagnostics() {
-  songScopeUiDiagSnapshot('diagnostic_export_requested');
-  const count=$('#ui-diag-count');
-  if (count) count.textContent=`${songScopeUiDiag.events.length} events`;
-  const vv=window.visualViewport;
-  const payload={
-    schema:'songscope-ui-platform-diagnostic-0.1.0',
-    buildId:BUILD_ID,
-    appVersion:APP_VERSION,
-    exportedAt:new Date().toISOString(),
-    diagnosticStartedAt:songScopeUiDiag.startedAt,
-    environment:{
-      userAgent:navigator.userAgent||null,
-      platform:navigator.platform||null,
-      language:navigator.language||null,
-      devicePixelRatio:Number(window.devicePixelRatio)||null,
-      screen:{
-        width:Number(screen&&screen.width)||null,
-        height:Number(screen&&screen.height)||null,
-        availWidth:Number(screen&&screen.availWidth)||null,
-        availHeight:Number(screen&&screen.availHeight)||null
-      },
-      visualViewportSupported:!!vv
-    },
-    instructions:{
-      target:'UI-P07 keyboard focus ordering',
-      sensitiveValuesCaptured:false,
-      note:'Input values and page content are not recorded; only element IDs, viewport/sheet geometry, event order and SongScope positioning results.'
-    },
-    eventCount:songScopeUiDiag.events.length,
-    events:songScopeUiDiag.events
-  };
-  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
-  const stamp=new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d{3}Z$/,'Z');
-  await saveBlob(blob,`SongScope_UI_P07_diagnostic_${stamp}.json`);
-}
-
 function resetSongScopeKeyboardVisualState() {
   document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
   document.documentElement.style.setProperty('--songscope-keyboard-shift-y','0px');
@@ -599,79 +466,75 @@ function songScopeCurrentVisualViewportRect() {
   const height=Math.max(1,Number(vv.height)||window.innerHeight||1);
   return {top,bottom:top+height,height};
 }
+function songScopeKeyboardUsableHeight(vvRect) {
+  const base=Math.max(1,songScopeSheetOpenViewportHeight||songScopeVisibleViewportHeight());
+  const vvHeight=Math.max(1,Number(vvRect&&vvRect.height)||1);
+  const innerHeight=Math.max(1,Number(window.innerHeight)||1);
+  // iPhone Safari can transiently report an extremely small visualViewport.height
+  // while keyboard/window geometry is settling. The larger of vv.height and
+  // innerHeight tracks the actually usable settled viewport without accepting
+  // the short-lived 103px-style intermediate state observed in build27.
+  return Math.max(1,Math.min(base,Math.max(vvHeight,innerHeight)));
+}
 function updateSongScopeKeyboardVisualState() {
   const vv=songScopeCurrentVisualViewportRect();
   const base=Math.max(1,songScopeSheetOpenViewportHeight||songScopeVisibleViewportHeight());
   const inset=Math.max(0,Math.round(base-vv.height));
+
   // Keyboard-only compensation for Safari panning the visual viewport.
-  // Clamp it to the occluded-height range so a stale/abnormal offset cannot throw the sheet away.
   const maxShift=Math.max(0,base-vv.height);
   const shift=Math.max(0,Math.min(Math.round(vv.top),Math.round(maxShift)));
+
+  // build28 invariant:
+  // while the keyboard is open, reserve enough real scroll range for the whole
+  // form to remain reachable, regardless of which field currently has focus.
+  // Reserve is based on stable usable viewport height, not on focused field.
+  const usableHeight=songScopeKeyboardUsableHeight(vv);
+  const reachReserve=songScopeSheetKeyboardActive
+    ? Math.max(0,Math.round(base-usableHeight))
+    : 0;
+
   document.documentElement.style.setProperty('--songscope-keyboard-inset',`${inset}px`);
   document.documentElement.style.setProperty('--songscope-keyboard-shift-y',`${shift}px`);
-  return {inset,shift,visualHeight:vv.height};
+  document.documentElement.style.setProperty('--songscope-keyboard-reserve',`${reachReserve}px`);
+  return {inset,shift,visualHeight:vv.height,usableHeight,reachReserve};
 }
-function setSongScopeKeyboardReserve(px) {
-  const n=Math.max(0,Math.ceil(Number(px)||0));
-  const before=document.documentElement.style.getPropertyValue('--songscope-keyboard-reserve').trim();
-  document.documentElement.style.setProperty('--songscope-keyboard-reserve',`${n}px`);
-  songScopeUiDiagSnapshot('reserve_set',{before,after:`${n}px`,requested:Number(px)||0});
-  return n;
-}
-function songScopeNaturalTargetTop(sheet,target) {
-  const sheetRect=sheet.getBoundingClientRect();
-  const targetRect=target.getBoundingClientRect();
-  return (targetRect.top-sheetRect.top)+(Number(sheet.scrollTop)||0);
-}
-function positionSongScopeFocusedControl(target) {
+function ensureSongScopeFocusedControlVisible(target) {
   const sheet=activeSongScopeSheet();
-  if (!sheet||!target||!sheet.contains(target)) return {adjusted:false,reserve:0,scrollTop:Number(sheet&&sheet.scrollTop)||0};
+  if (!sheet||!target||!sheet.contains(target)) {
+    return {adjusted:false,scrollTop:Number(sheet&&sheet.scrollTop)||0};
+  }
 
-  songScopeUiDiagSnapshot('position_before',{targetId:target&&target.id||null});
   const vv=songScopeCurrentVisualViewportRect();
+  const usableHeight=songScopeKeyboardUsableHeight(vv);
   const sheetRect=sheet.getBoundingClientRect();
   const targetRect=target.getBoundingClientRect();
   const head=sheet.querySelector('.sheet-head');
   const headRect=head?head.getBoundingClientRect():null;
+  const margin=16;
 
   const headerBottomRel=headRect?Math.max(0,headRect.bottom-sheetRect.top):0;
-  const targetHeight=Math.max(1,targetRect.height||targetRect.bottom-targetRect.top||44);
-  const usableBottom=Math.min(
-    Math.max(1,Number(sheet.clientHeight)||sheetRect.height||vv.height),
-    vv.height
-  );
-  const usableAfterHeader=Math.max(targetHeight+32,usableBottom-headerBottomRel);
+  const targetTopRel=targetRect.top-sheetRect.top;
+  const targetBottomRel=targetRect.bottom-sheetRect.top;
+  const visibleTop=headerBottomRel+margin;
+  const visibleBottom=Math.min(
+    Math.max(1,Number(sheet.clientHeight)||sheetRect.height||usableHeight),
+    usableHeight
+  )-margin;
 
-  // Deterministic resting position for every focus:
-  // place the control a modest, fixed-looking distance below the sticky header,
-  // while guaranteeing it remains above the keyboard/accessory area.
-  const preferredGap=Math.max(32,Math.min(92,Math.round(usableAfterHeader*0.22)));
-  const maxTopRel=Math.max(headerBottomRel+16,usableBottom-targetHeight-24);
-  const desiredTopRel=Math.min(headerBottomRel+preferredGap,maxTopRel);
+  // If Safari or the user's existing scroll already leaves the field visible,
+  // do nothing. Do not snap every focus to a predetermined resting position.
+  let delta=0;
+  if (targetBottomRel>visibleBottom) delta=targetBottomRel-visibleBottom;
+  else if (targetTopRel<visibleTop) delta=targetTopRel-visibleTop;
 
-  // Reset any reserve left by a previously focused control before calculating the
-  // target's natural content coordinate. This prevents focus-to-focus accumulation.
-  setSongScopeKeyboardReserve(0);
-  void sheet.offsetHeight;
-
-  const naturalTop=songScopeNaturalTargetTop(sheet,target);
-  const desiredScroll=Math.max(0,naturalTop-desiredTopRel);
-
-  let maxScroll=Math.max(0,(Number(sheet.scrollHeight)||0)-(Number(sheet.clientHeight)||0));
-  let reserve=0;
-  if (desiredScroll>maxScroll+0.5) {
-    // Add only the exact missing range required for this deterministic destination.
-    reserve=setSongScopeKeyboardReserve(desiredScroll-maxScroll+16);
-    void sheet.offsetHeight;
-    maxScroll=Math.max(0,(Number(sheet.scrollHeight)||0)-(Number(sheet.clientHeight)||0));
-  }
-
-  const next=Math.max(0,Math.min(maxScroll,desiredScroll));
   const before=Math.max(0,Number(sheet.scrollTop)||0);
+  if (Math.abs(delta)<=0.5) return {adjusted:false,scrollTop:before};
+
+  const maxScroll=Math.max(0,(Number(sheet.scrollHeight)||0)-(Number(sheet.clientHeight)||0));
+  const next=Math.max(0,Math.min(maxScroll,before+delta));
   sheet.scrollTop=next;
-  const result={adjusted:Math.abs(next-before)>0.5,reserve,scrollTop:next,desiredTopRel,naturalTop};
-  songScopeUiDiagSnapshot('position_after',{targetId:target&&target.id||null,beforeScrollTop:before,result});
-  return result;
+  return {adjusted:Math.abs(next-before)>0.5,scrollTop:next};
 }
 function scheduleSongScopeFocusedControlVisibility(target) {
   const control=target||songScopeSheetFocusedControl||document.activeElement;
@@ -686,21 +549,17 @@ function scheduleSongScopeFocusedControlVisibility(target) {
     attempts++;
 
     const vv=songScopeCurrentVisualViewportRect();
-    songScopeUiDiagSnapshot('settle_sample_before',{attempt:attempts,targetId:control&&control.id||null});
-    const visualState=updateSongScopeKeyboardVisualState();
-    const positionResult=positionSongScopeFocusedControl(control||songScopeSheetFocusedControl||document.activeElement);
-    songScopeUiDiagSnapshot('settle_sample_after',{attempt:attempts,targetId:control&&control.id||null,visualState,positionResult});
+    updateSongScopeKeyboardVisualState();
+    ensureSongScopeFocusedControlVisible(control||songScopeSheetFocusedControl||document.activeElement);
 
-    const sig=`${Math.round(vv.top)}:${Math.round(vv.height)}`;
+    const reserve=document.documentElement.style.getPropertyValue('--songscope-keyboard-reserve')||'0px';
+    const sig=`${Math.round(vv.top)}:${Math.round(vv.height)}:${Math.round(window.innerHeight||0)}:${reserve}`;
     if (sig===lastSig) stableCount++;
     else { lastSig=sig; stableCount=0; }
 
     // Safari keyboard/focus animation can settle in stages. Require repeated identical
     // geometry or keep sampling for up to ~720 ms.
-    if (stableCount>=2 || attempts>=9) {
-      songScopeUiDiagSnapshot('settle_stop',{attempts,stableCount,sig,targetId:control&&control.id||null});
-      return;
-    }
+    if (stableCount>=2 || attempts>=9) return;
     songScopeSheetViewportTimer=setTimeout(sample,80);
   };
 
@@ -738,7 +597,6 @@ function unlockPageForSheet() {
 }
 
 function openSheet(id) {
-  songScopeUiDiagSnapshot('open_sheet_before',{sheetId:id});
   // Freeze the currently visible viewport height at open. Normal Safari toolbar
   // expansion/collapse while scrolling must not reposition or resize the sheet.
   freezeSongScopeSheetViewportHeight();
@@ -753,10 +611,8 @@ function openSheet(id) {
       s.setAttribute('tabindex','-1');
     }
   });
-  songScopeUiDiagSnapshot('open_sheet_after',{sheetId:id});
 }
 function closeSheet() {
-  songScopeUiDiagSnapshot('close_sheet_before');
   $('#sheet-wrap').hidden=true;
   $$('.sheet').forEach(s=>{s.hidden=true;});
   songScopeSheetKeyboardActive=false;
@@ -770,12 +626,10 @@ function closeSheet() {
   }
   unlockPageForSheet();
   if (typeof clearStandaloneReviewImageUrls === 'function') clearStandaloneReviewImageUrls();
-  songScopeUiDiagSnapshot('close_sheet_after');
 }
 
 function handleSongScopeSheetFocusIn(e) {
   if (!songScopeSheetIsOpen()||!elementIsInsideActiveSheet(e.target)) return;
-  songScopeUiDiagSnapshot('focusin',{targetId:e.target&&e.target.id||null,targetTag:e.target&&e.target.tagName||null});
   const tag=String(e.target&&e.target.tagName||'').toLowerCase();
   const editable=tag==='input'||tag==='textarea'||tag==='select'||(e.target&&e.target.isContentEditable);
   if (!editable) return;
@@ -783,14 +637,11 @@ function handleSongScopeSheetFocusIn(e) {
   songScopeSheetFocusedControl=e.target;
   // The sheet's base geometry remains frozen. Keyboard-only visualViewport events
   // may shift the wrapper visually and scroll this sheet internally.
-  const visualState=updateSongScopeKeyboardVisualState();
-  songScopeUiDiagSnapshot('focusin_after_keyboard_state',{targetId:e.target&&e.target.id||null,visualState});
+  updateSongScopeKeyboardVisualState();
   scheduleSongScopeFocusedControlVisibility(e.target);
-  songScopeUiDiagScheduleDelayedSnapshots('focusin',e.target);
 }
-function handleSongScopeSheetFocusOut(e) {
+function handleSongScopeSheetFocusOut() {
   if (!songScopeSheetIsOpen()) return;
-  songScopeUiDiagSnapshot('focusout',{targetId:e&&e.target&&e.target.id||null,relatedTargetId:e&&e.relatedTarget&&e.relatedTarget.id||null});
   if (songScopeSheetViewportTimer) clearTimeout(songScopeSheetViewportTimer);
   songScopeSheetViewportTimer=setTimeout(()=>{
     songScopeSheetViewportTimer=null;
@@ -806,15 +657,15 @@ function handleSongScopeSheetFocusOut(e) {
   },450);
 }
 function handleSongScopeVisualViewportResize() {
-  songScopeUiDiagSnapshot('visualViewport_resize_raw');
   if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
+  updateSongScopeKeyboardVisualState();
   scheduleSongScopeFocusedControlVisibility(songScopeSheetFocusedControl||document.activeElement);
 }
 function handleSongScopeVisualViewportScroll() {
-  songScopeUiDiagSnapshot('visualViewport_scroll_raw');
   if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
   // Safari may pan the visual viewport after focus/keyboard animation without another resize.
   // Compensate only while a sheet control is actively focused.
+  updateSongScopeKeyboardVisualState();
   scheduleSongScopeFocusedControlVisibility(songScopeSheetFocusedControl||document.activeElement);
 }
 function handleSongScopeOrientationChange() {
@@ -8094,11 +7945,6 @@ function wireSheets() {
     openSettingsSheet();
     toast('初期値に戻しました');
   });
-  $('#ui-diag-reset').addEventListener('click', songScopeUiDiagReset);
-  $('#ui-diag-export').addEventListener('click', () => exportSongScopeUiDiagnostics().catch(e=>{
-    console.error('UI diagnostic export failed',e);
-    toast('診断ログを書き出せませんでした');
-  }));
 }
 function openSettingsSheet() {
   $('#s-frame').value = settings.frameSizeMs;
@@ -8332,15 +8178,6 @@ let resizeTimer = null;
 function wireGlobal() {
   document.addEventListener('focusin',handleSongScopeSheetFocusIn,true);
   document.addEventListener('focusout',handleSongScopeSheetFocusOut,true);
-  $('#sheet-wrap').addEventListener('scroll',e=>{
-    const t=e.target;
-    if (t&&t.classList&&t.classList.contains('sheet')) {
-      songScopeUiDiagSnapshot('sheet_scroll_native',{sheetId:t.id||null});
-    }
-  },true);
-  window.addEventListener('scroll',()=>{
-    if (songScopeSheetIsOpen()) songScopeUiDiagSnapshot('window_scroll_raw');
-  },{passive:true});
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize',handleSongScopeVisualViewportResize,{passive:true});
     window.visualViewport.addEventListener('scroll',handleSongScopeVisualViewportScroll,{passive:true});

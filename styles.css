@@ -272,7 +272,7 @@ input[type=range]::-webkit-slider-thumb{
   /* No top padding on the scroll container.
      A top padding strip allows scrolled content to appear above a sticky header. */
   padding:0 16px calc(24px + var(--safe-b) + var(--songscope-keyboard-reserve));
-  scroll-padding-bottom:calc(var(--songscope-keyboard-inset) + 24px);
+  scroll-padding-bottom:calc(var(--songscope-keyboard-reserve) + 24px);
 }
 .sheet-head{
   position:sticky;
@@ -720,9 +720,15 @@ body.songscope-sheet-open{
 .sheet textarea,
 .sheet select{
   scroll-margin-top:88px;
-  scroll-margin-bottom:calc(var(--songscope-keyboard-inset) + 24px);
+  scroll-margin-bottom:calc(var(--songscope-keyboard-reserve) + 24px);
 }
 
 
 /* G0 build24 — keyboard-only visual viewport pan compensation is integrated
    into the canonical .sheet-wrap rule above. */
+
+
+/* G0 build28 — keyboard form reachability invariant
+   While a software keyboard is open, keyboardReserve belongs to the whole
+   active sheet, not to the currently focused field. This guarantees that
+   the user can manually scroll from any field to every later field/action. */
