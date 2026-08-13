@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.18.2';
-const BUILD_ID = '20260814-g0-25';
+const SCHEMA_VERSION = '0.18.3';
+const BUILD_ID = '20260814-g0-26';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -483,59 +483,57 @@ function setSongScopeKeyboardReserve(px) {
   document.documentElement.style.setProperty('--songscope-keyboard-reserve',`${n}px`);
   return n;
 }
-function ensureSongScopeFocusedControlVisible(target) {
+function songScopeNaturalTargetTop(sheet,target) {
+  const sheetRect=sheet.getBoundingClientRect();
+  const targetRect=target.getBoundingClientRect();
+  return (targetRect.top-sheetRect.top)+(Number(sheet.scrollTop)||0);
+}
+function positionSongScopeFocusedControl(target) {
   const sheet=activeSongScopeSheet();
-  if (!sheet||!target||!sheet.contains(target)) return {adjusted:false,reserve:0};
+  if (!sheet||!target||!sheet.contains(target)) return {adjusted:false,reserve:0,scrollTop:Number(sheet&&sheet.scrollTop)||0};
 
   const vv=songScopeCurrentVisualViewportRect();
   const sheetRect=sheet.getBoundingClientRect();
   const targetRect=target.getBoundingClientRect();
   const head=sheet.querySelector('.sheet-head');
   const headRect=head?head.getBoundingClientRect():null;
-  const margin=16;
 
-  const headBottomRel=headRect?Math.max(0,headRect.bottom-sheetRect.top):0;
-  const targetTopRel=targetRect.top-sheetRect.top;
-  const targetBottomRel=targetRect.bottom-sheetRect.top;
-  const visibleTop=headBottomRel+margin;
-  const visibleBottom=Math.min(
+  const headerBottomRel=headRect?Math.max(0,headRect.bottom-sheetRect.top):0;
+  const targetHeight=Math.max(1,targetRect.height||targetRect.bottom-targetRect.top||44);
+  const usableBottom=Math.min(
     Math.max(1,Number(sheet.clientHeight)||sheetRect.height||vv.height),
     vv.height
-  )-margin;
-  if (!(visibleBottom>visibleTop)) return {adjusted:false,reserve:0};
+  );
+  const usableAfterHeader=Math.max(targetHeight+32,usableBottom-headerBottomRel);
 
-  let delta=0;
-  if (targetBottomRel>visibleBottom) delta=targetBottomRel-visibleBottom;
-  else if (targetTopRel<visibleTop) delta=targetTopRel-visibleTop;
+  // Deterministic resting position for every focus:
+  // place the control a modest, fixed-looking distance below the sticky header,
+  // while guaranteeing it remains above the keyboard/accessory area.
+  const preferredGap=Math.max(32,Math.min(92,Math.round(usableAfterHeader*0.22)));
+  const maxTopRel=Math.max(headerBottomRel+16,usableBottom-targetHeight-24);
+  const desiredTopRel=Math.min(headerBottomRel+preferredGap,maxTopRel);
 
-  if (Math.abs(delta)<=0.5) {
-    // If the target is already visible, do not keep a large keyboard-height spacer.
-    const reserve=setSongScopeKeyboardReserve(0);
-    return {adjusted:false,reserve};
-  }
+  // Reset any reserve left by a previously focused control before calculating the
+  // target's natural content coordinate. This prevents focus-to-focus accumulation.
+  setSongScopeKeyboardReserve(0);
+  void sheet.offsetHeight;
+
+  const naturalTop=songScopeNaturalTargetTop(sheet,target);
+  const desiredScroll=Math.max(0,naturalTop-desiredTopRel);
 
   let maxScroll=Math.max(0,(Number(sheet.scrollHeight)||0)-(Number(sheet.clientHeight)||0));
-  const current=Math.max(0,Number(sheet.scrollTop)||0);
-
-  if (delta>0) {
-    // Only create the extra content height that is actually missing to reveal this target.
-    const available=Math.max(0,maxScroll-current);
-    const missing=Math.max(0,delta-available);
-    if (missing>0.5) {
-      setSongScopeKeyboardReserve(missing+margin);
-      // Force a re-read after padding changed scrollHeight.
-      void sheet.offsetHeight;
-      maxScroll=Math.max(0,(Number(sheet.scrollHeight)||0)-(Number(sheet.clientHeight)||0));
-    } else {
-      setSongScopeKeyboardReserve(0);
-    }
-  } else {
-    setSongScopeKeyboardReserve(0);
+  let reserve=0;
+  if (desiredScroll>maxScroll+0.5) {
+    // Add only the exact missing range required for this deterministic destination.
+    reserve=setSongScopeKeyboardReserve(desiredScroll-maxScroll+16);
+    void sheet.offsetHeight;
+    maxScroll=Math.max(0,(Number(sheet.scrollHeight)||0)-(Number(sheet.clientHeight)||0));
   }
 
-  const next=Math.max(0,Math.min(maxScroll,current+delta));
+  const next=Math.max(0,Math.min(maxScroll,desiredScroll));
+  const before=Math.max(0,Number(sheet.scrollTop)||0);
   sheet.scrollTop=next;
-  return {adjusted:Math.abs(next-current)>0.5,reserve:parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--songscope-keyboard-reserve'))||0};
+  return {adjusted:Math.abs(next-before)>0.5,reserve,scrollTop:next,desiredTopRel,naturalTop};
 }
 function scheduleSongScopeFocusedControlVisibility(target) {
   const control=target||songScopeSheetFocusedControl||document.activeElement;
@@ -551,7 +549,7 @@ function scheduleSongScopeFocusedControlVisibility(target) {
 
     const vv=songScopeCurrentVisualViewportRect();
     updateSongScopeKeyboardVisualState();
-    ensureSongScopeFocusedControlVisible(control||songScopeSheetFocusedControl||document.activeElement);
+    positionSongScopeFocusedControl(control||songScopeSheetFocusedControl||document.activeElement);
 
     const sig=`${Math.round(vv.top)}:${Math.round(vv.height)}`;
     if (sig===lastSig) stableCount++;

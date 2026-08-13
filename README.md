@@ -888,3 +888,14 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - keyboard geometryを80ms間隔で最大9回sampleし、同じ`offsetTop:height`が連続して安定した時点で終了。初回focusと再focusを同じ最終配置へ収束させる。
 - focusout/close時はsettle loopをtokenで無効化し、reserve/inset/shiftを全reset。
 - UI-P01〜P06およびbuild24のheader+focused-input同時可視方針は維持。
+
+
+## G0 build26 — Deterministic keyboard focus position
+- build25実機UI-P07で、同じ`minimumConfidence`へfocusしても初回と再focusで最終scroll位置/余白が異なることを確認。
+- 原因: current target rect/current scrollTopからdeltaだけを足す相対補正だったため、直前にfocusしたfieldやSafari auto-scrollの履歴が最終位置へ残った。
+- keyboard focus配置を相対補正からdeterministic positioningへ変更。
+- focused controlのnatural content coordinateを`targetRect.top - sheetRect.top + scrollTop`で求め、sticky header下の一意な`desiredTopRel`へ毎回配置。
+- 前fieldのdynamic keyboard reserveは計算前に必ず0へreset。
+- natural contentだけでは目的scroll位置へ届かない場合のみ、exact missing range + 16pxだけreserveを追加。
+- 同じfieldなら、初回focus/別field経由の再focus/既存scroll位置に関係なく同じscrollTopへ収束することを設計不変条件とする。
+- build24のkeyboard visual-viewport pan compensation、build22のsticky header、UI-P01〜P06基盤は変更なし。
