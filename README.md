@@ -840,3 +840,12 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - transform slide animationを削除し、scroll/stickyとの干渉要因を除去。
 - hidden stateは`.sheet-wrap[hidden]{display:none !important}`で一意に保証。
 - データモデル・Binding・evidence・daily workflowは変更なし。
+
+
+## G0 build22 — Sticky header occlusion
+- build21実機UI-P03で、設定sheetをscrollした際に旧内容（例: `40`）がsticky header「解析設定」の上へ覗くことを確認。
+- 原因はvertical scroll container `.sheet` 自体の`padding-top:8px`。sticky headerは`top:0`でも、そのpadding stripはheaderに覆われずscroll内容が描画可能だった。
+- `.sheet`のtop paddingを0へ変更し、必要な上余白をopaqueな`.sheet-head`側へ移動。
+- `.sheet-head`のz-indexを20へ統一し、左右padding領域まで背景を覆うpseudo-elementを追加。
+- scroll、viewport freeze、keyboard、background lockのbuild21 canonical platformは変更なし。
+- データモデル/Binding/evidence/daily workflowは変更なし。

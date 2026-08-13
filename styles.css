@@ -263,20 +263,24 @@ input[type=range]::-webkit-slider-thumb{
   -webkit-overflow-scrolling:touch;
   background:var(--bg);
   border-radius:16px 16px 0 0;
-  padding:8px 16px calc(24px + var(--safe-b));
+  /* No top padding on the scroll container.
+     A top padding strip allows scrolled content to appear above a sticky header. */
+  padding:0 16px calc(24px + var(--safe-b));
 }
 .sheet-head{
   position:sticky;
   top:0;
-  z-index:8;
+  z-index:20;
   display:flex;
   align-items:center;
   justify-content:space-between;
   font-size:17px;
   font-weight:600;
-  padding:10px 0 8px;
+  /* The visual top spacing belongs to the opaque sticky header itself. */
+  padding:18px 0 10px;
   background:var(--bg);
   border-bottom:.5px solid var(--sep);
+  isolation:isolate;
 }
 .sheet-close{color:var(--accent);font-size:16px;padding:8px 0;min-height:var(--tap)}
 .sheet-sub{color:var(--label-2);font-size:13px;margin:0 0 10px}
@@ -687,4 +691,19 @@ body.songscope-sheet-open{
 #sheet-binding,
 #sheet-session-import{
   scroll-padding-top:64px;
+}
+
+/* G0 build22 — sticky-header occlusion invariant */
+.sheet{
+  background-clip:padding-box;
+}
+.sheet-head::before{
+  content:"";
+  position:absolute;
+  left:-16px;
+  right:-16px;
+  top:0;
+  bottom:0;
+  z-index:-1;
+  background:var(--bg);
 }
