@@ -228,6 +228,7 @@ input[type=range]::-webkit-slider-thumb{
   --songscope-sheet-vh:100svh;
   --songscope-keyboard-inset:0px;
   --songscope-keyboard-shift-y:0px;
+  --songscope-keyboard-reserve:0px;
 }
 @supports not (height:100svh){
   :root{--songscope-sheet-vh:100vh;}
@@ -270,7 +271,7 @@ input[type=range]::-webkit-slider-thumb{
   border-radius:16px 16px 0 0;
   /* No top padding on the scroll container.
      A top padding strip allows scrolled content to appear above a sticky header. */
-  padding:0 16px calc(24px + var(--safe-b) + var(--songscope-keyboard-inset));
+  padding:0 16px calc(24px + var(--safe-b) + var(--songscope-keyboard-reserve));
   scroll-padding-bottom:calc(var(--songscope-keyboard-inset) + 24px);
 }
 .sheet-head{

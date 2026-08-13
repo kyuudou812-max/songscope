@@ -876,3 +876,15 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - resize/scroll双方で最終pan後に再判定し、Safariのfocus後遅延移動へ追従。
 - focusout/close時はkeyboard shift/insetを必ず0へ戻す。
 - 通常scroll・UI-P01〜P06で合格したbuild22 platform semanticsは変更しない。
+
+
+## G0 build25 — Minimal keyboard reserve + focus settling
+- build24実機で、初回focus時はkeyboard上に大きな空白が出るが、別箇所をtap後に同じinputへ再focusすると空白が狭くなる不一致を確認。
+- 原因1: `.sheet`の実bottom paddingへkeyboard全高相当のinsetを常時追加していたため、必要以上のblank scroll areaができていた。
+- 原因2: iPhone Safariのkeyboard/visualViewport geometryはfocus直後に段階的にsettleするため、単発/短時間の再配置では初回と再focusでscroll位置が一致しなかった。
+- actual content paddingは`--songscope-keyboard-reserve`へ分離し、「focused controlを可視化するために不足するscroll range」だけ動的に追加。
+- `--songscope-keyboard-inset`は可視領域/scroll-paddingの信号として保持するが、blank content heightには直接使わない。
+- focused controlが既に可視ならreserveを0へ戻す。
+- keyboard geometryを80ms間隔で最大9回sampleし、同じ`offsetTop:height`が連続して安定した時点で終了。初回focusと再focusを同じ最終配置へ収束させる。
+- focusout/close時はsettle loopをtokenで無効化し、reserve/inset/shiftを全reset。
+- UI-P01〜P06およびbuild24のheader+focused-input同時可視方針は維持。
