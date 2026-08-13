@@ -899,3 +899,14 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - natural contentだけでは目的scroll位置へ届かない場合のみ、exact missing range + 16pxだけreserveを追加。
 - 同じfieldなら、初回focus/別field経由の再focus/既存scroll位置に関係なく同じscrollTopへ収束することを設計不変条件とする。
 - build24のkeyboard visual-viewport pan compensation、build22のsticky header、UI-P01〜P06基盤は変更なし。
+
+
+## G0 build27 — UI-P07 Event Diagnostic
+- build26実機で同一`minimumConfidence`の初回focusと再focusの最終配置が一致しなかったため、修正を止めてSafari実機event orderを観測する診断buildへ移行。
+- UI-P07通常ロジックはbuild26のまま。diagnostic codeは観測のみで、geometry/scroll決定値を変更しない。
+- 記録イベント: `focusin/focusout`, `visualViewport resize/scroll`, native `.sheet` scroll, SongScope `position_before/after`, settle sample/stop, reserve変更, delayed snapshots (50/100/200/400/800/1200/1800ms)。
+- 各イベントでvisualViewport、window scroll、sheet scrollTop/scrollHeight/clientHeight、sheet/header/focused-control/wrapper rect、keyboard CSS varsを保存。
+- inputの値や画面本文は保存しない。
+- 設定sheetに一時的な「UI診断 build27」detailsを追加し、reset/export JSONを提供。
+- このログにより「SongScope配置後にSafariがsheet.scrollTopを再変更しているか」「visualViewport eventなしのlate scrollがあるか」を判定する。
+- データモデル/Binding/evidence/daily workflowは変更なし。

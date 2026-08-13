@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260814-g0-26">
+<link rel="stylesheet" href="styles.css?v=20260814-g0-27">
 <title>SongScope</title>
 </head>
 <body>
@@ -417,6 +417,15 @@
   <div class="sheet" id="sheet-settings" hidden>
     <div class="sheet-head"><span>解析設定</span><button class="sheet-close" data-close>閉じる</button></div>
     <p class="sheet-sub">変更は次回の解析から反映されます。過去の解析結果には、作成時の設定値がそのまま保存されています。</p>
+    <details class="card details" id="ui-diag-panel">
+      <summary>UI診断 build27（実機検証用）</summary>
+      <p class="small">UI-P07のイベント順序だけを記録します。入力値や画面内容は記録しません。</p>
+      <div class="row gap wrap">
+        <button class="mini" id="ui-diag-reset" type="button">診断ログをリセット</button>
+        <button class="mini" id="ui-diag-export" type="button">診断JSONを書き出す</button>
+      </div>
+      <p class="small mono" id="ui-diag-count">0 events</p>
+    </details>
     <label class="field"><span>frameSizeMs</span><input id="s-frame" type="number" min="10" max="100" step="5"></label>
     <label class="field"><span>hopSizeMs</span><input id="s-hop" type="number" min="5" max="50" step="5"></label>
     <label class="field"><span>解析サンプルレート (Hz)</span><input id="s-sr" type="number" min="8000" max="48000" step="1050"></label>
@@ -443,7 +452,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260814-g0-26"></script>
-<script src="app.js?v=20260814-g0-26"></script>
+<script src="zip.js?v=20260814-g0-27"></script>
+<script src="app.js?v=20260814-g0-27"></script>
 </body>
 </html>
