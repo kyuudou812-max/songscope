@@ -221,19 +221,62 @@ input[type=range]::-webkit-slider-thumb{
 .bar-fill{height:100%;width:0;background:var(--accent);transition:width .15s linear}
 
 /* ---------- シート ---------- */
-.sheet-wrap{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end}
-.sheet-bg{position:absolute;inset:0;background:rgba(0,0,0,.4)}
-.sheet{
-  position:relative;width:100%;max-height:88vh;overflow-y:auto;
-  background:var(--bg);border-radius:16px 16px 0 0;
-  padding:8px 16px calc(20px + var(--safe-b));
-  animation:up .22s ease-out;
+/* ---------- Sheet platform: canonical implementation (build21) ----------
+   One scroll container, one viewport model, no touchmove interception.
+   JS freezes visible viewport height while the sheet is open; only keyboard/orientation may update it. */
+:root{
+  --songscope-sheet-vh:100svh;
 }
-@keyframes up{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
-@media (prefers-reduced-motion: reduce){.sheet{animation:none}}
+@supports not (height:100svh){
+  :root{--songscope-sheet-vh:100vh;}
+}
+.sheet-wrap{
+  position:fixed;
+  left:0;
+  right:0;
+  bottom:0;
+  z-index:20;
+  height:var(--songscope-sheet-vh);
+  box-sizing:border-box;
+  display:flex;
+  align-items:flex-end;
+  padding-top:max(8px,var(--safe-t));
+  overflow:hidden;
+  overscroll-behavior:none;
+}
+.sheet-wrap[hidden]{display:none !important}
+.sheet-bg{
+  position:absolute;
+  inset:0;
+  background:rgba(0,0,0,.4);
+}
+.sheet{
+  position:relative;
+  z-index:1;
+  box-sizing:border-box;
+  width:100%;
+  max-height:100%;
+  min-height:0;
+  overflow-x:hidden;
+  overflow-y:auto;
+  overscroll-behavior-y:contain;
+  -webkit-overflow-scrolling:touch;
+  background:var(--bg);
+  border-radius:16px 16px 0 0;
+  padding:8px 16px calc(24px + var(--safe-b));
+}
 .sheet-head{
-  display:flex;align-items:center;justify-content:space-between;
-  font-size:17px;font-weight:600;padding:10px 0 6px;
+  position:sticky;
+  top:0;
+  z-index:8;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  font-size:17px;
+  font-weight:600;
+  padding:10px 0 8px;
+  background:var(--bg);
+  border-bottom:.5px solid var(--sep);
 }
 .sheet-close{color:var(--accent);font-size:16px;padding:8px 0;min-height:var(--tap)}
 .sheet-sub{color:var(--label-2);font-size:13px;margin:0 0 10px}
@@ -415,39 +458,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 
 
-/* G0 build09 — iPhone Safari review viewport + reliable raw image review */
-:root{
-  --songscope-vv-top:0px;
-  --songscope-vv-left:0px;
-  --songscope-vv-height:100dvh;
-  --songscope-vv-width:100vw;
-}
-@supports not (height:100dvh){
-  :root{--songscope-vv-height:100vh;}
-}
-.sheet-wrap{
-  top:var(--songscope-vv-top);
-  left:var(--songscope-vv-left);
-  right:auto;
-  bottom:auto;
-  width:var(--songscope-vv-width);
-  height:var(--songscope-vv-height);
-}
-.sheet{
-  max-height:min(88dvh, calc(var(--songscope-vv-height) - 12px));
-}
-#sheet-scoring-review{
-  max-height:calc(var(--songscope-vv-height) - 12px);
-  scroll-padding-top:64px;
-}
-#sheet-scoring-review .scoring-review-sticky-head{
-  position:sticky;
-  top:0;
-  z-index:8;
-  background:var(--bg);
-  border-bottom:.5px solid var(--sep);
-  padding:10px 0 8px;
-}
+/* G0 build09 — reliable raw image review (geometry unified by build21) */
 .scoring-review-image-error{
   min-height:120px;
   display:flex;
@@ -476,18 +487,6 @@ input[type=range]::-webkit-slider-thumb{
 
 
 /* G0 build13 — append-only Binding Assertion UI */
-#sheet-binding{
-  max-height:calc(var(--songscope-vv-height) - 12px);
-  scroll-padding-top:64px;
-}
-#sheet-binding .scoring-review-sticky-head{
-  position:sticky;
-  top:0;
-  z-index:8;
-  background:var(--bg);
-  border-bottom:.5px solid var(--sep);
-  padding:10px 0 8px;
-}
 .binding-evidence-summary{
   background:var(--bg-elev);
   border-radius:12px;
@@ -621,18 +620,6 @@ input[type=range]::-webkit-slider-thumb{
   margin:16px 0 10px;
   white-space:normal;
 }
-#sheet-session-import{
-  max-height:calc(var(--songscope-vv-height) - 12px);
-  scroll-padding-top:64px;
-}
-#sheet-session-import .scoring-review-sticky-head{
-  position:sticky;
-  top:0;
-  z-index:8;
-  background:var(--bg);
-  border-bottom:.5px solid var(--sep);
-  padding:10px 0 8px;
-}
 .session-import-step{
   display:grid;
   grid-template-columns:34px minmax(0,1fr);
@@ -680,39 +667,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 
 
-/* G0 build17 — iPhone Safari modal scroll stability
-   Fixed sheets must not track visualViewport.offsetTop while Safari chrome animates. */
-.sheet-wrap{
-  inset:0 !important;
-  top:0 !important;
-  left:0 !important;
-  right:0 !important;
-  bottom:0 !important;
-  width:100% !important;
-  height:100dvh !important;
-  overscroll-behavior:none;
-}
-.sheet{
-  max-height:min(88dvh, calc(100dvh - 12px)) !important;
-  overscroll-behavior:contain;
-  -webkit-overflow-scrolling:touch;
-  touch-action:pan-y;
-}
-#sheet-scoring-review,
-#sheet-binding,
-#sheet-session-import{
-  max-height:calc(100dvh - 12px) !important;
-}
-@supports not (height:100dvh){
-  .sheet-wrap{height:100vh !important;}
-  .sheet{max-height:min(88vh, calc(100vh - 12px)) !important;}
-  #sheet-scoring-review,
-  #sheet-binding,
-  #sheet-session-import{max-height:calc(100vh - 12px) !important;}
-}
-
-
-/* G0 build18 — visible-height sheet scrolling + pull-to-refresh isolation */
+/* G0 build21 — UI Platform Stabilization */
 html.songscope-sheet-open,
 body.songscope-sheet-open{
   overflow:hidden !important;
@@ -724,61 +679,12 @@ body.songscope-sheet-open{
   right:0;
   width:100%;
 }
-
-.sheet-wrap{
-  top:auto !important;
-  left:0 !important;
-  right:0 !important;
-  bottom:0 !important;
-  width:100% !important;
-  height:var(--songscope-vv-height) !important;
-  max-height:var(--songscope-vv-height) !important;
-  overscroll-behavior:none !important;
-  overflow:hidden !important;
-}
-.sheet{
-  width:100%;
-  height:auto !important;
-  max-height:calc(var(--songscope-vv-height) - 12px) !important;
-  overflow-y:auto !important;
-  overflow-x:hidden !important;
-  overscroll-behavior-y:contain !important;
-  -webkit-overflow-scrolling:touch;
-  touch-action:pan-y;
+.sheet:focus{outline:none}
+.sheet-head.scoring-review-sticky-head{
+  /* compatibility class retained; .sheet-head owns sticky behavior */
 }
 #sheet-scoring-review,
 #sheet-binding,
 #sheet-session-import{
-  max-height:calc(var(--songscope-vv-height) - 12px) !important;
-}
-
-
-/* G0 build19 — native iPhone Safari sheet scrolling
-   Keep the background locked, but do not intercept touchmove inside the sheet. */
-.sheet-wrap{
-  position:fixed !important;
-  inset:0 !important;
-  width:100% !important;
-  height:var(--songscope-vv-height) !important;
-  overflow:hidden !important;
-  display:flex !important;
-  align-items:flex-end !important;
-}
-.sheet{
-  box-sizing:border-box !important;
-  width:100% !important;
-  height:calc(var(--songscope-vv-height) - 12px) !important;
-  max-height:none !important;
-  min-height:0 !important;
-  overflow-y:scroll !important;
-  overflow-x:hidden !important;
-  -webkit-overflow-scrolling:touch !important;
-  touch-action:auto !important;
-  overscroll-behavior-y:contain;
-}
-#sheet-scoring-review,
-#sheet-binding,
-#sheet-session-import{
-  height:calc(var(--songscope-vv-height) - 12px) !important;
-  max-height:none !important;
+  scroll-padding-top:64px;
 }

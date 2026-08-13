@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.17.6';
-const BUILD_ID = '20260814-g0-19';
+const SCHEMA_VERSION = '0.17.8';
+const BUILD_ID = '20260814-g0-21';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -431,17 +431,27 @@ async function refreshStorageEstimate() {
 
 /* ---------------- シート制御 ---------------- */
 let songScopeSheetPageScrollY=0;
+let songScopeSheetKeyboardActive=false;
+let songScopeSheetViewportTimer=null;
 
-function syncSongScopeVisualViewport() {
-  // build19:
-  // Height only. Never offset the sheet with Safari's visualViewport position.
-  const root=document.documentElement;
-  if (!root) return;
+function songScopeVisibleViewportHeight() {
   const vv=window.visualViewport;
-  const h=Math.max(1,Math.floor(vv&&Number(vv.height)||window.innerHeight||1));
-  const w=Math.max(1,Math.floor(vv&&Number(vv.width)||window.innerWidth||1));
-  root.style.setProperty('--songscope-vv-height',`${h}px`);
-  root.style.setProperty('--songscope-vv-width',`${w}px`);
+  const h=vv&&Number(vv.height);
+  return Math.max(1,Math.floor(Number.isFinite(h)&&h>0?h:(window.innerHeight||1)));
+}
+function applySongScopeSheetViewportHeight() {
+  document.documentElement.style.setProperty('--songscope-sheet-vh',`${songScopeVisibleViewportHeight()}px`);
+}
+function songScopeSheetIsOpen() {
+  const wrap=$('#sheet-wrap');
+  return !!(wrap&&!wrap.hidden);
+}
+function activeSongScopeSheet() {
+  return Array.from(document.querySelectorAll('.sheet')).find(s=>!s.hidden)||null;
+}
+function elementIsInsideActiveSheet(el) {
+  const sheet=activeSongScopeSheet();
+  return !!(sheet&&el&&sheet.contains(el));
 }
 
 function lockPageForSheet() {
@@ -451,7 +461,6 @@ function lockPageForSheet() {
   document.body.classList.add('songscope-sheet-open');
   document.body.style.top=`-${songScopeSheetPageScrollY}px`;
 }
-
 function unlockPageForSheet() {
   if (!document.documentElement.classList.contains('songscope-sheet-open')) return;
   document.documentElement.classList.remove('songscope-sheet-open');
@@ -463,19 +472,59 @@ function unlockPageForSheet() {
 }
 
 function openSheet(id) {
-  syncSongScopeVisualViewport();
+  // Freeze the currently visible viewport height at open. Normal Safari toolbar
+  // expansion/collapse while scrolling must not reposition or resize the sheet.
+  applySongScopeSheetViewportHeight();
+  songScopeSheetKeyboardActive=false;
   lockPageForSheet();
   $('#sheet-wrap').hidden=false;
   $$('.sheet').forEach(s=>{
     s.hidden=s.id!==id;
-    if (!s.hidden) s.scrollTop=0;
+    if (!s.hidden) {
+      s.scrollTop=0;
+      s.setAttribute('tabindex','-1');
+    }
   });
 }
 function closeSheet() {
   $('#sheet-wrap').hidden=true;
   $$('.sheet').forEach(s=>{s.hidden=true;});
+  songScopeSheetKeyboardActive=false;
+  if (songScopeSheetViewportTimer) {
+    clearTimeout(songScopeSheetViewportTimer);
+    songScopeSheetViewportTimer=null;
+  }
   unlockPageForSheet();
   if (typeof clearStandaloneReviewImageUrls === 'function') clearStandaloneReviewImageUrls();
+}
+
+function handleSongScopeSheetFocusIn(e) {
+  if (!songScopeSheetIsOpen()||!elementIsInsideActiveSheet(e.target)) return;
+  const tag=String(e.target&&e.target.tagName||'').toLowerCase();
+  const editable=tag==='input'||tag==='textarea'||tag==='select'||e.target&&e.target.isContentEditable;
+  if (!editable) return;
+  songScopeSheetKeyboardActive=true;
+  // visualViewport resize will follow when the keyboard appears.
+}
+function handleSongScopeSheetFocusOut() {
+  if (!songScopeSheetIsOpen()) return;
+  if (songScopeSheetViewportTimer) clearTimeout(songScopeSheetViewportTimer);
+  songScopeSheetViewportTimer=setTimeout(()=>{
+    if (elementIsInsideActiveSheet(document.activeElement)) return;
+    songScopeSheetKeyboardActive=false;
+    // Re-freeze after the keyboard has settled.
+    applySongScopeSheetViewportHeight();
+  },450);
+}
+function handleSongScopeVisualViewportResize() {
+  if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
+  // Resize only for an active form control (software keyboard). Normal browser
+  // chrome changes while swiping are deliberately ignored.
+  applySongScopeSheetViewportHeight();
+}
+function handleSongScopeOrientationChange() {
+  if (!songScopeSheetIsOpen()) return;
+  setTimeout(()=>applySongScopeSheetViewportHeight(),450);
 }
 function busy(title, msg, pct) {
   $('#busy-title').textContent = title;
@@ -7977,11 +8026,17 @@ function wireCompare() {
 
 let resizeTimer = null;
 function wireGlobal() {
+  document.addEventListener('focusin',handleSongScopeSheetFocusIn,true);
+  document.addEventListener('focusout',handleSongScopeSheetFocusOut,true);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize',handleSongScopeVisualViewportResize,{passive:true});
+  }
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { drawAllGraphs(); drawCompare(); }, 150);
   });
   window.addEventListener('orientationchange', () => {
+    handleSongScopeOrientationChange();
     setTimeout(() => { drawAllGraphs(); drawCompare(); }, 350);
   });
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { specCache = { key: '', canvas: null }; drawAllGraphs(); });
@@ -8052,15 +8107,12 @@ document.addEventListener('DOMContentLoaded', init);
 
 // build18: visible viewport HEIGHT may change as Safari chrome expands/collapses.
 // Updating height is safe; position is never derived from visualViewport offsets.
-syncSongScopeVisualViewport();
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize',()=>{
     if (!$('#sheet-wrap') || $('#sheet-wrap').hidden) return;
-    syncSongScopeVisualViewport();
-  },{passive:true});
+      },{passive:true});
 }
 window.addEventListener('resize',()=>{
   if (!$('#sheet-wrap') || $('#sheet-wrap').hidden) return;
-  syncSongScopeVisualViewport();
-},{passive:true});
+  },{passive:true});
 

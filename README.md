@@ -818,3 +818,25 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - `overflow-y: scroll` / `-webkit-overflow-scrolling: touch`を明示。
 - visualViewportはheight/widthのみ利用し、offsetTop/offsetLeftは使用しない。
 - データモデル・daily workflow・Binding/evidence semanticsは変更なし。
+
+
+## G0 build20 — hidden modal regression fix
+- build19で`.sheet-wrap { display:flex !important; }`を追加したため、既存の`[hidden]{display:none !important}`より後勝ちし、modal wrapperが閉じていてもgray overlayだけ常時表示される回帰が発生。
+- `.sheet-wrap`から`display:flex !important`を撤去。
+- 最終CSSに`.sheet-wrap[hidden]{display:none !important}`を追加し、hidden stateを防御的に固定。
+- build19のnative Safari sheet scrolling方針自体は維持。
+- データモデル/Binding/evidence semantics/daily workflowは変更なし。
+
+
+## G0 build21 — UI Platform Stabilization
+- build09/17/18/19/20で累積していた`.sheet` / `.sheet-wrap`のviewport・scroll上書きを削除し、canonical implementation 1系統へ統合。
+- modal open時に`visualViewport.height`を1回だけ取得して`--songscope-sheet-vh`へfreeze。通常のSafari toolbar伸縮では再計算しない。
+- `visualViewport.offsetTop/offsetLeft`は使用しない。
+- ソフトウェアキーボードでsheet内input/textarea/selectがfocus中の場合だけvisualViewport resizeに追従。
+- orientation change時だけviewport heightを再取得。
+- 背面documentはsheet open中だけfixed scroll lockし、close時に元のscroll位置へ復帰。
+- sheet本体を唯一のvertical scroll containerにし、`overflow-y:auto` + `overscroll-behavior-y:contain`。JavaScriptのtouchmove/preventDefaultは使用しない。
+- 全sheet headerをstickyに一本化。
+- transform slide animationを削除し、scroll/stickyとの干渉要因を除去。
+- hidden stateは`.sheet-wrap[hidden]{display:none !important}`で一意に保証。
+- データモデル・Binding・evidence・daily workflowは変更なし。
