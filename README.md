@@ -861,3 +861,18 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - focusout後もsheet geometryはopen時のfreeze値を維持。
 - orientation changeはkeyboard非表示時だけviewport base heightを再取得。
 - データモデル/Binding/evidence/daily workflowは変更なし。
+
+
+## G0 build24 — Keyboard visual-viewport pan compensation
+- build23実機UI-P07で2種類の残存不具合を確認:
+  1. frameSizeMs focus時はinputは見えるがsticky headerが可視領域外へ消える。
+  2. minimumConfidence focus時はheaderは見えるがfocused input本体がkeyboard下へ残る。
+- sheet base heightはbuild23同様、open時の値でfreezeしkeyboardでは変更しない。
+- `visualViewport.scroll`をkeyboard active中だけ監視。通常Safari scroll中は一切反応しない。
+- keyboard active中だけ`visualViewport.offsetTop`を可視領域pan量として読み、`.sheet-wrap`へvisual translationを適用。modal data geometry/heightには使用しない。
+- translation量は`baseHeight - visualViewport.height`以内へclampし、異常/stale offsetからsheetを保護。
+- focused inputのvisibility判定をactive sheet内相対座標へ変更し、header下〜visualViewport.heightの範囲へ内部scroll。
+- keyboard insetを`.sheet`の実bottom paddingにも加え、下部inputでも十分なscroll rangeを確保。
+- resize/scroll双方で最終pan後に再判定し、Safariのfocus後遅延移動へ追従。
+- focusout/close時はkeyboard shift/insetを必ず0へ戻す。
+- 通常scroll・UI-P01〜P06で合格したbuild22 platform semanticsは変更しない。

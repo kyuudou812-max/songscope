@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.18.0';
-const BUILD_ID = '20260814-g0-23';
+const SCHEMA_VERSION = '0.18.1';
+const BUILD_ID = '20260814-g0-24';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -445,57 +445,85 @@ function applySongScopeSheetViewportHeight(heightOverride) {
   const h=Math.max(1,Math.floor(Number(heightOverride)||songScopeVisibleViewportHeight()));
   document.documentElement.style.setProperty('--songscope-sheet-vh',`${h}px`);
 }
+function resetSongScopeKeyboardVisualState() {
+  document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
+  document.documentElement.style.setProperty('--songscope-keyboard-shift-y','0px');
+}
 function freezeSongScopeSheetViewportHeight() {
   songScopeSheetOpenViewportHeight=songScopeVisibleViewportHeight();
   applySongScopeSheetViewportHeight(songScopeSheetOpenViewportHeight);
-  document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
+  resetSongScopeKeyboardVisualState();
 }
 function songScopeCurrentVisualViewportRect() {
   const vv=window.visualViewport;
-  if (!vv) return {top:0,bottom:window.innerHeight||songScopeSheetOpenViewportHeight||1,height:window.innerHeight||1};
+  if (!vv) {
+    const height=Math.max(1,window.innerHeight||songScopeSheetOpenViewportHeight||1);
+    return {top:0,bottom:height,height};
+  }
   const top=Math.max(0,Number(vv.offsetTop)||0);
   const height=Math.max(1,Number(vv.height)||window.innerHeight||1);
   return {top,bottom:top+height,height};
 }
-function updateSongScopeKeyboardInset() {
+function updateSongScopeKeyboardVisualState() {
   const vv=songScopeCurrentVisualViewportRect();
   const base=Math.max(1,songScopeSheetOpenViewportHeight||songScopeVisibleViewportHeight());
   const inset=Math.max(0,Math.round(base-vv.height));
+  // Keyboard-only compensation for Safari panning the visual viewport.
+  // Clamp it to the occluded-height range so a stale/abnormal offset cannot throw the sheet away.
+  const maxShift=Math.max(0,base-vv.height);
+  const shift=Math.max(0,Math.min(Math.round(vv.top),Math.round(maxShift)));
   document.documentElement.style.setProperty('--songscope-keyboard-inset',`${inset}px`);
-  return inset;
+  document.documentElement.style.setProperty('--songscope-keyboard-shift-y',`${shift}px`);
+  return {inset,shift,visualHeight:vv.height};
 }
 function ensureSongScopeFocusedControlVisible(target) {
   const sheet=activeSongScopeSheet();
   if (!sheet||!target||!sheet.contains(target)) return;
+
   const vv=songScopeCurrentVisualViewportRect();
   const sheetRect=sheet.getBoundingClientRect();
   const targetRect=target.getBoundingClientRect();
   const head=sheet.querySelector('.sheet-head');
   const headRect=head?head.getBoundingClientRect():null;
   const margin=16;
-  const visibleTop=Math.max(
-    sheetRect.top,
-    vv.top,
-    headRect?headRect.bottom:sheetRect.top
-  )+margin;
-  const visibleBottom=Math.min(sheetRect.bottom,vv.bottom)-margin;
+
+  // Once the wrapper is keyboard-shifted, compare positions inside the sheet's own
+  // coordinate space. visualViewport.height is the actually usable height above keyboard.
+  const headBottomRel=headRect?Math.max(0,headRect.bottom-sheetRect.top):0;
+  const targetTopRel=targetRect.top-sheetRect.top;
+  const targetBottomRel=targetRect.bottom-sheetRect.top;
+  const visibleTop=headBottomRel+margin;
+  const visibleBottom=Math.min(
+    Math.max(1,Number(sheet.clientHeight)||sheetRect.height||vv.height),
+    vv.height
+  )-margin;
   if (!(visibleBottom>visibleTop)) return;
 
   let delta=0;
-  if (targetRect.bottom>visibleBottom) delta=targetRect.bottom-visibleBottom;
-  else if (targetRect.top<visibleTop) delta=targetRect.top-visibleTop;
+  if (targetBottomRel>visibleBottom) delta=targetBottomRel-visibleBottom;
+  else if (targetTopRel<visibleTop) delta=targetTopRel-visibleTop;
 
   if (Math.abs(delta)>0.5) {
-    sheet.scrollTop=Math.max(0,sheet.scrollTop+delta);
+    const maxScroll=Math.max(0,(Number(sheet.scrollHeight)||0)-(Number(sheet.clientHeight)||0));
+    const next=Math.max(0,Math.min(maxScroll,(Number(sheet.scrollTop)||0)+delta));
+    sheet.scrollTop=next;
   }
 }
 function scheduleSongScopeFocusedControlVisibility(target) {
+  const control=target||songScopeSheetFocusedControl||document.activeElement;
+  if (typeof requestAnimationFrame==='function') {
+    requestAnimationFrame(()=>{
+      if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
+      ensureSongScopeFocusedControlVisible(control);
+    });
+  }
   if (songScopeSheetViewportTimer) clearTimeout(songScopeSheetViewportTimer);
   songScopeSheetViewportTimer=setTimeout(()=>{
     songScopeSheetViewportTimer=null;
     if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
-    ensureSongScopeFocusedControlVisible(target||songScopeSheetFocusedControl||document.activeElement);
-  },160);
+    updateSongScopeKeyboardVisualState();
+    ensureSongScopeFocusedControlVisible(control||songScopeSheetFocusedControl||document.activeElement);
+  },180);
 }
 function songScopeSheetIsOpen() {
   const wrap=$('#sheet-wrap');
@@ -548,7 +576,7 @@ function closeSheet() {
   songScopeSheetKeyboardActive=false;
   songScopeSheetFocusedControl=null;
   songScopeSheetOpenViewportHeight=0;
-  document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
+  resetSongScopeKeyboardVisualState();
   if (songScopeSheetViewportTimer) {
     clearTimeout(songScopeSheetViewportTimer);
     songScopeSheetViewportTimer=null;
@@ -564,8 +592,9 @@ function handleSongScopeSheetFocusIn(e) {
   if (!editable) return;
   songScopeSheetKeyboardActive=true;
   songScopeSheetFocusedControl=e.target;
-  // Do not resize/reposition the sheet. Wait for Safari's keyboard viewport resize,
-  // then scroll only the active sheet enough to reveal the focused control.
+  // The sheet's base geometry remains frozen. Keyboard-only visualViewport events
+  // may shift the wrapper visually and scroll this sheet internally.
+  updateSongScopeKeyboardVisualState();
   scheduleSongScopeFocusedControlVisibility(e.target);
 }
 function handleSongScopeSheetFocusOut() {
@@ -579,15 +608,20 @@ function handleSongScopeSheetFocusOut() {
     }
     songScopeSheetKeyboardActive=false;
     songScopeSheetFocusedControl=null;
-    document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
+    resetSongScopeKeyboardVisualState();
     // Sheet geometry remains the original frozen open height.
   },450);
 }
 function handleSongScopeVisualViewportResize() {
   if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
-  // Keyboard changes the visual viewport on iPhone Safari. Keep modal geometry frozen;
-  // only reserve the occluded bottom area and reveal the focused control by internal scroll.
-  updateSongScopeKeyboardInset();
+  updateSongScopeKeyboardVisualState();
+  scheduleSongScopeFocusedControlVisibility(songScopeSheetFocusedControl||document.activeElement);
+}
+function handleSongScopeVisualViewportScroll() {
+  if (!songScopeSheetIsOpen()||!songScopeSheetKeyboardActive) return;
+  // Safari may pan the visual viewport after focus/keyboard animation without another resize.
+  // Compensate only while a sheet control is actively focused.
+  updateSongScopeKeyboardVisualState();
   scheduleSongScopeFocusedControlVisibility(songScopeSheetFocusedControl||document.activeElement);
 }
 function handleSongScopeOrientationChange() {
@@ -8102,6 +8136,7 @@ function wireGlobal() {
   document.addEventListener('focusout',handleSongScopeSheetFocusOut,true);
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize',handleSongScopeVisualViewportResize,{passive:true});
+    window.visualViewport.addEventListener('scroll',handleSongScopeVisualViewportScroll,{passive:true});
   }
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
@@ -8176,15 +8211,4 @@ async function init() {
 }
 document.addEventListener('DOMContentLoaded', init);
 
-
-// build18: visible viewport HEIGHT may change as Safari chrome expands/collapses.
-// Updating height is safe; position is never derived from visualViewport offsets.
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize',()=>{
-    if (!$('#sheet-wrap') || $('#sheet-wrap').hidden) return;
-      },{passive:true});
-}
-window.addEventListener('resize',()=>{
-  if (!$('#sheet-wrap') || $('#sheet-wrap').hidden) return;
-  },{passive:true});
 

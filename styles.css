@@ -227,6 +227,7 @@ input[type=range]::-webkit-slider-thumb{
 :root{
   --songscope-sheet-vh:100svh;
   --songscope-keyboard-inset:0px;
+  --songscope-keyboard-shift-y:0px;
 }
 @supports not (height:100svh){
   :root{--songscope-sheet-vh:100vh;}
@@ -244,6 +245,8 @@ input[type=range]::-webkit-slider-thumb{
   padding-top:max(8px,var(--safe-t));
   overflow:hidden;
   overscroll-behavior:none;
+  transform:translate3d(0,var(--songscope-keyboard-shift-y),0);
+  will-change:transform;
 }
 .sheet-wrap[hidden]{display:none !important}
 .sheet-bg{
@@ -263,10 +266,12 @@ input[type=range]::-webkit-slider-thumb{
   overscroll-behavior-y:contain;
   -webkit-overflow-scrolling:touch;
   background:var(--bg);
+  background-clip:padding-box;
   border-radius:16px 16px 0 0;
   /* No top padding on the scroll container.
      A top padding strip allows scrolled content to appear above a sticky header. */
-  padding:0 16px calc(24px + var(--safe-b));
+  padding:0 16px calc(24px + var(--safe-b) + var(--songscope-keyboard-inset));
+  scroll-padding-bottom:calc(var(--songscope-keyboard-inset) + 24px);
 }
 .sheet-head{
   position:sticky;
@@ -695,9 +700,6 @@ body.songscope-sheet-open{
 }
 
 /* G0 build22 — sticky-header occlusion invariant */
-.sheet{
-  background-clip:padding-box;
-}
 .sheet-head::before{
   content:"";
   position:absolute;
@@ -713,12 +715,13 @@ body.songscope-sheet-open{
 /* G0 build23 — keyboard visibility invariant
    Keyboard must never resize/reposition the sheet. It only increases internal
    scroll reserve so the focused field can be brought above the keyboard. */
-.sheet{
-  scroll-padding-bottom:calc(var(--songscope-keyboard-inset) + 24px);
-}
 .sheet input,
 .sheet textarea,
 .sheet select{
   scroll-margin-top:88px;
   scroll-margin-bottom:calc(var(--songscope-keyboard-inset) + 24px);
 }
+
+
+/* G0 build24 — keyboard-only visual viewport pan compensation is integrated
+   into the canonical .sheet-wrap rule above. */
