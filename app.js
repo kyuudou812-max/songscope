@@ -9,8 +9,8 @@
 'use strict';
 
 const APP_VERSION = '0.2.0-g0';
-const SCHEMA_VERSION = '0.18.5';
-const BUILD_ID = '20260814-g0-28';
+const SCHEMA_VERSION = '0.18.6';
+const BUILD_ID = '20260814-g0-29';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -437,6 +437,13 @@ let songScopeSheetOpenViewportHeight=0;
 let songScopeSheetFocusedControl=null;
 let songScopeKeyboardSettleToken=0;
 
+let songScopeKeyboardGeometry={
+  phase:'closed', // closed | opening | stable | closing
+  samples:[],
+  stableVisualHeight:null,
+  lastSampleAt:0
+};
+
 function songScopeVisibleViewportHeight() {
   const vv=window.visualViewport;
   const h=vv&&Number(vv.height);
@@ -450,6 +457,10 @@ function resetSongScopeKeyboardVisualState() {
   document.documentElement.style.setProperty('--songscope-keyboard-inset','0px');
   document.documentElement.style.setProperty('--songscope-keyboard-shift-y','0px');
   document.documentElement.style.setProperty('--songscope-keyboard-reserve','0px');
+  songScopeKeyboardGeometry.phase='closed';
+  songScopeKeyboardGeometry.samples.length=0;
+  songScopeKeyboardGeometry.stableVisualHeight=null;
+  songScopeKeyboardGeometry.lastSampleAt=0;
 }
 function freezeSongScopeSheetViewportHeight() {
   songScopeSheetOpenViewportHeight=songScopeVisibleViewportHeight();
@@ -466,38 +477,80 @@ function songScopeCurrentVisualViewportRect() {
   const height=Math.max(1,Number(vv.height)||window.innerHeight||1);
   return {top,bottom:top+height,height};
 }
-function songScopeKeyboardUsableHeight(vvRect) {
+function beginSongScopeKeyboardOpening() {
+  songScopeKeyboardGeometry.phase='opening';
+  songScopeKeyboardGeometry.samples.length=0;
+  songScopeKeyboardGeometry.stableVisualHeight=null;
+  songScopeKeyboardGeometry.lastSampleAt=0;
+}
+function addSongScopeKeyboardSample(vvRect) {
+  const h=Math.max(1,Math.round(Number(vvRect&&vvRect.height)||1));
+  const top=Math.max(0,Math.round(Number(vvRect&&vvRect.top)||0));
+  const now=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
+  const sample={height:h,top,at:now};
+  songScopeKeyboardGeometry.samples.push(sample);
+  if (songScopeKeyboardGeometry.samples.length>12) songScopeKeyboardGeometry.samples.shift();
+  songScopeKeyboardGeometry.lastSampleAt=now;
+  return sample;
+}
+function deriveSongScopeStableKeyboardHeight() {
+  const s=songScopeKeyboardGeometry.samples;
+  if (s.length<3) return null;
+
+  const recent=s.slice(-4).map(x=>x.height);
+  const min=Math.min(...recent);
+  const max=Math.max(...recent);
+  if (max-min>12) return null;
+
+  const sorted=recent.slice().sort((a,b)=>a-b);
+  const mid=Math.floor(sorted.length/2);
+  const median=sorted.length%2 ? sorted[mid] : Math.round((sorted[mid-1]+sorted[mid])/2);
+
   const base=Math.max(1,songScopeSheetOpenViewportHeight||songScopeVisibleViewportHeight());
-  const vvHeight=Math.max(1,Number(vvRect&&vvRect.height)||1);
-  const innerHeight=Math.max(1,Number(window.innerHeight)||1);
-  // iPhone Safari can transiently report an extremely small visualViewport.height
-  // while keyboard/window geometry is settling. The larger of vv.height and
-  // innerHeight tracks the actually usable settled viewport without accepting
-  // the short-lived 103px-style intermediate state observed in build27.
-  return Math.max(1,Math.min(base,Math.max(vvHeight,innerHeight)));
+  if (median>=base-80) return null;
+  return Math.max(1,Math.min(base,median));
 }
 function updateSongScopeKeyboardVisualState() {
   const vv=songScopeCurrentVisualViewportRect();
   const base=Math.max(1,songScopeSheetOpenViewportHeight||songScopeVisibleViewportHeight());
-  const inset=Math.max(0,Math.round(base-vv.height));
 
-  // Keyboard-only compensation for Safari panning the visual viewport.
+  if (songScopeSheetKeyboardActive && songScopeKeyboardGeometry.phase==='closed') {
+    beginSongScopeKeyboardOpening();
+  }
+  if (songScopeSheetKeyboardActive) addSongScopeKeyboardSample(vv);
+
+  const inset=Math.max(0,Math.round(base-vv.height));
   const maxShift=Math.max(0,base-vv.height);
   const shift=Math.max(0,Math.min(Math.round(vv.top),Math.round(maxShift)));
 
-  // build28 invariant:
-  // while the keyboard is open, reserve enough real scroll range for the whole
-  // form to remain reachable, regardless of which field currently has focus.
-  // Reserve is based on stable usable viewport height, not on focused field.
-  const usableHeight=songScopeKeyboardUsableHeight(vv);
-  const reachReserve=songScopeSheetKeyboardActive
-    ? Math.max(0,Math.round(base-usableHeight))
+  const derived=deriveSongScopeStableKeyboardHeight();
+  if (derived!=null) {
+    songScopeKeyboardGeometry.phase='stable';
+    songScopeKeyboardGeometry.stableVisualHeight=derived;
+  }
+
+  const stableHeight=songScopeKeyboardGeometry.stableVisualHeight;
+  const reachReserve=(songScopeSheetKeyboardActive && stableHeight!=null)
+    ? Math.max(0,Math.round(base-stableHeight))
     : 0;
 
   document.documentElement.style.setProperty('--songscope-keyboard-inset',`${inset}px`);
   document.documentElement.style.setProperty('--songscope-keyboard-shift-y',`${shift}px`);
   document.documentElement.style.setProperty('--songscope-keyboard-reserve',`${reachReserve}px`);
-  return {inset,shift,visualHeight:vv.height,usableHeight,reachReserve};
+
+  return {
+    phase:songScopeKeyboardGeometry.phase,
+    inset,shift,
+    visualHeight:vv.height,
+    stableVisualHeight:stableHeight,
+    reachReserve
+  };
+}
+function songScopeKeyboardUsableHeight(vvRect) {
+  const base=Math.max(1,songScopeSheetOpenViewportHeight||songScopeVisibleViewportHeight());
+  const stable=songScopeKeyboardGeometry.stableVisualHeight;
+  if (songScopeSheetKeyboardActive && stable!=null) return stable;
+  return Math.max(1,Math.min(base,Number(vvRect&&vvRect.height)||base));
 }
 function ensureSongScopeFocusedControlVisible(target) {
   const sheet=activeSongScopeSheet();
@@ -553,13 +606,14 @@ function scheduleSongScopeFocusedControlVisibility(target) {
     ensureSongScopeFocusedControlVisible(control||songScopeSheetFocusedControl||document.activeElement);
 
     const reserve=document.documentElement.style.getPropertyValue('--songscope-keyboard-reserve')||'0px';
-    const sig=`${Math.round(vv.top)}:${Math.round(vv.height)}:${Math.round(window.innerHeight||0)}:${reserve}`;
+    const sig=`${Math.round(vv.top)}:${Math.round(vv.height)}:${songScopeKeyboardGeometry.phase}:${songScopeKeyboardGeometry.stableVisualHeight||0}:${reserve}`;
     if (sig===lastSig) stableCount++;
     else { lastSig=sig; stableCount=0; }
 
     // Safari keyboard/focus animation can settle in stages. Require repeated identical
     // geometry or keep sampling for up to ~720 ms.
-    if (stableCount>=2 || attempts>=9) return;
+    const keyboardStable=!songScopeSheetKeyboardActive || songScopeKeyboardGeometry.phase==='stable';
+    if ((stableCount>=2 && keyboardStable) || attempts>=12) return;
     songScopeSheetViewportTimer=setTimeout(sample,80);
   };
 
@@ -633,10 +687,12 @@ function handleSongScopeSheetFocusIn(e) {
   const tag=String(e.target&&e.target.tagName||'').toLowerCase();
   const editable=tag==='input'||tag==='textarea'||tag==='select'||(e.target&&e.target.isContentEditable);
   if (!editable) return;
+  const wasKeyboardActive=songScopeSheetKeyboardActive;
   songScopeSheetKeyboardActive=true;
   songScopeSheetFocusedControl=e.target;
-  // The sheet's base geometry remains frozen. Keyboard-only visualViewport events
-  // may shift the wrapper visually and scroll this sheet internally.
+  if (!wasKeyboardActive) beginSongScopeKeyboardOpening();
+  // Keep sheet geometry frozen. Commit whole-form reach reserve only after
+  // visualViewport keyboard geometry reaches a stable state.
   updateSongScopeKeyboardVisualState();
   scheduleSongScopeFocusedControlVisibility(e.target);
 }

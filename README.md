@@ -922,3 +922,16 @@ Claude再監査（2026-08-11）のBlocking findingsを受け、Performance/Bindi
 - user manual scrollを優先し、keyboard中でも`frameSizeMs → minimumConfidence → preset → 保存`まで自由に移動できることを新UI-P07不変条件とする。
 - build27の一時UI診断panel/event loggerは削除。
 - data model / Binding / evidence / daily workflowは変更なし。
+
+
+## G0 build29 — Keyboard geometry state machine
+- build28実機で、sheetを開いて最初に`frameSizeMs=40`へfocusした時だけ`minimumConfidence=0.55`まで手動scrollできず、別fieldを一度focusした後は到達できることを確認。
+- build28の`max(visualViewport.height, window.innerHeight)`によるstable usable height判定を廃止。iPhone Safariではlayout viewportの`window.innerHeight`がkeyboard中も大きいまま残り得るため、初回keyboard open時にglobal reach reserveを0のままにする可能性があった。
+- keyboard geometryを`closed → opening → stable → closing`のstate machineとして扱う。
+- keyboard open直後の単発viewport値ではreserveを確定しない。
+- 最新4 sampleの`visualViewport.height`が12px以内へ収束し、open時base heightより80px以上小さい場合のみstable keyboard heightとして採用。
+- build27で観測した約103pxのようなanimation中間値は、recent sample convergenceを満たさない限り採用しない。
+- stable後は`baseHeight - stableVisualHeight`をactive sheet全体のglobal reach reserveとして維持し、field切替では消さない。
+- focus visibility計算もstable keyboard heightを使う。
+- settle loopはkeyboard geometryがstableになる前に早期終了しない（最大12 sample / 80ms）。
+- この方式を今後のSongScope全modal formで再利用するSafari keyboard lifecycle primitive候補とする。
