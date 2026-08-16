@@ -10,7 +10,7 @@
 
 const APP_VERSION = '0.2.0-g0';
 const SCHEMA_VERSION = '0.18.6';
-const BUILD_ID = '20260814-g0-29';
+const BUILD_ID = '20260816-g0-30';
 const EXTERNAL_EVALUATION_SCHEMA = 'songscope-external-evaluation-v1';
 const EXTERNAL_EVALUATION_SCHEMA_V2 = 'songscope-external-evaluation-v2';
 const EVIDENCE_SET_SCHEMA = 'songscope-evaluation-evidence-set-v1';
@@ -90,6 +90,98 @@ function fmtDate(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '';
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+
+/* ---------------- Daily Use Route: current intake batch (UI-only) ----------------
+ * 「今回追加したもの」を既存全履歴から分離して見せるための表示用状態。
+ * 証拠の正本ではない。recordings/scoringEvidenceSets が常に正本。
+ * sessionStorageなので同一タブ/同一PWAセッション内の閉じる→再開では維持し、
+ * 長期の監査データや歌唱同一性の根拠には使用しない。
+ */
+const INTAKE_SESSION_STORAGE_KEY = 'songscope-current-intake-session-v1';
+let intakeSessionMemory = null;
+function normalizeIntakeSession(x) {
+  if (!x || typeof x !== 'object') return null;
+  return {
+    schemaVersion:'songscope-current-intake-session-v1',
+    sessionId:String(x.sessionId||uid('intake')),
+    startedAt:x.startedAt||nowIso(),
+    updatedAt:x.updatedAt||x.startedAt||nowIso(),
+    recordingIds:Array.from(new Set((Array.isArray(x.recordingIds)?x.recordingIds:[]).map(String).filter(Boolean))),
+    scoringEvidenceSetIds:Array.from(new Set((Array.isArray(x.scoringEvidenceSetIds)?x.scoringEvidenceSetIds:[]).map(String).filter(Boolean)))
+  };
+}
+function readCurrentIntakeSession() {
+  try {
+    const raw=sessionStorage.getItem(INTAKE_SESSION_STORAGE_KEY);
+    if (raw) {
+      const parsed=normalizeIntakeSession(JSON.parse(raw));
+      if (parsed) { intakeSessionMemory=parsed; return parsed; }
+    }
+  } catch(e) { /* sessionStorage unavailable: memory fallback */ }
+  return normalizeIntakeSession(intakeSessionMemory);
+}
+function writeCurrentIntakeSession(x) {
+  const s=normalizeIntakeSession(x);
+  intakeSessionMemory=s;
+  try { sessionStorage.setItem(INTAKE_SESSION_STORAGE_KEY,JSON.stringify(s)); } catch(e) { }
+  return s;
+}
+function ensureCurrentIntakeSession() {
+  return readCurrentIntakeSession() || writeCurrentIntakeSession({
+    sessionId:uid('intake'),startedAt:nowIso(),updatedAt:nowIso(),recordingIds:[],scoringEvidenceSetIds:[]
+  });
+}
+function trackCurrentIntakeRecording(rec) {
+  if (!rec || !rec.recordingId) return;
+  const s=ensureCurrentIntakeSession();
+  if (!s.recordingIds.includes(rec.recordingId)) s.recordingIds.push(rec.recordingId);
+  s.updatedAt=nowIso();
+  writeCurrentIntakeSession(s);
+}
+function trackCurrentIntakeScoringEvidence(set) {
+  if (!set || !set.evidenceSetId) return;
+  const s=ensureCurrentIntakeSession();
+  if (!s.scoringEvidenceSetIds.includes(set.evidenceSetId)) s.scoringEvidenceSetIds.push(set.evidenceSetId);
+  s.updatedAt=nowIso();
+  writeCurrentIntakeSession(s);
+}
+async function renderSessionImportSummary() {
+  const box=$('#session-import-current');
+  if (!box) return;
+  const s=ensureCurrentIntakeSession();
+  const recs=(await Promise.all(s.recordingIds.map(id=>dbGet('recordings',id).catch(()=>null)))).filter(Boolean);
+  const sets=(await Promise.all(s.scoringEvidenceSetIds.map(id=>dbGet('scoringEvidenceSets',id).catch(()=>null)))).filter(set=>set&&standaloneLifecycleStatus(set)!=='archived');
+
+  // UI-only indexを正本DBに合わせて掃除する。削除されたIDを履歴のように残さない。
+  const cleanRecIds=recs.map(x=>x.recordingId);
+  const cleanSetIds=sets.map(x=>x.evidenceSetId);
+  if (cleanRecIds.length!==s.recordingIds.length || cleanSetIds.length!==s.scoringEvidenceSetIds.length) {
+    s.recordingIds=cleanRecIds; s.scoringEvidenceSetIds=cleanSetIds; s.updatedAt=nowIso(); writeCurrentIntakeSession(s);
+  }
+
+  const recItems=recs.map(rec=>{
+    const title=rec.title||rec.fileName||'(無題の録音)';
+    const detail=[fmtDate(rec.recordedAt||rec.createdAt), rec.durationSec>0?fmtTime(rec.durationSec,false):'解析中'].filter(Boolean).join(' ／ ');
+    return `<div class="session-current-item"><div><span class="pill">録音</span> <b>${escapeHtml(title)}</b></div><div class="small">${escapeHtml(detail)}</div></div>`;
+  }).join('');
+  const scoringItems=sets.map(set=>{
+    const sd=standaloneStructuredDescriptor(set);
+    const r=sd&&sd.result||{};
+    const title=r.title||`DAM採点画像 ${Array.isArray(set.images)?set.images.length:0}枚`;
+    const score=(r.overallScore!==null&&r.overallScore!==undefined&&isFinite(Number(r.overallScore)))?`DAM ${Number(r.overallScore).toFixed(3)}`:`画像 ${Array.isArray(set.images)?set.images.length:0}枚`;
+    return `<div class="session-current-item"><div><span class="pill">採点</span> <b>${escapeHtml(title)}</b></div><div class="small">${escapeHtml(score)} ／ 録音との対応は自動確定していません</div></div>`;
+  }).join('');
+  const total=recs.length+sets.length;
+  box.innerHTML=`<div class="session-current-head"><div><b>今回追加したもの</b><div class="small">録音 ${recs.length}件 ／ DAM採点 ${sets.length}件</div></div><span class="pill ${total?'ok':'wait'}">${total?'追加済み':'まだ0件'}</span></div>
+    ${total?`<div class="session-current-list">${recItems}${scoringItems}</div>`:'<p class="small session-current-empty">ここには、この取り込み中に新しく保存した録音とDAM採点だけを表示します。過去の履歴は混ざりません。</p>'}
+    <p class="small session-current-rule">録音とDAM採点は、同じ1回の歌唱だと確認するまで別々の記録として保持します。</p>`;
+}
+async function openSessionImportSheet() {
+  ensureCurrentIntakeSession();
+  await renderSessionImportSummary();
+  openSheet('sheet-session-import');
 }
 function fmtBytes(n) {
   if (!isFinite(n)) return '—';
@@ -905,8 +997,8 @@ async function renderNormalWorkflowStatus() {
   else if (n.kind==='binding'||n.kind==='binding_conflict') action=`<button class="primary wide" data-workflow-binding="${escapeHtml(n.evidenceSetId)}">どの録音か確認する</button>`;
   else if (n.kind==='structure') action=`<div class="workflow-dev-actions"><button class="primary wide" data-workflow-export="${escapeHtml(n.evidenceSetId)}">ChatGPTに渡すファイルを作る</button><button class="mini wide" data-workflow-import="${escapeHtml(n.evidenceSetId)}">読み取り結果をSongScopeへ戻す</button><p class="small">※ ここは開発中の暫定工程です。最終版では通常操作から消します。</p></div>`;
   else action='<button class="primary wide" data-workflow-session>今回の記録を取り込む</button>';
-  box.innerHTML=`<p class="workflow-next-title"><b>${escapeHtml(n.title)}</b></p><p class="small">${escapeHtml(n.detail)}</p>${action}<p class="small workflow-counts">${model.pending?`確認待ち ${model.pending}件 ／ `:''}記録済み ${model.recordings}歌唱 ／ 採点付き ${model.bound}歌唱</p>`;
-  $$('[data-workflow-session]').forEach(b=>b.addEventListener('click',()=>openSheet('sheet-session-import')));
+  box.innerHTML=`<p class="workflow-next-title"><b>${escapeHtml(n.title)}</b></p><p class="small">${escapeHtml(n.detail)}</p>${action}<p class="small workflow-counts">全体の状態：${model.pending?`確認待ち ${model.pending}件 ／ `:''}記録済み ${model.recordings}歌唱 ／ 採点付き ${model.bound}歌唱</p>`;
+  $$('[data-workflow-session]').forEach(b=>b.addEventListener('click',()=>openSessionImportSheet().catch(()=>toast('取り込み画面を開けませんでした'))));
   $$('[data-workflow-review]').forEach(b=>b.addEventListener('click',async()=>{try{await openStandaloneStructuredReview(b.dataset.workflowReview);}catch(e){toast((e&&e.message)||'レビューを開けませんでした');}}));
   $$('[data-workflow-binding]').forEach(b=>b.addEventListener('click',async()=>{try{await openBindingSheet(b.dataset.workflowBinding);}catch(e){toast((e&&e.message)||'Binding管理を開けませんでした');}}));
   $$('[data-workflow-export]').forEach(b=>b.addEventListener('click',()=>exportStandaloneEvidenceSet(b.dataset.workflowExport)));
@@ -1547,8 +1639,8 @@ async function onRecSave() {
     }
     closeSheet();
     await loadRecordings();
-    await openRecording(rec.recordingId);
-    toast(matches.length > 1 ? `同じ音声を既存録音として再解析します（既存重複 ${matches.length}件）` : '同じ音声を既存録音として再解析します');
+    await openSessionImportSheet();
+    toast(matches.length > 1 ? `同じ音声は既存録音として扱います（既存重複 ${matches.length}件）` : '同じ音声はすでに保存されています。今回追加には重ねて数えません');
     startAnalysis(rec, file);
     return;
   }
@@ -1608,9 +1700,10 @@ async function onRecSave() {
     toast('保存できませんでした（空き容量をご確認ください）');
     return;
   }
+  trackCurrentIntakeRecording(rec);
   closeSheet();
   await loadRecordings();
-  await openRecording(rec.recordingId);
+  await openSessionImportSheet();
   startAnalysis(rec, file);
 }
 
@@ -1772,6 +1865,7 @@ async function startAnalysis(rec, fileMaybe) {
     state.analyzing = false;
     refreshStorageEstimate();
     loadRecordings();
+    if ($('#sheet-session-import') && !$('#sheet-session-import').hidden) renderSessionImportSummary().catch(()=>{});
   }
 }
 
@@ -4409,9 +4503,12 @@ async function onStandaloneEvidenceInput(fileList) {
     if (!files.length) return;
     busy('DAMデンモク採点履歴','録音とは別の証拠として保存しています…',20);
     const out=await importStandaloneScoringEvidence(files);
+    if (!out.duplicate) trackCurrentIntakeScoringEvidence(out.set);
     closeSheet();
     await renderStandaloneEvidenceSets();
-    toast(out.duplicate ? '同じ画像セットはすでに保存されています' : `${out.set.images.length}枚を未紐付け採点証拠として保存しました`);
+    await renderNormalWorkflowStatus().catch(()=>{});
+    await openSessionImportSheet();
+    toast(out.duplicate ? '同じ画像セットはすでに保存されています。今回追加には重ねて数えません' : `${out.set.images.length}枚を今回のDAM採点として保存しました`);
   } catch(e) { closeSheet(); console.error(e); toast('採点履歴の保存に失敗しました：'+((e&&e.message)||'')); }
 }
 
@@ -7879,9 +7976,9 @@ function cmpTick() {
  * イベント配線 / 初期化
  * ===================================================================== */
 function wireHome() {
-  $('#btn-session-import').addEventListener('click',()=>openSheet('sheet-session-import'));
-  $('#btn-session-add-recording').addEventListener('click',()=>$('#file-input').click());
-  $('#btn-session-add-scoring').addEventListener('click',()=>$('#scoring-evidence-input').click());
+  $('#btn-session-import').addEventListener('click',()=>openSessionImportSheet().catch(()=>toast('取り込み画面を開けませんでした')));
+  $('#btn-session-add-recording').addEventListener('click',()=>{ensureCurrentIntakeSession();$('#file-input').click();});
+  $('#btn-session-add-scoring').addEventListener('click',()=>{ensureCurrentIntakeSession();$('#scoring-evidence-input').click();});
   $('#btn-scoring-archive-toggle').addEventListener('click', async () => { showArchivedScoringEvidence=!showArchivedScoringEvidence; await renderStandaloneEvidenceSets(); });
   $('#scoring-evidence-input').addEventListener('change', e => {
     // iOS Safariではinput.valueを空にするとFileList自体も空になる場合がある。

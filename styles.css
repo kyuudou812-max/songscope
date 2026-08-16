@@ -732,3 +732,44 @@ body.songscope-sheet-open{
    While a software keyboard is open, keyboardReserve belongs to the whole
    active sheet, not to the currently focused field. This guarantees that
    the user can manually scroll from any field to every later field/action. */
+
+
+/* G0 build30 — D04 current-intake visibility */
+.session-current-summary{
+  margin:10px 0 14px;
+  padding:12px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--bg-elev);
+}
+.session-current-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.session-current-head > div{min-width:0}
+.session-current-list{
+  display:grid;
+  gap:8px;
+  margin-top:10px;
+}
+.session-current-item{
+  padding:9px 10px;
+  border-radius:10px;
+  background:var(--bg);
+  overflow-wrap:anywhere;
+}
+.session-current-item > div:first-child{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  min-width:0;
+}
+.session-current-item b{min-width:0}
+.session-current-empty{margin:10px 0 0}
+.session-current-rule{
+  margin:10px 0 0;
+  padding-top:9px;
+  border-top:1px solid var(--line);
+}

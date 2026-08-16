@@ -1,3 +1,24 @@
+# G0 build30 — Daily Use Route D04 current intake separation
+
+- Build: `20260816-g0-30` / schema: `0.18.6` / DB: unchanged (`8`).
+- 「今回のカラオケを取り込む」に **今回追加したもの** のサマリーを追加。過去の全履歴件数と今回の取り込み件数を分離した。
+- 今回分は UI-only の `sessionStorage` index で追跡し、正本は従来どおり `recordings` / `scoringEvidenceSets`。歌唱同一性・監査根拠には使わない。
+- 新規録音保存後、DAM画像保存後は取り込みシートへ戻る。録音→DAM→録音→DAMの混在順序を通常導線内で継続できる。
+- 同一音声・同一DAM画像の再選択は今回件数へ重複加算しない。
+- ホームの既存集計は `全体の状態：` と明示し、「今回分」と混同しないようにした。
+- 1/2 の番号表示を「録」「採」に変更し、順番を強制するように見える表現を除去。
+- 「閉じる（あとで続けられます）」では今回サマリーを保持する。データモデル・Binding assertion・keyboard platform v1は変更していない。
+
+## D04 runtime gate
+
+1. 取り込み画面を開いた時点で「今回追加したもの」が 0件。過去履歴数は混ざらない。
+2. 録音1件 → DAM1件 → 録音1件 → DAM1件の順で追加する。
+3. 最終的に「録音 2件 ／ DAM採点 2件」と表示され、4項目が今回追加一覧に残る。
+4. 各DAM項目は「録音との対応は自動確定していません」と表示される。
+5. ホームの件数は「全体の状態」として別表示。
+
+---
+
 # G0 build06 — standalone structured scoring result
 
 - `scoringEvidenceSets` に外部AIの構造化採点JSONを戻して保存できるようにした。

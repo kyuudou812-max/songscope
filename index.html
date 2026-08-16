@@ -13,7 +13,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
-<link rel="stylesheet" href="styles.css?v=20260814-g0-29">
+<link rel="stylesheet" href="styles.css?v=20260816-g0-30">
 <title>SongScope</title>
 </head>
 <body>
@@ -374,8 +374,10 @@
     <div class="sheet-head scoring-review-sticky-head"><span>今回のカラオケを取り込む</span><button class="sheet-close" data-close>閉じる</button></div>
     <p class="sheet-sub">順番はどちらからでも大丈夫です。録音は1曲ずつ、DAM採点画像はまとめて選べます。取り込んだ後はSongScopeが「確認が必要なもの」だけホームに出します。</p>
 
+    <div id="session-import-current" class="session-current-summary" aria-live="polite"></div>
+
     <div class="session-import-step">
-      <div class="session-step-no">1</div>
+      <div class="session-step-no" aria-hidden="true">録</div>
       <div class="session-step-body">
         <b>ボイスメモの録音</b>
         <p class="small">歌唱の原本です。曲名などは取り込み時に最低限だけ確認します。</p>
@@ -384,7 +386,7 @@
     </div>
 
     <div class="session-import-step">
-      <div class="session-step-no">2</div>
+      <div class="session-step-no" aria-hidden="true">採</div>
       <div class="session-step-body">
         <b>DAM採点画像</b>
         <p class="small">デンモクの採点履歴スクリーンショットを選びます。複数枚をまとめて選べます。</p>
@@ -395,7 +397,7 @@
     <div class="note session-import-note">
       <p class="small"><b>入力しなくてよいもの：</b>DAM点数、採点モード、証拠ID、SHA、JSON、Binding履歴。取得できるものはSongScope側で保持します。</p>
     </div>
-    <button class="mini wide" data-close>今回はここまで</button>
+    <button class="mini wide" data-close>閉じる（あとで続けられます）</button>
   </div>
 
   <!-- G0 build13: append-only Binding Assertion management -->
@@ -443,7 +445,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="zip.js?v=20260814-g0-29"></script>
-<script src="app.js?v=20260814-g0-29"></script>
+<script src="zip.js?v=20260816-g0-30"></script>
+<script src="app.js?v=20260816-g0-30"></script>
 </body>
 </html>
