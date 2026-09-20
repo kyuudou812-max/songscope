@@ -23,9 +23,16 @@
   const STORAGE_BEST = "neonDash.best";
   const STORAGE_MUTE = "neonDash.muted";
 
+  function safeGet(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+  function safeSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* private mode / blocked storage */ }
+  }
+
   // ---------- Audio ----------
   let audioCtx = null;
-  let muted = localStorage.getItem(STORAGE_MUTE) === "1";
+  let muted = safeGet(STORAGE_MUTE) === "1";
   updateMuteBtn();
 
   function ensureAudio() {
@@ -87,7 +94,7 @@
   }
   muteBtn.addEventListener("click", () => {
     muted = !muted;
-    localStorage.setItem(STORAGE_MUTE, muted ? "1" : "0");
+    safeSet(STORAGE_MUTE, muted ? "1" : "0");
     updateMuteBtn();
   });
 
@@ -156,10 +163,10 @@
   }
 
   function getBest() {
-    return parseInt(localStorage.getItem(STORAGE_BEST) || "0", 10);
+    return parseInt(safeGet(STORAGE_BEST) || "0", 10);
   }
   function setBest(v) {
-    localStorage.setItem(STORAGE_BEST, String(v));
+    safeSet(STORAGE_BEST, String(v));
   }
   bestEl.textContent = getBest();
 

@@ -16,10 +16,11 @@ html, body {
   height: 100%;
   background: var(--bg);
   overflow: hidden;
-  font-family: "Helvetica Neue", "Hiragino Sans", "Segoe UI", sans-serif;
+  font-family: "IBM Plex Mono", "Hiragino Sans", "Segoe UI", monospace;
   color: #eaf6ff;
   touch-action: none;
   overscroll-behavior: none;
+  color-scheme: dark;
 }
 
 #app {
@@ -64,9 +65,11 @@ canvas#game {
 
 .hud-value {
   display: block;
-  font-size: 22px;
+  font-family: "Rajdhani", "IBM Plex Mono", sans-serif;
+  font-size: 26px;
   font-weight: 700;
   letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
   text-shadow: 0 0 10px rgba(78, 242, 255, 0.6);
 }
 
@@ -115,10 +118,12 @@ canvas#game {
 .overlay.hidden { display: none; }
 
 .title {
-  font-size: 54px;
-  font-weight: 800;
-  letter-spacing: 4px;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 58px;
+  font-weight: 700;
+  letter-spacing: 6px;
   margin: 0 0 8px;
+  text-wrap: balance;
   color: var(--cyan);
   text-shadow: 0 0 18px rgba(78,242,255,0.8), 0 0 40px rgba(78,242,255,0.35);
 }
@@ -155,8 +160,9 @@ canvas#game {
   border: none;
   cursor: pointer;
   padding: 16px 52px;
-  font-size: 18px;
-  font-weight: 800;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 20px;
+  font-weight: 700;
   letter-spacing: 3px;
   border-radius: 999px;
   color: #06070f;
@@ -166,9 +172,12 @@ canvas#game {
   transition: transform .1s ease;
 }
 .playBtn:active { transform: scale(0.95); }
+.playBtn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 
 .overTitle {
-  font-size: 30px;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 32px;
+  font-weight: 700;
   letter-spacing: 3px;
   color: var(--danger);
   text-shadow: 0 0 16px rgba(255,77,94,0.7);
@@ -176,8 +185,10 @@ canvas#game {
 }
 
 .finalScore {
-  font-size: 64px;
-  font-weight: 800;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 68px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
   margin: 4px 0 6px;
   text-shadow: 0 0 20px rgba(78,242,255,0.6);
 }
