@@ -1,0 +1,266 @@
+:root {
+  --rock: #211a17;
+  --rock2: #2f2621;
+  --panel: rgba(37, 29, 25, 0.96);
+  --panel-soft: rgba(58, 47, 40, 0.55);
+  --cream: #efe2cc;
+  --cream-dim: rgba(239, 226, 204, 0.65);
+  --ember: #e08a3e;
+  --ember-deep: #b8602a;
+  --gem: #74b9cf;
+  --danger: #d1483f;
+  --good: #7fae5a;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  overflow: hidden;
+  background: var(--rock);
+  color: var(--cream);
+  font-family: "Zen Kaku Gothic New", "Hiragino Sans", "Segoe UI", sans-serif;
+  touch-action: none;
+  overscroll-behavior: none;
+  color-scheme: dark;
+}
+
+#app { position: fixed; inset: 0; width: 100%; height: 100%; }
+canvas#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.hidden { display: none !important; }
+
+/* ---------- Dive HUD ---------- */
+#diveHud { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+#diveHud button, #diveHud form { pointer-events: auto; }
+
+.topBar {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 12px; right: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.statChip {
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 13px;
+  display: flex; gap: 6px; align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+.chipLabel { font-size: 10px; color: var(--cream-dim); letter-spacing: 1px; }
+.barChip { background: var(--panel); border-radius: 999px; padding: 6px 10px; display: flex; align-items: center; gap: 6px; flex: 1; max-width: 130px; }
+.barLabel { font-size: 11px; color: var(--cream-dim); }
+.barTrack { flex: 1; height: 7px; border-radius: 4px; background: rgba(0,0,0,0.4); overflow: hidden; }
+.barFill { height: 100%; border-radius: 4px; transition: width .25s ease; }
+.hpFill { background: linear-gradient(90deg, #c0453d, #e08a3e); width: 100%; }
+.fuelFill { background: linear-gradient(90deg, #e08a3e, #f2c66b); width: 100%; }
+
+.iconBtn.round {
+  border: none; cursor: pointer; background: var(--panel); color: var(--cream);
+  width: 34px; height: 34px; border-radius: 50%; font-weight: 700; font-size: 14px;
+  display: flex; align-items: center; justify-content: center; flex: none;
+}
+
+.bottomBar {
+  position: absolute;
+  bottom: max(126px, calc(env(safe-area-inset-bottom) + 126px));
+  left: 12px; right: 12px;
+  display: flex; justify-content: center; gap: 10px;
+}
+.pillBtn {
+  border: none; cursor: pointer; background: var(--panel); color: var(--cream);
+  padding: 10px 16px; border-radius: 999px; font-size: 13px; font-weight: 500;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.35);
+}
+.pillBtn.accent { background: linear-gradient(135deg, var(--ember), var(--ember-deep)); color: #241a10; font-weight: 700; }
+.pillBtn:active { transform: scale(0.96); }
+
+.heldTray {
+  position: absolute;
+  top: max(56px, calc(env(safe-area-inset-top) + 56px));
+  left: 12px; right: 12px;
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.heldChip {
+  background: rgba(37,29,25,0.85);
+  border-radius: 10px;
+  padding: 4px 8px;
+  font-size: 12px;
+  display: flex; gap: 4px; align-items: center;
+}
+
+.kodamaBubble {
+  position: absolute;
+  left: 50%;
+  bottom: max(180px, calc(env(safe-area-inset-bottom) + 180px));
+  transform: translateX(-50%);
+  max-width: min(80vw, 320px);
+  background: var(--panel);
+  border: 1px solid rgba(116,185,207,0.4);
+  border-radius: 16px;
+  padding: 10px 14px;
+  display: flex; gap: 8px; align-items: flex-start;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  transition: opacity .3s ease, transform .3s ease;
+}
+.kodamaBubble.hidden { opacity: 0; transform: translateX(-50%) translateY(8px); }
+.kodamaFace { font-size: 20px; flex: none; }
+.kodamaText { font-size: 13px; line-height: 1.5; }
+
+/* ---------- Joystick ---------- */
+#joystick { position: absolute; left: max(20px, env(safe-area-inset-left)); bottom: max(24px, env(safe-area-inset-bottom)); z-index: 5; touch-action: none; }
+#joyBase { width: 100px; height: 100px; border-radius: 50%; background: rgba(239,226,204,0.12); border: 2px solid rgba(239,226,204,0.3); position: relative; }
+#joyKnob { width: 44px; height: 44px; border-radius: 50%; background: rgba(239,226,204,0.75); box-shadow: 0 2px 8px rgba(0,0,0,0.4); position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); }
+
+/* ---------- Toast / discovery ---------- */
+.toast {
+  position: absolute; bottom: max(24px, env(safe-area-inset-bottom)); left: 50%;
+  transform: translateX(-50%);
+  background: rgba(184,96,42,0.92); color: #fff;
+  padding: 10px 18px; border-radius: 999px; font-size: 13px; z-index: 9;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.35); transition: opacity .3s ease, transform .3s ease;
+}
+.toast.hidden { opacity: 0; transform: translateX(-50%) translateY(10px); pointer-events: none; }
+
+.discoveryCard {
+  position: absolute; top: max(64px, calc(env(safe-area-inset-top) + 100px)); left: 50%;
+  transform: translate(-50%, 0);
+  display: flex; align-items: center; gap: 12px;
+  background: var(--panel); border-radius: 18px; padding: 12px 18px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5); z-index: 9; max-width: min(86vw, 380px);
+  transition: transform .35s cubic-bezier(.2,1.4,.4,1), opacity .3s ease; opacity: 1;
+  border: 1px solid rgba(224,138,62,0.4);
+}
+.discoveryCard.hidden { opacity: 0; transform: translate(-50%, -30px); pointer-events: none; }
+.dcEmoji { font-size: 36px; line-height: 1; flex: none; }
+.dcTag { font-size: 11px; letter-spacing: 1px; color: var(--ember); font-weight: 700; }
+.dcName { font-family: "Shippori Mincho", serif; font-size: 18px; font-weight: 700; margin: 2px 0 2px; }
+.dcFlavor { font-size: 12px; color: var(--cream-dim); line-height: 1.4; }
+
+/* ---------- Overlays (base camp, panels, intro) ---------- */
+.overlay {
+  position: absolute; inset: 0; z-index: 10;
+  background: linear-gradient(180deg, rgba(33,26,23,0.97), rgba(20,15,13,0.99));
+  display: flex; flex-direction: column; align-items: center;
+  padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+.overlay.hidden { display: none; }
+
+#baseScreen { justify-content: flex-start; text-align: center; }
+.baseHead { width: 100%; max-width: 460px; display: flex; justify-content: center; align-items: center; gap: 10px; position: relative; margin-top: 6px; }
+.baseTitle {
+  font-family: "Shippori Mincho", serif; font-size: 40px; font-weight: 700; margin: 0;
+  color: var(--cream);
+  text-shadow: 0 0 24px rgba(224,138,62,0.35);
+}
+.baseSub { display: block; font-size: 12px; letter-spacing: 2px; color: var(--ember); font-family: "Zen Kaku Gothic New", sans-serif; margin-top: 2px; }
+#baseHelpBtn { position: absolute; right: 0; top: 4px; }
+
+.baseStats { display: flex; gap: 10px; margin: 20px 0 6px; width: 100%; max-width: 460px; }
+.statCard { flex: 1; background: var(--panel-soft); border-radius: 14px; padding: 12px 6px; }
+.statNum { font-family: "Shippori Mincho", serif; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.statLbl { font-size: 11px; color: var(--cream-dim); margin-top: 2px; }
+
+.bankPanel { width: 100%; max-width: 460px; margin-top: 16px; text-align: left; }
+.bankHead { font-size: 13px; color: var(--cream-dim); letter-spacing: 1px; margin-bottom: 8px; }
+.bankGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; }
+.bankCard { background: var(--panel-soft); border-radius: 12px; padding: 8px 4px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.bankCard .em { font-size: 22px; }
+.bankCard .ct { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bankCard .nm { font-size: 10px; color: var(--cream-dim); }
+
+.goalChip {
+  margin-top: 18px; width: 100%; max-width: 460px; text-align: left;
+  background: rgba(224,138,62,0.14); border: 1px solid rgba(224,138,62,0.35);
+  border-radius: 12px; padding: 10px 14px; font-size: 12.5px; color: var(--cream);
+  display: flex; gap: 8px; align-items: center;
+}
+.goalChip::before { content: "🎯"; flex: none; }
+
+.baseActions { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 460px; margin-top: 14px; }
+.wideBtn {
+  border: none; cursor: pointer; background: var(--panel-soft); color: var(--cream);
+  padding: 13px; border-radius: 14px; font-size: 14px; font-weight: 500; text-align: left; padding-left: 18px;
+}
+.wideBtn:active { transform: scale(0.98); }
+
+.diveBtn {
+  appearance: none; border: none; cursor: pointer;
+  margin: 26px 0 16px;
+  padding: 16px 60px;
+  font-family: "Shippori Mincho", serif;
+  font-size: 20px; font-weight: 700; letter-spacing: 4px;
+  border-radius: 999px; color: #241a10;
+  background: linear-gradient(135deg, var(--ember), #f2c66b);
+  box-shadow: 0 12px 30px rgba(224,138,62,0.35);
+}
+.diveBtn:active { transform: scale(0.96); }
+.diveBtn:focus-visible, .startBtn:focus-visible, .wideBtn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+
+/* ---------- Panels (shop / log / kodama chat) ---------- */
+.panelHead { width: 100%; max-width: 520px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; margin-top: 4px; }
+.panelHead h2 { font-family: "Shippori Mincho", serif; font-size: 20px; margin: 0; }
+.panelBody { width: 100%; max-width: 520px; flex: 1; padding-bottom: 20px; }
+
+.shopRow {
+  background: var(--panel-soft); border-radius: 14px; padding: 14px; margin-bottom: 10px; text-align: left;
+}
+.shopRowHead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.shopRowTitle { font-weight: 700; font-size: 14px; }
+.shopRowLevel { font-size: 12px; color: var(--cream-dim); }
+.shopRowDesc { font-size: 12px; color: var(--cream-dim); margin-bottom: 10px; line-height: 1.5; }
+.shopRowFoot { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.shopCost { font-size: 12px; color: var(--ember); }
+.shopBuyBtn {
+  border: none; cursor: pointer; padding: 8px 16px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  background: linear-gradient(135deg, var(--ember), var(--ember-deep)); color: #241a10;
+}
+.shopBuyBtn:disabled { background: rgba(255,255,255,0.1); color: rgba(239,226,204,0.4); cursor: default; }
+.shopBuyBtn.max { background: rgba(127,174,90,0.35); color: var(--cream); }
+
+.logGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+.logCard { background: var(--panel-soft); border-radius: 14px; padding: 10px 6px; display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 88px; justify-content: center; }
+.logCard .em { font-size: 24px; }
+.logCard .nm { font-size: 11px; text-align: center; }
+.logCard.undiscovered { opacity: 0.55; }
+.logCard.undiscovered .em { filter: grayscale(1); }
+.logFlavor { grid-column: 1 / -1; }
+
+.kodamaLog { width: 100%; max-width: 520px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; text-align: left; }
+.kLine { max-width: 85%; padding: 9px 13px; border-radius: 14px; font-size: 13px; line-height: 1.5; }
+.kLine.kodama { background: var(--panel-soft); align-self: flex-start; border: 1px solid rgba(116,185,207,0.3); }
+.kLine.me { background: rgba(224,138,62,0.25); align-self: flex-end; }
+.kodamaHint { width: 100%; max-width: 520px; font-size: 11px; color: var(--cream-dim); text-align: left; margin-bottom: 6px; }
+.kodamaForm { width: 100%; max-width: 520px; display: flex; gap: 8px; padding-bottom: 6px; }
+.kodamaForm input {
+  flex: 1; background: var(--panel-soft); border: 1px solid rgba(239,226,204,0.2); border-radius: 999px;
+  padding: 10px 16px; color: var(--cream); font-size: 13px;
+}
+.kodamaForm input:focus { outline: 2px solid var(--gem); }
+
+/* ---------- Intro / knockout ---------- */
+.introOverlay, #introOverlay, #knockoutOverlay { justify-content: center; text-align: center; }
+.introTitle { font-family: "Shippori Mincho", serif; font-size: 46px; font-weight: 700; margin: 0 0 10px; color: var(--cream); }
+.introSub { color: var(--cream-dim); font-size: 14px; line-height: 1.8; margin-bottom: 22px; }
+.introRow {
+  display: flex; align-items: center; gap: 10px; background: var(--panel-soft); color: var(--cream);
+  padding: 10px 16px; border-radius: 14px; font-size: 13px; margin-bottom: 8px; max-width: 380px; width: 100%; text-align: left;
+}
+.introIcon { font-size: 18px; flex: none; }
+.startBtn {
+  appearance: none; border: none; cursor: pointer; margin-top: 18px; padding: 14px 46px;
+  font-family: "Shippori Mincho", serif; font-size: 16px; font-weight: 700; letter-spacing: 2px;
+  border-radius: 999px; color: #241a10; background: linear-gradient(135deg, var(--ember), #f2c66b);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.4);
+}
+.startBtn:active { transform: scale(0.96); }
+
+.koIcon { font-size: 50px; }
+.koTitle { font-family: "Shippori Mincho", serif; color: var(--danger); font-size: 26px; margin: 4px 0 10px; }
+.koText { color: var(--cream-dim); font-size: 14px; max-width: 340px; line-height: 1.7; white-space: pre-line; }
+
+@media (max-width: 420px) {
+  .baseTitle { font-size: 34px; }
+  .introTitle { font-size: 38px; }
+}
