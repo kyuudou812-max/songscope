@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>深脈</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <!-- ---------- Dive HUD ---------- -->
+    <div id="diveHud" class="hidden">
+      <div class="topBar">
+        <div class="statChip"><span class="chipLabel">深度</span><span id="depthVal">0m</span></div>
+        <div class="barChip">
+          <div class="barLabel">HP</div>
+          <div class="barTrack"><div id="hpBar" class="barFill hpFill"></div></div>
+        </div>
+        <div class="barChip">
+          <div class="barLabel">灯</div>
+          <div class="barTrack"><div id="fuelBar" class="barFill fuelFill"></div></div>
+        </div>
+        <button id="muteBtn" class="iconBtn round">🔊</button>
+      </div>
+      <div class="bottomBar">
+        <button id="torchBtn" class="pillBtn">🔥 松明を置く <span id="torchCost">(石炭2)</span></button>
+        <button id="surfaceBtn" class="pillBtn accent">⬆ 帰還する</button>
+      </div>
+      <div id="heldTray" class="heldTray"></div>
+      <div id="kodamaBubble" class="kodamaBubble hidden">
+        <div class="kodamaFace">🔮</div>
+        <div class="kodamaText" id="kodamaText"></div>
+      </div>
+    </div>
+
+    <div id="joystick"><div id="joyBase"><div id="joyKnob"></div></div></div>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="discoveryCard" class="discoveryCard hidden">
+      <div class="dcEmoji" id="dcEmoji">⛏️</div>
+      <div class="dcBody">
+        <div class="dcTag">はじめて見つけた</div>
+        <div class="dcName" id="dcName"></div>
+        <div class="dcFlavor" id="dcFlavor"></div>
+      </div>
+    </div>
+
+    <!-- ---------- Base camp ---------- -->
+    <div id="baseScreen" class="overlay">
+      <div class="baseHead">
+        <h1 class="baseTitle">深脈<span class="baseSub">-Shinmyaku-</span></h1>
+        <button id="baseHelpBtn" class="iconBtn round">?</button>
+      </div>
+
+      <div class="baseStats">
+        <div class="statCard"><div class="statNum" id="bestDepthVal">0m</div><div class="statLbl">最深記録</div></div>
+        <div class="statCard"><div class="statNum" id="tierNames">木</div><div class="statLbl">つるはし</div></div>
+        <div class="statCard"><div class="statNum" id="bagNote">-</div><div class="statLbl">落とし物</div></div>
+      </div>
+
+      <div class="bankPanel">
+        <div class="bankHead">貯蔵庫</div>
+        <div id="bankGrid" class="bankGrid"></div>
+      </div>
+
+      <div class="baseActions">
+        <button id="shopBtn" class="wideBtn">🛠 装備を強化する</button>
+        <button id="logBtn" class="wideBtn">📔 採掘記録</button>
+        <button id="kodamaBtn" class="wideBtn">🔮 コダマと話す</button>
+      </div>
+
+      <button id="diveBtn" class="diveBtn">潜る</button>
+    </div>
+
+    <!-- ---------- Shop ---------- -->
+    <div id="shopOverlay" class="overlay hidden">
+      <div class="panelHead"><h2>装備を強化する</h2><button id="shopClose" class="iconBtn round">×</button></div>
+      <div id="shopBody" class="panelBody"></div>
+    </div>
+
+    <!-- ---------- Mining log ---------- -->
+    <div id="logOverlay" class="overlay hidden">
+      <div class="panelHead"><h2>採掘記録</h2><button id="logClose" class="iconBtn round">×</button></div>
+      <div id="logBody" class="panelBody"></div>
+    </div>
+
+    <!-- ---------- Kodama chat ---------- -->
+    <div id="kodamaOverlay" class="overlay hidden">
+      <div class="panelHead"><h2>🔮 コダマ</h2><button id="kodamaClose" class="iconBtn round">×</button></div>
+      <div id="kodamaLog" class="kodamaLog"></div>
+      <div id="kodamaHint" class="kodamaHint"></div>
+      <form id="kodamaForm" class="kodamaForm">
+        <input id="kodamaInput" type="text" placeholder="コダマに話しかける…" autocomplete="off">
+        <button type="submit" id="kodamaSend" class="pillBtn accent">送る</button>
+      </form>
+    </div>
+
+    <!-- ---------- Intro ---------- -->
+    <div id="introOverlay" class="overlay hidden">
+      <h1 class="introTitle">深脈</h1>
+      <p class="introSub">灯りひとつを頼りに、地の底で素材を集める。<br>急がなくていい。ただ、闇の中には何かがいる。</p>
+      <div class="introRow"><span class="introIcon">🕹️</span>ジョイスティック / WASD・矢印キーで移動(上で登る)</div>
+      <div class="introRow"><span class="introIcon">⛏️</span>隣接するブロックをタップ/クリックで採掘</div>
+      <div class="introRow"><span class="introIcon">🔥</span>灯りが消えると危険。石炭で回復・松明で常設灯</div>
+      <div class="introRow"><span class="introIcon">🔮</span>コダマがそばで見守ってくれる</div>
+      <button id="introBtn" class="startBtn">はじめる</button>
+    </div>
+
+    <div id="knockoutOverlay" class="overlay hidden">
+      <div class="koIcon">💫</div>
+      <h2 class="koTitle">緊急帰還</h2>
+      <p class="koText" id="koText"></p>
+      <button id="koClose" class="startBtn">拠点へ戻る</button>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
