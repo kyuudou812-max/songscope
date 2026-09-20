@@ -1184,12 +1184,13 @@
   });
 
   // ---------- Init ----------
-  updateMuteBtn();
+  // The frame loop starts before any UI rendering, so a failure while
+  // populating the base camp can never leave the game frozen.
   resize();
   ensureRowsUpTo(20);
-  renderBase();
-  draw();
   requestAnimationFrame((t) => { lastTime = t; requestAnimationFrame(loop); });
 
+  updateMuteBtn();
+  renderBase();
   if (safeGet(INTRO_KEY) !== "1") introOverlay.classList.remove("hidden");
 })();
