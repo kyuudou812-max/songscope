@@ -31,6 +31,7 @@
   const bagNote = document.getElementById("bagNote");
   const bankGrid = document.getElementById("bankGrid");
   const diveBtn = document.getElementById("diveBtn");
+  const goalChip = document.getElementById("goalChip");
   const shopBtn = document.getElementById("shopBtn");
   const logBtn = document.getElementById("logBtn");
   const kodamaBtn = document.getElementById("kodamaBtn");
@@ -157,43 +158,136 @@
   function kline(cat) { const arr = KODAMA_LINES[cat] || ["……"]; return arr[Math.floor(Math.random() * arr.length)]; }
 
   // ---------- Audio ----------
-  let audioCtx = null;
+  // Layered synthesis (filtered tones + shaped noise) through a shared
+  // compressor and a small convolution reverb, instead of raw oscillator
+  // beeps straight to the output.
+  let audioCtx = null, masterGain = null, reverbSend = null, ambientNodes = null;
   function ensureAudio() {
-    if (!audioCtx) { const AC = window.AudioContext || window.webkitAudioContext; audioCtx = new AC(); }
-    if (audioCtx.state === "suspended") audioCtx.resume();
+    if (audioCtx) { if (audioCtx.state === "suspended") audioCtx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AC();
+    const comp = audioCtx.createDynamicsCompressor();
+    comp.threshold.value = -20; comp.knee.value = 14; comp.ratio.value = 3.5;
+    comp.attack.value = 0.003; comp.release.value = 0.22;
+    masterGain = audioCtx.createGain(); masterGain.gain.value = 0.85;
+    masterGain.connect(comp).connect(audioCtx.destination);
+
+    const convolver = audioCtx.createConvolver();
+    const rate = audioCtx.sampleRate, len = Math.floor(rate * 1.6);
+    const ir = audioCtx.createBuffer(2, len, rate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
+    }
+    convolver.buffer = ir;
+    reverbSend = audioCtx.createGain(); reverbSend.gain.value = 0.3;
+    reverbSend.connect(convolver).connect(masterGain);
   }
-  function tone(freq, dur, type, gain, delay = 0) {
+  function wet(node, amount) {
+    if (!amount) return;
+    const send = audioCtx.createGain(); send.gain.value = amount;
+    node.connect(send).connect(reverbSend);
+  }
+  // A short pitched blip: filtered oscillator with a soft attack and an
+  // optional downward pitch sweep, instead of a bare tone straight to gain.
+  function blip(freq, dur, type, gain, opts = {}) {
     if (save.muted) return;
     ensureAudio();
-    const t0 = audioCtx.currentTime + delay;
-    const osc = audioCtx.createOscillator(); const g = audioCtx.createGain();
-    osc.type = type; osc.frequency.setValueAtTime(freq, t0);
-    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(gain, t0 + 0.015);
+    const t0 = audioCtx.currentTime + (opts.delay || 0);
+    const osc = audioCtx.createOscillator();
+    const filt = audioCtx.createBiquadFilter();
+    filt.type = "lowpass"; filt.Q.value = opts.q ?? 0.6;
+    filt.frequency.setValueAtTime(opts.cutoff || freq * 5, t0);
+    const g = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (opts.pitchTo) osc.frequency.exponentialRampToValueAtTime(Math.max(24, opts.pitchTo), t0 + dur * 0.85);
+    const attack = opts.attack ?? 0.01;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(gain, t0 + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    osc.connect(g).connect(audioCtx.destination); osc.start(t0); osc.stop(t0 + dur + 0.02);
+    osc.connect(filt).connect(g).connect(masterGain);
+    wet(g, opts.wet);
+    osc.start(t0); osc.stop(t0 + dur + 0.05);
   }
-  function noise(dur, gain) {
+  // A textured thump: filtered noise burst, optionally paired with a soft
+  // low sine underneath for body.
+  function thud(dur, gain, opts = {}) {
     if (save.muted) return;
     ensureAudio();
+    const t0 = audioCtx.currentTime + (opts.delay || 0);
     const n = Math.floor(audioCtx.sampleRate * dur);
     const buf = audioCtx.createBuffer(1, n, audioCtx.sampleRate);
     const d = buf.getChannelData(0);
-    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 1.6);
     const src = audioCtx.createBufferSource(); src.buffer = buf;
+    const filt = audioCtx.createBiquadFilter();
+    filt.type = opts.hp ? "highpass" : "lowpass";
+    filt.frequency.value = opts.cutoff || 900;
     const g = audioCtx.createGain(); g.gain.value = gain;
-    src.connect(g).connect(audioCtx.destination); src.start();
+    src.connect(filt).connect(g).connect(masterGain);
+    wet(g, opts.wet);
+    src.start(t0);
+    if (opts.body) {
+      const osc = audioCtx.createOscillator(); osc.type = "sine";
+      osc.frequency.setValueAtTime(opts.body, t0);
+      osc.frequency.exponentialRampToValueAtTime(opts.body * 0.6, t0 + dur * 0.8);
+      const bg = audioCtx.createGain();
+      bg.gain.setValueAtTime(0, t0); bg.gain.linearRampToValueAtTime(gain * 0.9, t0 + 0.008);
+      bg.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(bg).connect(masterGain); osc.start(t0); osc.stop(t0 + dur + 0.02);
+    }
+  }
+  // A pleasant run of notes on a pentatonic scale, instead of arbitrary Hz.
+  const SCALE = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25];
+  function arpeggio(degrees, dur, gain, opts = {}) {
+    degrees.forEach((deg, i) => {
+      blip(SCALE[deg] * (opts.octave || 1), dur, opts.type || "triangle", gain, { delay: i * (opts.step ?? 0.085), attack: 0.015, wet: opts.wet ?? 0.22, cutoff: opts.cutoff });
+    });
   }
   const sfx = {
-    hit: () => tone(140, 0.12, "square", 0.12),
-    break: () => tone(320, 0.08, "triangle", 0.1),
-    ore: () => { tone(660, 0.12, "triangle", 0.14); tone(880, 0.1, "triangle", 0.1, 0.06); },
-    hurt: () => { noise(0.2, 0.2); tone(160, 0.25, "sawtooth", 0.15); },
-    danger: () => tone(220, 0.4, "sine", 0.08),
-    torch: () => tone(500, 0.15, "sine", 0.1),
-    upgrade: () => [440, 554, 659, 880].forEach((f, i) => tone(f, 0.2, "triangle", 0.12, i * 0.08)),
-    ko: () => { [400, 300, 200].forEach((f, i) => tone(f, 0.3, "sawtooth", 0.14, i * 0.15)); },
+    hit: () => thud(0.1, 0.16, { cutoff: 1400, body: 130 }),
+    break: () => thud(0.14, 0.14, { cutoff: 700, body: 90 }),
+    ore: () => arpeggio([2, 4], 0.28, 0.13, { wet: 0.28 }),
+    oreRare: () => arpeggio([0, 2, 4, 7], 0.32, 0.15, { wet: 0.34, octave: 1 }),
+    hurt: () => thud(0.22, 0.2, { cutoff: 500, body: 110 }),
+    danger: () => blip(146.83, 0.9, "sine", 0.05, { cutoff: 300, wet: 0.4 }),
+    torch: () => arpeggio([4, 7], 0.22, 0.12, { step: 0.06, wet: 0.25 }),
+    upgrade: () => arpeggio([0, 2, 4, 7], 0.24, 0.15, { wet: 0.3 }),
+    ko: () => arpeggio([4, 2, 0], 0.4, 0.14, { step: 0.16, type: "sine", wet: 0.4 }),
   };
-  muteBtn.addEventListener("click", () => { save.muted = !save.muted; updateMuteBtn(); scheduleSave(); });
+
+  // A faint ever-present cave drone while diving: two slow, detuned
+  // low oscillators through a gently wandering filter, well under the sfx.
+  function startAmbient() {
+    if (save.muted || ambientNodes) return;
+    ensureAudio();
+    const g = audioCtx.createGain(); g.gain.value = 0;
+    g.gain.linearRampToValueAtTime(0.05, audioCtx.currentTime + 1.5);
+    const filt = audioCtx.createBiquadFilter(); filt.type = "lowpass"; filt.frequency.value = 320;
+    const oscs = [98, 98.6].map((f) => {
+      const o = audioCtx.createOscillator(); o.type = "sine"; o.frequency.value = f;
+      o.connect(filt); o.start(); return o;
+    });
+    const lfo = audioCtx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.06;
+    const lfoGain = audioCtx.createGain(); lfoGain.gain.value = 60;
+    lfo.connect(lfoGain).connect(filt.frequency); lfo.start();
+    filt.connect(g).connect(masterGain);
+    ambientNodes = { oscs, lfo, g };
+  }
+  function stopAmbient() {
+    if (!ambientNodes) return;
+    const { oscs, lfo, g } = ambientNodes;
+    const t = audioCtx.currentTime;
+    g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t);
+    g.gain.linearRampToValueAtTime(0, t + 0.8);
+    setTimeout(() => { oscs.forEach((o) => o.stop()); lfo.stop(); }, 900);
+    ambientNodes = null;
+  }
+  muteBtn.addEventListener("click", () => {
+    save.muted = !save.muted; updateMuteBtn(); scheduleSave();
+    if (save.muted) stopAmbient(); else if (dive.state === "diving") startAmbient();
+  });
   function updateMuteBtn() { muteBtn.textContent = save.muted ? "🔇" : "🔊"; }
 
   // ---------- Save/load ----------
@@ -342,6 +436,8 @@
   let bagCollectCheck = 0;
   let danger = 0, spawnTimer = 2, dangerWarned = false;
   const camera = { y: 0 };
+  let shakeT = 0, shakeMag = 0;
+  function shake(mag, t) { shakeT = Math.max(shakeT, t); shakeMag = Math.max(shakeMag, mag); }
   const particles = [];
   const dive = { state: "base" }; // 'base' | 'diving'
 
@@ -495,15 +591,17 @@
       aiFlavorFor(id);
       scheduleSave();
     } else if (isOre) {
-      sfx.ore();
+      MATERIALS[id].tier >= 2 ? sfx.oreRare() : sfx.ore();
     }
   }
 
   function breakTile(col, row) {
     const tile = getTile(col, row);
+    const wasOre = tile.ore;
     tile.solid = false; tile.discovered = true;
     burst((col + 0.5) * tileSize, (row + 0.5) * tileSize, "200,180,150", 10, 90, 0.4);
     sfx.break();
+    shake(wasOre ? 4 : 2, 0.16);
     if (tile.ore) { collectMaterial(tile.ore, true); tile.ore = null; }
     else { addHeld("stone", 1); }
     tile.progress = 0;
@@ -596,6 +694,7 @@
     updateTorchCost();
     kodamaSay("diveStart");
     renderHeldTray();
+    startAmbient();
   }
   function endDiveToSurface(bankAll) {
     if (bankAll) {
@@ -606,6 +705,7 @@
     diveHud.classList.add("hidden");
     baseScreen.classList.remove("hidden");
     mobs = [];
+    stopAmbient();
     renderBase();
     scheduleSave(); flushSave();
   }
@@ -618,6 +718,8 @@
   function triggerKnockout() {
     dive.state = "knockout";
     sfx.ko();
+    shake(12, 0.4);
+    stopAmbient();
     const col = Math.floor(player.x / tileSize), row = Math.floor(player.y / tileSize);
     const dropped = {};
     Object.entries(held).forEach(([id, n]) => {
@@ -677,6 +779,7 @@
       } else if (attackCooldown <= 0) {
         mob.hp -= pickaxeInfo().dmg; attackCooldown = 0.35;
         burst(mob.x, mob.y, "255,220,150", 8, 100, 0.35); sfx.hit();
+        shake(3, 0.1);
         if (mob.hp <= 0) {
           mob.alive = false;
           addHeld("monsterEssence", MOB_DEFS[mob.defId].essence);
@@ -774,6 +877,7 @@
       if (m.state !== "dormant" && m.hitCooldown <= 0 && player.invuln <= 0 && dist < tileSize * 0.6) {
         player.hp -= def.dmg; player.invuln = 1.0; m.hitCooldown = 1.0; player.hitFlash = 0.35;
         sfx.hurt();
+        shake(7, 0.25);
         if (player.hp <= 0) { player.hp = 0; triggerKnockout(); }
       }
     }
@@ -797,6 +901,7 @@
 
     camera.y = player.y - H * 0.42;
     camera.y = Math.max(-tileSize * 2, camera.y);
+    if (shakeT > 0) shakeT = Math.max(0, shakeT - dt);
 
     updateHud();
   }
@@ -842,7 +947,12 @@
     if (dive.state !== "diving" && dive.state !== "knockout") return;
 
     ctx.save();
-    ctx.translate(boardOffsetX, -camera.y);
+    let shakeX = 0, shakeY = 0;
+    if (shakeT > 0) {
+      const m = shakeMag * (shakeT / 0.3);
+      shakeX = (Math.random() * 2 - 1) * m; shakeY = (Math.random() * 2 - 1) * m;
+    } else { shakeMag = 0; }
+    ctx.translate(boardOffsetX + shakeX, -camera.y + shakeY);
 
     const rowFrom = Math.max(0, Math.floor(camera.y / tileSize) - 1);
     const rowTo = Math.min(save.world.rows.length - 1, Math.ceil((camera.y + H) / tileSize) + 1);
@@ -958,10 +1068,29 @@
   }
 
   // ---------- Base camp UI ----------
+  function nextGoalText() {
+    let affordable = null, closest = null;
+    Object.entries(UPGRADE_DEFS).forEach(([key, def]) => {
+      const next = def.levels[save.upgrades[key] + 1];
+      if (!next) return;
+      if (canAfford(next.cost)) { affordable = def.name; return; }
+      const shortfalls = Object.entries(next.cost).map(([id, n]) => ({ id, need: Math.max(0, n - (save.bank[id] || 0)) }));
+      const total = shortfalls.reduce((s, x) => s + x.need, 0);
+      if (!closest || total < closest.total) {
+        const top = shortfalls.sort((a, b) => b.need - a.need)[0];
+        closest = { name: def.name, matId: top.id, matNeed: top.need, total };
+      }
+    });
+    if (affordable) return `${affordable}を強化できる。拠点で強化しよう。`;
+    if (closest) return `${MATERIALS[closest.matId].name}をあと${closest.matNeed}個集めよう(${closest.name}強化に必要)。`;
+    if (save.bestDepth < 40) return `もっと深くへ。まだ見ぬ鉱脈が眠っている。`;
+    return `すべての強化が完了した。さらに深くを目指そう。`;
+  }
   function renderBase() {
     bestDepthVal.textContent = save.bestDepth + "m";
     tierNames.textContent = PICKAXE_LEVELS[save.upgrades.pickaxe].label.replace("のつるはし", "");
     bagNote.textContent = save.world.bags.length > 0 ? `${save.world.bags.length}件` : "なし";
+    goalChip.textContent = nextGoalText();
     renderBank();
   }
   function renderBank() {
