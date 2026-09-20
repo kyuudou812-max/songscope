@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>NEON DASH</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <div id="hud">
+      <div class="hud-item">
+        <span class="hud-label">SCORE</span>
+        <span class="hud-value" id="score">0</span>
+      </div>
+      <div class="hud-item combo" id="comboWrap" style="opacity:0">
+        <span class="hud-label">COMBO</span>
+        <span class="hud-value" id="combo">x0</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">BEST</span>
+        <span class="hud-value" id="best">0</span>
+      </div>
+    </div>
+
+    <button id="muteBtn" title="mute">🔊</button>
+
+    <div id="startScreen" class="overlay">
+      <h1 class="title">NEON<span>DASH</span></h1>
+      <p class="sub">左右に切り替えて障害物を避け、ジェムを集めろ。<br>当たったら即終了。何回でも挑め。</p>
+      <div class="keys">
+        <div class="key">← / A</div>
+        <div class="key">D / →</div>
+        <div class="key">タップ: 画面の左右</div>
+      </div>
+      <button id="startBtn" class="playBtn">PLAY</button>
+    </div>
+
+    <div id="overScreen" class="overlay hidden">
+      <h2 class="overTitle" id="overTitle">GAME OVER</h2>
+      <div class="finalScore" id="finalScore">0</div>
+      <div class="record" id="recordBanner" style="visibility:hidden">NEW BEST!</div>
+      <div class="bestRow">BEST <span id="overBest">0</span></div>
+      <button id="retryBtn" class="playBtn">RETRY</button>
+    </div>
+
+    <div id="touchZones">
+      <div id="zoneLeft" class="zone"></div>
+      <div id="zoneRight" class="zone"></div>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
