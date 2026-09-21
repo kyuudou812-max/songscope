@@ -59,6 +59,7 @@
       <div class="baseStats">
         <div class="statCard"><div class="statNum" id="bestDepthVal">0m</div><div class="statLbl">最深記録</div></div>
         <div class="statCard"><div class="statNum" id="tierNames">木</div><div class="statLbl">つるはし</div></div>
+        <div class="statCard"><div class="statNum" id="masteredVal">0</div><div class="statLbl">習得語</div></div>
         <div class="statCard"><div class="statNum" id="bagNote">-</div><div class="statLbl">落とし物</div></div>
       </div>
 
@@ -70,6 +71,7 @@
       <div class="goalChip" id="goalChip"></div>
 
       <div class="baseActions">
+        <button id="refineBtn" class="wideBtn primary">🔥 語晶を精錬する <span id="refineCount"></span></button>
         <button id="shopBtn" class="wideBtn">🛠 装備を強化する</button>
         <button id="logBtn" class="wideBtn">📔 採掘記録</button>
         <button id="kodamaBtn" class="wideBtn">🔮 コダマと話す</button>
@@ -90,6 +92,44 @@
       <div id="logBody" class="panelBody"></div>
     </div>
 
+    <!-- ---------- Refine (English review) ---------- -->
+    <div id="refineOverlay" class="overlay hidden">
+      <div class="panelHead">
+        <h2>語晶の精錬</h2>
+        <button id="refineClose" class="iconBtn round">×</button>
+      </div>
+
+      <div id="refineStage" class="refineStage">
+        <div class="refineProgress"><div id="refineProgressFill" class="refineProgressFill"></div></div>
+        <div class="refineCounter" id="refineCounter"></div>
+
+        <div class="oreWord" id="oreWord">word</div>
+        <div class="oreHint" id="oreHint">この原石の意味は?</div>
+
+        <div class="choiceGrid" id="choiceGrid"></div>
+
+        <div id="refineResult" class="refineResult hidden">
+          <div class="resultVerdict" id="resultVerdict"></div>
+          <div class="resultMeaning" id="resultMeaning"></div>
+          <div class="exampleBox">
+            <div class="exampleEn" id="exampleEn"></div>
+            <div class="exampleJa" id="exampleJa"></div>
+          </div>
+          <button id="anotherExampleBtn" class="pillBtn">🔮 コダマに別の例文を頼む</button>
+          <div class="aiExample hidden" id="aiExample"></div>
+          <button id="refineNextBtn" class="startBtn">次へ</button>
+        </div>
+      </div>
+
+      <div id="refineSummary" class="refineSummary hidden">
+        <div class="summaryIcon">🔡</div>
+        <h3 class="summaryTitle">精錬完了</h3>
+        <div class="summaryLine" id="summaryLine"></div>
+        <div class="summaryNote" id="summaryNote"></div>
+        <button id="summaryClose" class="startBtn">拠点へ戻る</button>
+      </div>
+    </div>
+
     <!-- ---------- Kodama chat ---------- -->
     <div id="kodamaOverlay" class="overlay hidden">
       <div class="panelHead"><h2>🔮 コダマ</h2><button id="kodamaClose" class="iconBtn round">×</button></div>
@@ -108,7 +148,9 @@
       <div class="introRow"><span class="introIcon">🕹️</span>ジョイスティック / WASD・矢印キーで移動(上で登る)</div>
       <div class="introRow"><span class="introIcon">⛏️</span>隣接するブロックをタップ/クリックで採掘</div>
       <div class="introRow"><span class="introIcon">🔥</span>灯りが消えると危険。石炭で回復・松明で常設灯</div>
-      <div class="introRow"><span class="introIcon">🔮</span>コダマがそばで見守ってくれる</div>
+      <div class="introRow"><span class="introIcon">🔡</span>青く光る「語彙脈」からは英単語の原石が採れる</div>
+      <div class="introRow"><span class="introIcon">⚗️</span>拠点で精錬(意味を答える)すると語晶になる。上位強化に必須</div>
+      <div class="introRow"><span class="introIcon">🔮</span>コダマは英語の相談にも乗ってくれる</div>
       <button id="introBtn" class="startBtn">はじめる</button>
     </div>
 
@@ -120,6 +162,7 @@
     </div>
   </div>
 
+<script src="words.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

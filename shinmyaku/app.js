@@ -32,6 +32,30 @@
   const bankGrid = document.getElementById("bankGrid");
   const diveBtn = document.getElementById("diveBtn");
   const goalChip = document.getElementById("goalChip");
+  const masteredVal = document.getElementById("masteredVal");
+
+  const refineBtn = document.getElementById("refineBtn");
+  const refineCount = document.getElementById("refineCount");
+  const refineOverlay = document.getElementById("refineOverlay");
+  const refineClose = document.getElementById("refineClose");
+  const refineStage = document.getElementById("refineStage");
+  const refineProgressFill = document.getElementById("refineProgressFill");
+  const refineCounter = document.getElementById("refineCounter");
+  const oreWord = document.getElementById("oreWord");
+  const oreHint = document.getElementById("oreHint");
+  const choiceGrid = document.getElementById("choiceGrid");
+  const refineResult = document.getElementById("refineResult");
+  const resultVerdict = document.getElementById("resultVerdict");
+  const resultMeaning = document.getElementById("resultMeaning");
+  const exampleEn = document.getElementById("exampleEn");
+  const exampleJa = document.getElementById("exampleJa");
+  const anotherExampleBtn = document.getElementById("anotherExampleBtn");
+  const aiExample = document.getElementById("aiExample");
+  const refineNextBtn = document.getElementById("refineNextBtn");
+  const refineSummary = document.getElementById("refineSummary");
+  const summaryLine = document.getElementById("summaryLine");
+  const summaryNote = document.getElementById("summaryNote");
+  const summaryClose = document.getElementById("summaryClose");
   const shopBtn = document.getElementById("shopBtn");
   const logBtn = document.getElementById("logBtn");
   const kodamaBtn = document.getElementById("kodamaBtn");
@@ -76,7 +100,50 @@
     deepcrystal: { name: "深層水晶", emoji: "🔷", tier: 3, hardness: 14, flavor: "かすかに脈打っている……気がする。" },
     kodamashard: { name: "コダマの欠片", emoji: "🌟", tier: 3, hardness: 16, flavor: "コダマと同じ気配がする、小さなかけら。" },
     monsterEssence: { name: "魔素", emoji: "🟣", tier: 0, hardness: null, dropOnly: true, flavor: "何かが残していった、不思議な粒子。" },
+    wordCrystal: { name: "語晶", emoji: "🔡", tier: 0, hardness: null, dropOnly: true, flavor: "意味を思い出せた言葉は、結晶になって残る。" },
   };
+
+  // ---------- Vocabulary ----------
+  const WORDS = window.SHINMYAKU_WORDS || [];
+  // Leitner-style spacing. Index = level reached; value = wait before it resurfaces.
+  const SRS_WAIT = [0, 10 * 60e3, 60 * 60e3, 24 * 3600e3, 3 * 24 * 3600e3, 7 * 24 * 3600e3, 14 * 24 * 3600e3];
+  const SRS_MAX = SRS_WAIT.length - 1;
+  const MASTERED_AT = 5;
+  const WORD_VEIN_HARDNESS = 4;
+
+  function srsOf(id) { return save.srs[id] || { lv: 0, due: 0 }; }
+  function masteredCount() { return Object.values(save.srs).filter((s) => s.lv >= MASTERED_AT).length; }
+  function seenCount() { return Object.keys(save.srs).length; }
+  function scheduleWord(id, correct) {
+    const cur = srsOf(id);
+    const lv = correct ? Math.min(SRS_MAX, cur.lv + 1) : 1;
+    save.srs[id] = { lv, due: Date.now() + SRS_WAIT[lv] };
+  }
+  // A vein hands over whichever word is most worth seeing right now: something
+  // already due for review, otherwise something new.
+  function pickWordForVein() {
+    if (WORDS.length === 0) return null;
+    const now = Date.now();
+    // Never hand out a word already sitting unrefined in the bag.
+    const pending = new Set([...heldWords, ...save.rawWords]);
+    const due = [], unseen = [];
+    for (let i = 0; i < WORDS.length; i++) {
+      if (pending.has(i)) continue;
+      const s = save.srs[i];
+      if (!s) unseen.push(i);
+      else if (s.due <= now) due.push(i);
+    }
+    if (due.length) {
+      due.sort((a, b) => save.srs[a].due - save.srs[b].due);
+      return due[Math.floor(Math.random() * Math.min(4, due.length))];
+    }
+    if (unseen.length) return unseen[Math.floor(Math.random() * unseen.length)];
+    const rest = [];
+    for (let i = 0; i < WORDS.length; i++) if (!pending.has(i)) rest.push(i);
+    if (!rest.length) return null;
+    rest.sort((a, b) => srsOf(a).due - srsOf(b).due);
+    return rest[0];
+  }
 
   const ORE_BANDS = [
     { coal: 10, copper: 6 },
@@ -99,32 +166,37 @@
     return null;
   }
   function baseRockHardness(row) { return Math.min(16, 3 + Math.floor(row / 25) * 1.2); }
-  function effectiveHardness(tile, row) { return tile.ore ? MATERIALS[tile.ore].hardness : baseRockHardness(row); }
+  function effectiveHardness(tile, row) {
+    if (tile.word) return WORD_VEIN_HARDNESS;
+    return tile.ore ? MATERIALS[tile.ore].hardness : baseRockHardness(row);
+  }
+  // Word veins are never gated behind a pickaxe tier — English is the road
+  // forward, not a toll gate.
   function requiredTierFor(tile) { return tile.ore ? MATERIALS[tile.ore].tier : 0; }
 
   const PICKAXE_LEVELS = [
     { label: "木のつるはし", power: 1.0, dmg: 8, cost: null },
     { label: "石のつるはし", power: 1.6, dmg: 12, cost: { stone: 25, coal: 8 } },
-    { label: "鉄のつるはし", power: 2.4, dmg: 18, cost: { iron: 16, silver: 6 } },
-    { label: "鋼のつるはし", power: 3.4, dmg: 26, cost: { gold: 14, ruby: 5 } },
+    { label: "鉄のつるはし", power: 2.4, dmg: 18, cost: { iron: 16, silver: 6, wordCrystal: 8 } },
+    { label: "鋼のつるはし", power: 3.4, dmg: 26, cost: { gold: 14, ruby: 5, wordCrystal: 20 } },
   ];
   const LANTERN_LEVELS = [
     { label: "Lv0", radius: 3.2, fuel: 90, cost: null },
     { label: "Lv1", radius: 3.9, fuel: 120, cost: { copper: 14, coal: 10 } },
-    { label: "Lv2", radius: 4.6, fuel: 150, cost: { iron: 12, silver: 8 } },
-    { label: "Lv3", radius: 5.4, fuel: 190, cost: { gold: 10, deepcrystal: 2 } },
+    { label: "Lv2", radius: 4.6, fuel: 150, cost: { iron: 12, silver: 8, wordCrystal: 6 } },
+    { label: "Lv3", radius: 5.4, fuel: 190, cost: { gold: 10, deepcrystal: 2, wordCrystal: 15 } },
   ];
   const VITALITY_LEVELS = [
     { label: "Lv0", maxHp: 100, cost: null },
     { label: "Lv1", maxHp: 130, cost: { stone: 30, copper: 10 } },
-    { label: "Lv2", maxHp: 165, cost: { iron: 14, silver: 6 } },
-    { label: "Lv3", maxHp: 205, cost: { gold: 12, ruby: 4 } },
+    { label: "Lv2", maxHp: 165, cost: { iron: 14, silver: 6, wordCrystal: 6 } },
+    { label: "Lv3", maxHp: 205, cost: { gold: 12, ruby: 4, wordCrystal: 15 } },
   ];
   const KODAMA_LEVELS = [
     { label: "Lv0", desc: "そばで見守ってくれる。", cost: null },
     { label: "Lv1", desc: "危険が近いと知らせてくれるようになる。", cost: { copper: 10, monsterEssence: 4 } },
-    { label: "Lv2", desc: "危険を察知する力が上がる。", cost: { silver: 10, monsterEssence: 8 } },
-    { label: "Lv3", desc: "言葉を交わせるようになる(会話を解放)。", cost: { kodamashard: 3, monsterEssence: 12 } },
+    { label: "Lv2", desc: "危険を察知する力が上がる。", cost: { silver: 10, monsterEssence: 8, wordCrystal: 10 } },
+    { label: "Lv3", desc: "言葉を交わせるようになる(英語の相談も可)。", cost: { kodamashard: 3, monsterEssence: 12, wordCrystal: 25 } },
   ];
   const UPGRADE_DEFS = {
     pickaxe: { name: "つるはし", levels: PICKAXE_LEVELS },
@@ -250,6 +322,9 @@
     break: () => thud(0.14, 0.14, { cutoff: 700, body: 90 }),
     ore: () => arpeggio([2, 4], 0.28, 0.13, { wet: 0.28 }),
     oreRare: () => arpeggio([0, 2, 4, 7], 0.32, 0.15, { wet: 0.34, octave: 1 }),
+    word: () => arpeggio([4, 5, 7], 0.34, 0.13, { step: 0.07, wet: 0.38, type: "sine" }),
+    refineOk: () => arpeggio([0, 4, 7], 0.3, 0.14, { step: 0.07, wet: 0.3 }),
+    refineNg: () => blip(174.61, 0.4, "sine", 0.1, { cutoff: 420, pitchTo: 130, wet: 0.3 }),
     hurt: () => thud(0.22, 0.2, { cutoff: 500, body: 110 }),
     danger: () => blip(146.83, 0.9, "sine", 0.05, { cutoff: 300, wet: 0.4 }),
     torch: () => arpeggio([4, 7], 0.22, 0.12, { step: 0.06, wet: 0.25 }),
@@ -295,6 +370,7 @@
     return {
       bank: {}, upgrades: { pickaxe: 0, lantern: 0, vitality: 0, kodama: 0 },
       discovered: [], bestDepth: 0, muted: false,
+      srs: {}, rawWords: [],
       world: { rows: [], torches: [], bags: [], pendingPockets: [] },
     };
   }
@@ -318,6 +394,7 @@
   const COLS = 10;
   const BEDROCK = { solid: true, ore: null, progress: 0, discovered: true, torch: false, boundary: true };
   function newTile() { return { solid: true, ore: null, progress: 0, discovered: false, torch: false }; }
+  const WORD_VEIN_CHANCE = 0.07;
 
   function ensureRowsUpTo(maxRow) {
     while (save.world.rows.length <= maxRow) generateRow(save.world.rows.length);
@@ -344,6 +421,7 @@
       }
       const t = newTile();
       if (opened) { t.solid = false; }
+      else if (WORDS.length && Math.random() < WORD_VEIN_CHANCE) { t.word = true; }
       else { t.ore = rollOre(r); }
       row.push(t);
     }
@@ -432,6 +510,7 @@
   // ---------- Game state ----------
   const player = { x: 0, y: 0, vx: 0, vy: 0, hp: 100, maxHp: 100, fuel: 90, maxFuel: 90, invuln: 0, hitFlash: 0 };
   const held = {};
+  let heldWords = [];
   let mobs = [];
   let bagCollectCheck = 0;
   let danger = 0, spawnTimer = 2, dangerWarned = false;
@@ -480,6 +559,19 @@
     clearTimeout(cardTimer);
     cardTimer = setTimeout(() => discoveryCard.classList.add("hidden"), 2600);
   }
+  // Finding a word shows only the English — the meaning is what you dig up at
+  // the furnace, so the vein itself stays a question, not an answer.
+  function showWordFind(id) {
+    const word = WORDS[id];
+    const s = srsOf(id);
+    dcEmoji.textContent = "🔡";
+    dcName.textContent = word.w;
+    dcFlavor.textContent = s.lv > 0 ? "見覚えのある原石だ。持ち帰って精錬しよう。" : "はじめて見る原石。持ち帰って精錬しよう。";
+    discoveryCard.classList.remove("hidden");
+    clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => discoveryCard.classList.add("hidden"), 2600);
+  }
+
   let bubbleTimer = null;
   function kodamaSay(cat, customText) {
     const text = customText || kline(cat);
@@ -518,7 +610,8 @@
   let kodamaTurns = [];
   let aiUnavailable = false;
   function kodamaChatIntro() {
-    return "あなたは「コダマ」。地底を探索する主人公にずっと寄り添ってきた、小さな灯りの精霊です。温かく、少し詩的だけれど簡潔に(日本語で2〜3文以内)話してください。説明的になりすぎず、相棒として喋ってください。";
+    return "あなたは「コダマ」。地底を探索する主人公にずっと寄り添ってきた、小さな灯りの精霊です。温かく、少し詩的だけれど簡潔に(日本語で2〜3文以内)話してください。説明的になりすぎず、相棒として喋ってください。"
+      + "\nこの主人公はTOEIC600点を目指して英語を勉強しています。英単語や英語表現について聞かれたら、コダマの口調のまま、短い例文を添えて教えてあげてください。";
   }
   function localChatReply(msg) {
     const s = msg.toLowerCase();
@@ -598,11 +691,21 @@
   function breakTile(col, row) {
     const tile = getTile(col, row);
     const wasOre = tile.ore;
+    const wasWord = tile.word;
     tile.solid = false; tile.discovered = true;
-    burst((col + 0.5) * tileSize, (row + 0.5) * tileSize, "200,180,150", 10, 90, 0.4);
+    const cx = (col + 0.5) * tileSize, cy = (row + 0.5) * tileSize;
+    burst(cx, cy, wasWord ? "116,185,207" : "200,180,150", wasWord ? 18 : 10, wasWord ? 130 : 90, wasWord ? 0.6 : 0.4);
     sfx.break();
-    shake(wasOre ? 4 : 2, 0.16);
-    if (tile.ore) { collectMaterial(tile.ore, true); tile.ore = null; }
+    shake(wasOre || wasWord ? 4 : 2, 0.16);
+    if (tile.word) {
+      tile.word = false;
+      const id = pickWordForVein();
+      if (id !== null) {
+        heldWords.push(id);
+        sfx.word();
+        showWordFind(id);
+      }
+    } else if (tile.ore) { collectMaterial(tile.ore, true); tile.ore = null; }
     else { addHeld("stone", 1); }
     tile.progress = 0;
     scheduleSave();
@@ -689,6 +792,7 @@
     player.maxFuel = lanternInfo().fuel; player.fuel = player.maxFuel;
     player.x = (COLS / 2) * tileSize; player.y = 1.5 * tileSize;
     Object.keys(held).forEach((k) => delete held[k]);
+    heldWords = [];
     mobs = []; danger = 0; dangerWarned = false; spawnTimer = 3;
     ensureRowsUpTo(20);
     updateTorchCost();
@@ -700,6 +804,8 @@
     if (bankAll) {
       Object.entries(held).forEach(([id, n]) => { save.bank[id] = (save.bank[id] || 0) + n; });
       Object.keys(held).forEach((k) => delete held[k]);
+      heldWords.forEach((id) => { if (!save.rawWords.includes(id)) save.rawWords.push(id); });
+      heldWords = [];
     }
     dive.state = "base";
     diveHud.classList.add("hidden");
@@ -729,12 +835,18 @@
       if (keep > 0) save.bank[id] = (save.bank[id] || 0) + keep;
     });
     Object.keys(held).forEach((k) => delete held[k]);
-    if (Object.keys(dropped).length > 0) {
-      save.world.bags.push({ col, row, items: dropped });
+
+    const dropCount = Math.floor(heldWords.length * 0.4);
+    const droppedWords = heldWords.slice(0, dropCount);
+    heldWords.slice(dropCount).forEach((id) => { if (!save.rawWords.includes(id)) save.rawWords.push(id); });
+    heldWords = [];
+
+    if (Object.keys(dropped).length > 0 || droppedWords.length > 0) {
+      save.world.bags.push({ col, row, items: dropped, words: droppedWords });
     }
-    const summary = Object.keys(dropped).length > 0
-      ? "落とし物: " + Object.entries(dropped).map(([id, n]) => `${MATERIALS[id].name}×${n}`).join(" / ")
-      : "落とし物はなかった。";
+    const parts = Object.entries(dropped).map(([id, n]) => `${MATERIALS[id].name}×${n}`);
+    if (droppedWords.length) parts.push(`原石×${droppedWords.length}`);
+    const summary = parts.length > 0 ? "落とし物: " + parts.join(" / ") : "落とし物はなかった。";
     koText.textContent = kline("knockout") + "\n" + summary;
     knockoutOverlay.classList.remove("hidden");
     scheduleSave();
@@ -817,7 +929,8 @@
       const idx = save.world.bags.findIndex((b) => b.col === pcol && b.row === prow);
       if (idx >= 0) {
         const bag = save.world.bags[idx];
-        Object.entries(bag.items).forEach(([id, n]) => addHeld(id, n));
+        Object.entries(bag.items || {}).forEach(([id, n]) => addHeld(id, n));
+        (bag.words || []).forEach((id) => heldWords.push(id));
         save.world.bags.splice(idx, 1);
         showToast("落とし物を回収した");
         kodamaSay("bagRecovered");
@@ -915,6 +1028,12 @@
   }
   function renderHeldTray() {
     heldTray.innerHTML = "";
+    if (heldWords.length) {
+      const chip = document.createElement("div");
+      chip.className = "heldChip";
+      chip.textContent = `🔡${heldWords.length}`;
+      heldTray.appendChild(chip);
+    }
     Object.entries(held).forEach(([id, n]) => {
       if (n <= 0) return;
       const chip = document.createElement("div");
@@ -1026,7 +1145,25 @@
       ctx.fillRect(x, y, tileSize, tileSize);
       ctx.strokeStyle = `rgba(0,0,0,${0.25 * dim})`;
       ctx.strokeRect(x + 0.5, y + 0.5, tileSize - 1, tileSize - 1);
-      if (tile.ore) {
+      if (tile.word) {
+        const cx = x + tileSize / 2, cy = y + tileSize / 2, r = tileSize * 0.26;
+        const pulse = 0.75 + 0.25 * Math.sin(Date.now() / 420 + c * 1.7 + r);
+        ctx.save();
+        ctx.globalAlpha = dim;
+        ctx.translate(cx, cy);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = `rgba(116,185,207,${0.85 * pulse})`;
+        ctx.shadowColor = "rgba(116,185,207,0.9)";
+        ctx.shadowBlur = 14 * pulse * dim;
+        ctx.fillRect(-r, -r, r * 2, r * 2);
+        ctx.restore();
+        ctx.globalAlpha = dim;
+        ctx.fillStyle = "rgba(20,28,32,0.9)";
+        ctx.font = `700 ${tileSize * 0.3}px "Shippori Mincho", serif`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("A", cx, cy + tileSize * 0.01);
+        ctx.globalAlpha = 1;
+      } else if (tile.ore) {
         const m = MATERIALS[tile.ore];
         ctx.globalAlpha = dim;
         ctx.font = `${tileSize * 0.5}px sans-serif`;
@@ -1068,7 +1205,159 @@
   }
 
   // ---------- Base camp UI ----------
+  // ---------- Refining: the English review, batched at the furnace ----------
+  const refine = { queue: [], index: 0, correct: 0, crystals: 0, current: null, answered: false };
+
+  function distractorsFor(id, n) {
+    const out = [];
+    const used = new Set([WORDS[id].m]);
+    let guard = 0;
+    while (out.length < n && guard++ < 400) {
+      const cand = WORDS[Math.floor(Math.random() * WORDS.length)];
+      if (used.has(cand.m)) continue;
+      used.add(cand.m);
+      out.push(cand.m);
+    }
+    return out;
+  }
+
+  function openRefine() {
+    if (save.rawWords.length === 0) {
+      showToast("精錬する原石がない。語彙脈を掘ろう。");
+      return;
+    }
+    ensureAudio();
+    refine.queue = save.rawWords.slice();
+    refine.index = 0; refine.correct = 0; refine.crystals = 0;
+    refineSummary.classList.add("hidden");
+    refineStage.classList.remove("hidden");
+    refineOverlay.classList.remove("hidden");
+    showRefineWord();
+  }
+
+  function showRefineWord() {
+    const id = refine.queue[refine.index];
+    refine.current = id;
+    refine.answered = false;
+    const word = WORDS[id];
+
+    refineCounter.textContent = `${refine.index + 1} / ${refine.queue.length}`;
+    refineProgressFill.style.width = `${(refine.index / refine.queue.length) * 100}%`;
+    oreWord.textContent = word.w;
+    oreHint.textContent = srsOf(id).lv > 0 ? "もう一度、意味を思い出そう" : "この原石の意味は?";
+    refineResult.classList.add("hidden");
+    aiExample.classList.add("hidden");
+    aiExample.textContent = "";
+    anotherExampleBtn.disabled = false;
+
+    const choices = [word.m, ...distractorsFor(id, 3)];
+    for (let i = choices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [choices[i], choices[j]] = [choices[j], choices[i]];
+    }
+    choiceGrid.innerHTML = "";
+    choices.forEach((text) => {
+      const btn = document.createElement("button");
+      btn.className = "choiceBtn";
+      btn.textContent = text;
+      btn.addEventListener("click", () => answerRefine(btn, text === word.m, choices));
+      choiceGrid.appendChild(btn);
+    });
+  }
+
+  function answerRefine(btn, isCorrect, choices) {
+    if (refine.answered) return;
+    refine.answered = true;
+    const id = refine.current;
+    const word = WORDS[id];
+    const wasNew = srsOf(id).lv === 0;
+
+    [...choiceGrid.children].forEach((b) => {
+      b.disabled = true;
+      if (b.textContent === word.m) b.classList.add("correct");
+    });
+    if (!isCorrect) btn.classList.add("wrong");
+
+    scheduleWord(id, isCorrect);
+    if (isCorrect) {
+      refine.correct += 1;
+      // A word recalled after a real gap is worth more than a fresh one.
+      const gain = srsOf(id).lv >= 4 ? 3 : srsOf(id).lv >= 2 ? 2 : 1;
+      refine.crystals += gain;
+      save.bank.wordCrystal = (save.bank.wordCrystal || 0) + gain;
+      if (!save.discovered.includes("wordCrystal")) save.discovered.push("wordCrystal");
+      sfx.refineOk();
+      resultVerdict.textContent = wasNew ? `覚えた! 語晶 +${gain}` : `正解! 語晶 +${gain}`;
+      resultVerdict.className = "resultVerdict ok";
+    } else {
+      sfx.refineNg();
+      resultVerdict.textContent = "もう一度、次の潜行で";
+      resultVerdict.className = "resultVerdict ng";
+    }
+    resultMeaning.textContent = `${word.w} — ${word.m}`;
+    exampleEn.textContent = word.ex;
+    exampleJa.textContent = word.exJa;
+    refineResult.classList.remove("hidden");
+    refineNextBtn.textContent = refine.index + 1 >= refine.queue.length ? "精錬を終える" : "次へ";
+    scheduleSave();
+  }
+
+  refineNextBtn.addEventListener("click", () => {
+    // The gem is spent either way. A missed word comes back through the mine,
+    // not through the bag, so it has to be re-dug rather than re-tapped.
+    const id = refine.current;
+    save.rawWords = save.rawWords.filter((w) => w !== id);
+    refine.index += 1;
+    if (refine.index >= refine.queue.length) {
+      finishRefine();
+    } else {
+      showRefineWord();
+    }
+  });
+
+  function finishRefine() {
+    refineProgressFill.style.width = "100%";
+    refineStage.classList.add("hidden");
+    refineSummary.classList.remove("hidden");
+    summaryLine.textContent = `正解 ${refine.correct} / ${refine.queue.length} ・ 語晶 +${refine.crystals}`;
+    const missed = refine.queue.length - refine.correct;
+    summaryNote.textContent = missed > 0
+      ? `間違えた${missed}語は、次の潜行で語彙脈としてまた出てくる。`
+      : `全問正解。この調子なら、次はもっと深く潜れる。`;
+    sfx.upgrade();
+    scheduleSave(); flushSave();
+    renderBase();
+  }
+
+  summaryClose.addEventListener("click", () => refineOverlay.classList.add("hidden"));
+  refineClose.addEventListener("click", () => {
+    refineOverlay.classList.add("hidden");
+    scheduleSave(); flushSave();
+    renderBase();
+  });
+  refineBtn.addEventListener("click", openRefine);
+
+  // Kodama writes a fresh example sentence — the one place a live model beats
+  // anything that could be bundled with the game.
+  anotherExampleBtn.addEventListener("click", () => {
+    const word = WORDS[refine.current];
+    anotherExampleBtn.disabled = true;
+    aiExample.classList.remove("hidden");
+    aiExample.textContent = "コダマが考えている…";
+    getSample().then((sample) => {
+      if (!sample) {
+        aiExample.textContent = `(このビューではAIが使えないみたい)\n${word.ex}\n${word.exJa}`;
+        return;
+      }
+      const prompt = `あなたは「コダマ」という、TOEIC600点を目指す学習者に寄り添う小さな灯りの精霊です。\n英単語「${word.w}」(意味: ${word.m})を使った、TOEIC600点レベルの短い例文を1つだけ作ってください。\n出力は次の2行だけ。前置きも解説も不要です。\n1行目: 英文\n2行目: その和訳`;
+      sample(prompt, { modelTier: "quick", cache: false, onText: ({ text }) => { aiExample.textContent = text; } })
+        .then((res) => { aiExample.textContent = res.text.trim(); })
+        .catch(() => { aiExample.textContent = `(いまは思いつかないみたい)\n${word.ex}\n${word.exJa}`; });
+    });
+  });
+
   function nextGoalText() {
+    if (save.rawWords.length >= 3) return `原石が${save.rawWords.length}個たまっている。精錬して語晶にしよう。`;
     let affordable = null, closest = null;
     Object.entries(UPGRADE_DEFS).forEach(([key, def]) => {
       const next = def.levels[save.upgrades[key] + 1];
@@ -1082,7 +1371,12 @@
       }
     });
     if (affordable) return `${affordable}を強化できる。拠点で強化しよう。`;
-    if (closest) return `${MATERIALS[closest.matId].name}をあと${closest.matNeed}個集めよう(${closest.name}強化に必要)。`;
+    if (closest) {
+      if (closest.matId === "wordCrystal") {
+        return `語晶をあと${closest.matNeed}個(${closest.name}強化に必要)。語彙脈を掘って精錬しよう。`;
+      }
+      return `${MATERIALS[closest.matId].name}をあと${closest.matNeed}個集めよう(${closest.name}強化に必要)。`;
+    }
     if (save.bestDepth < 40) return `もっと深くへ。まだ見ぬ鉱脈が眠っている。`;
     return `すべての強化が完了した。さらに深くを目指そう。`;
   }
@@ -1090,6 +1384,9 @@
     bestDepthVal.textContent = save.bestDepth + "m";
     tierNames.textContent = PICKAXE_LEVELS[save.upgrades.pickaxe].label.replace("のつるはし", "");
     bagNote.textContent = save.world.bags.length > 0 ? `${save.world.bags.length}件` : "なし";
+    masteredVal.textContent = `${masteredCount()}`;
+    refineCount.textContent = save.rawWords.length > 0 ? `(${save.rawWords.length})` : "";
+    refineBtn.classList.toggle("primary", save.rawWords.length > 0);
     goalChip.textContent = nextGoalText();
     renderBank();
   }
@@ -1171,6 +1468,21 @@
     count.style.marginTop = "14px"; count.style.fontSize = "12px"; count.style.color = "var(--cream-dim)";
     count.textContent = `${save.discovered.length} / ${Object.keys(MATERIALS).length} 発見`;
     logBody.appendChild(count);
+
+    const vocab = document.createElement("div");
+    vocab.style.marginTop = "22px";
+    const due = WORDS.reduce((n, _, i) => n + (save.srs[i] && save.srs[i].due <= Date.now() ? 1 : 0), 0);
+    vocab.innerHTML = `
+      <div class="zukanSectionTitle" style="margin-bottom:8px">語彙</div>
+      <div class="shopRow">
+        <div class="shopRowHead"><div class="shopRowTitle">習得済み</div><div class="shopRowLevel">${masteredCount()} / ${WORDS.length}</div></div>
+        <div class="shopRowDesc">
+          出会った語: ${seenCount()}<br>
+          復習待ち: ${due}<br>
+          未精錬の原石: ${save.rawWords.length}
+        </div>
+      </div>`;
+    logBody.appendChild(vocab);
   }
   logBtn.addEventListener("click", () => { renderLog(); logOverlay.classList.remove("hidden"); });
   logClose.addEventListener("click", () => logOverlay.classList.add("hidden"));

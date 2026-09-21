@@ -8,6 +8,7 @@
   --ember: #e08a3e;
   --ember-deep: #b8602a;
   --gem: #74b9cf;
+  --word: #74b9cf;
   --danger: #d1483f;
   --good: #7fae5a;
 }
@@ -157,8 +158,8 @@ canvas#game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 .baseSub { display: block; font-size: 12px; letter-spacing: 2px; color: var(--ember); font-family: "Zen Kaku Gothic New", sans-serif; margin-top: 2px; }
 #baseHelpBtn { position: absolute; right: 0; top: 4px; }
 
-.baseStats { display: flex; gap: 10px; margin: 20px 0 6px; width: 100%; max-width: 460px; }
-.statCard { flex: 1; background: var(--panel-soft); border-radius: 14px; padding: 12px 6px; }
+.baseStats { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 6px; width: 100%; max-width: 460px; }
+.statCard { flex: 1 1 calc(50% - 5px); min-width: 96px; background: var(--panel-soft); border-radius: 14px; padding: 12px 6px; }
 .statNum { font-family: "Shippori Mincho", serif; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .statLbl { font-size: 11px; color: var(--cream-dim); margin-top: 2px; }
 
@@ -218,6 +219,67 @@ canvas#game { position: absolute; inset: 0; width: 100%; height: 100%; display: 
 }
 .shopBuyBtn:disabled { background: rgba(255,255,255,0.1); color: rgba(239,226,204,0.4); cursor: default; }
 .shopBuyBtn.max { background: rgba(127,174,90,0.35); color: var(--cream); }
+
+/* ---------- Refine (English review) ---------- */
+/* Study screen: fully opaque so the base camp behind it can't compete for attention. */
+#refineOverlay { background: linear-gradient(180deg, #241c18, #15100e); }
+
+.refineStage { width: 100%; max-width: 480px; display: flex; flex-direction: column; align-items: center; flex: 1; }
+
+.refineProgress { width: 100%; height: 4px; border-radius: 3px; background: rgba(0,0,0,0.35); overflow: hidden; }
+.refineProgressFill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--word), var(--ember)); transition: width .3s ease; }
+.refineCounter { font-size: 11px; color: var(--cream-dim); letter-spacing: 1px; margin: 8px 0 auto; align-self: flex-start; }
+
+.oreWord {
+  font-family: "Shippori Mincho", serif;
+  font-size: clamp(30px, 10vw, 44px);
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--word);
+  text-shadow: 0 0 26px rgba(116,185,207,0.45);
+  text-align: center;
+  word-break: break-word;
+  margin: 10px 0 6px;
+}
+.oreHint { font-size: 12px; color: var(--cream-dim); margin-bottom: 22px; }
+
+.choiceGrid { display: flex; flex-direction: column; gap: 9px; width: 100%; margin-bottom: auto; }
+.choiceBtn {
+  border: 1px solid rgba(239,226,204,0.16);
+  background: var(--panel-soft); color: var(--cream);
+  padding: 14px 16px; border-radius: 13px; font-size: 14px; text-align: left; cursor: pointer;
+  transition: transform .1s ease, background .15s ease;
+}
+.choiceBtn:active { transform: scale(0.98); }
+.choiceBtn:disabled { cursor: default; }
+.choiceBtn.correct { background: rgba(127,174,90,0.32); border-color: rgba(127,174,90,0.8); }
+.choiceBtn.wrong { background: rgba(209,72,63,0.28); border-color: rgba(209,72,63,0.7); }
+.choiceBtn:focus-visible { outline: 2px solid var(--word); outline-offset: 2px; }
+
+.refineResult { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 14px; }
+.resultVerdict { font-family: "Shippori Mincho", serif; font-size: 19px; font-weight: 700; }
+.resultVerdict.ok { color: var(--good); }
+.resultVerdict.ng { color: var(--danger); }
+.resultMeaning { font-size: 15px; }
+.exampleBox {
+  width: 100%; background: var(--panel-soft); border-radius: 13px; padding: 13px 15px; text-align: left;
+  border-left: 3px solid var(--word);
+}
+.exampleEn { font-size: 14px; line-height: 1.6; margin-bottom: 5px; }
+.exampleJa { font-size: 12px; color: var(--cream-dim); line-height: 1.6; }
+.aiExample {
+  width: 100%; background: rgba(116,185,207,0.12); border: 1px solid rgba(116,185,207,0.3);
+  border-radius: 13px; padding: 13px 15px; text-align: left; font-size: 13.5px; line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.refineSummary { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; text-align: center; gap: 8px; }
+.summaryIcon { font-size: 44px; }
+.summaryTitle { font-family: "Shippori Mincho", serif; font-size: 22px; margin: 0; }
+.summaryLine { font-size: 16px; font-variant-numeric: tabular-nums; }
+.summaryNote { font-size: 12px; color: var(--cream-dim); max-width: 320px; line-height: 1.7; }
+
+.wideBtn.primary { background: rgba(116,185,207,0.18); border: 1px solid rgba(116,185,207,0.4); }
 
 .logGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
 .logCard { background: var(--panel-soft); border-radius: 14px; padding: 10px 6px; display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 88px; justify-content: center; }
