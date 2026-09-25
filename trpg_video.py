@@ -1,11 +1,12 @@
-"""レトロゲーム風「TRPGって？」30秒アニメーションを、プログラムだけで生成する。
+"""レトロゲーム風「TRPGって？」40秒アニメーションを、プログラムだけで生成する。
 
+テーマ：プレイヤーとして「だれか」になりきって遊ぶ TRPG の楽しさ。
 絵・動き・効果音はすべてこのファイルのコードで作る（外部素材なし）。
 320x180 で描いて 6 倍に最近傍拡大 → 1920x1080 / 30fps の mp4 を書き出す。
 
 使い方:
-    python3 trpg_video.py            # trpg_video.mp4 を書き出す
-    python3 trpg_video.py --stills   # 確認用の静止画だけ書き出す
+    python3 trpg_video.py                          # trpg_video.mp4 を書き出す
+    python3 trpg_video.py --stills <dir> [秒 ...]  # 確認用の静止画だけ書き出す
 """
 import math
 import os
@@ -15,7 +16,7 @@ import sys
 import wave
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 try:
     import imageio_ffmpeg
@@ -26,7 +27,7 @@ except ImportError:
 W, H = 320, 180
 SCALE = 6
 FPS = 30
-DURATION = 30.0
+DURATION = 40.0
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = "/usr/share/fonts/opentype/unifont/unifont_jp.otf"
 FONT = ImageFont.truetype(FONT_PATH, 16)
@@ -48,9 +49,8 @@ def C(i):
 
 # ---------------------------------------------------------------- スプライト
 def sprite(rows, cmap):
-    h, w = len(rows), len(rows[0])
-    assert all(len(r) == w for r in rows), rows
-    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    w = max(len(r) for r in rows)
+    im = Image.new("RGBA", (w, len(rows)), (0, 0, 0, 0))
     px = im.load()
     for y, r in enumerate(rows):
         for x, ch in enumerate(r):
@@ -59,7 +59,12 @@ def sprite(rows, cmap):
     return im
 
 
-GIRL_ROWS = [
+def pad(rows, n=2):
+    return ["." * n + r + "." * n for r in rows]
+
+
+# 頭（全員共通の顔。髪・リボン・服の色で人を描き分ける）
+HEAD = [
     "....kkkkkkkk.rr.",
     "..kkhhhhhhhhkrrr",
     ".khhhhhhhhhhhkr.",
@@ -72,6 +77,12 @@ GIRL_ROWS = [
     "khpssssssssssphk",
     "khhsssskksssshhk",
     ".khhksssssskhhk.",
+]
+EYES_CLOSED = ("khsssssssssssshk", "khsskksssskksshk")
+EYES_HAPPY = ("khsskksssskksshk", "khsksskssksskshk")
+
+# ふだんの服（現実のテーブル）
+BODY_CASUAL = [
     ".khkkddwwddkkhk.",
     "..kddddrrddddk..",
     ".kddddddddddddk.",
@@ -85,101 +96,172 @@ GIRL_ROWS = [
     "...kssk..kssk...",
     "..kbbbk..kbbbk..",
 ]
-# まばたき：目の2行を閉じ目に
-GIRL_BLINK = list(GIRL_ROWS)
-GIRL_BLINK[7] = "khsssssssssssshk"
-GIRL_BLINK[8] = "khsskksssskksshk"
-# ばんざい：腕を上げる
-GIRL_CHEER = list(GIRL_ROWS)
-GIRL_CHEER[10] = "khhsssskksssshhk"
-GIRL_CHEER[12] = ".khkkddwwddkkhk."
-GIRL_CHEER[15] = ".kddddddddddddk."
-GIRL_CHEER[16] = ".kddddddddddddk."
-
-GIRL_ROWS = [".." + r + ".." for r in GIRL_ROWS]
-GIRL_BLINK = [".." + r + ".." for r in GIRL_BLINK]
-GIRL_CHEER = [".." + r + ".." for r in GIRL_CHEER]
-# 両腕を頭の横まで上げる
-for _y, _l, _r in [(5, "kk", "kk"), (6, "ss", "ss"), (7, "ss", "ss"), (8, "ks", "sk"),
-                   (9, "ks", "sk"), (10, "ks", "sk"), (11, "ks", "sk"), (12, ".k", "k."),
-                   (13, "..", "..")]:
-    _row = GIRL_CHEER[_y]
-    GIRL_CHEER[_y] = _l + _row[2:18] + _r
-
-GIRL_CMAP = dict(k=BLACK, h=BROWN, s=PEACH, r=RED, d=BLUE, w=WHITE, p=PINK, b=BROWN)
-
-
-def make_person(hair, dress, ribbon):
-    cm = dict(GIRL_CMAP, h=hair, d=dress, r=ribbon)
-    return {
-        "idle": sprite(GIRL_ROWS, cm),
-        "blink": sprite(GIRL_BLINK, cm),
-        "cheer": sprite(GIRL_CHEER, cm),
-    }
-
-
-GIRL = make_person(BROWN, BLUE, RED)
-# 最後に見て喜ぶ人たち（主人公とは別の人）
-VIEWERS = [
-    make_person(BLACK, GREEN, YELLOW),
-    make_person(ORANGE, PINK, BLUE),
-    make_person(LAV, ORANGE, GREEN),
+# 剣士のよろい（冒険の世界）
+BODY_KNIGHT = [
+    ".khkkaayyaakkhk.",
+    "..kaaaayyaaaak..",
+    ".kcaaaaaaaaaack.",
+    "ksskaaaaaaaakssk",
+    "ksscaaaayyaacssk",
+    ".kkcbbbbbbbbckk.",
+    "..kcaaaaaaaack..",
+    ".kccaaaaaaaacck.",
+    ".kkkkkkkkkkkkkk.",
+    "...kaak..kaak...",
+    "...kaak..kaak...",
+    "..kbbbk..kbbbk..",
+]
+# 魔法使いのローブ
+BODY_WIZARD = [
+    ".khkkvvwwvvkkhk.",
+    "..kvvvvyvvvvvk..",
+    ".kvvvvvvvvvvvvk.",
+    "ksskvvvvvvvvkssk",
+    "kssvvvvyvvvvvssk",
+    ".kkvvvvvvvvvvkk.",
+    "..kvvvvvvvvvvk..",
+    ".kvvvvvvvvvvvvk.",
+    ".kvvvvvvvvvvvvk.",
+    ".kkkkkkkkkkkkkk.",
+    "....kbbk.kbbk...",
+    "....kkkk.kkkk...",
+]
+WIZ_HAT = [
+    "........kk......",
+    ".......kvvk.....",
+    "......kvvvk.....",
+    ".....kvvvvvk....",
+    "....kvvyvvvvk...",
+    "..kkkyyyyyyyykk.",
 ]
 
-ROBOT_ROWS = [
-    ".........yy.........",
-    ".........kk.........",
-    "......kkkkkkkk......",
-    "....kkggggggggkk....",
-    "...kggggggggggggk...",
-    "...kgkkkkkkkkkkgk...",
-    "...kgkeekkkkeekgk...",
-    "...kgkeekkkkeekgk...",
-    "...kgkkkkkkkkkkgk...",
-    "...kggggkkkkggggk...",
-    "....kkkkkkkkkkkk....",
-    ".kk.kllllllllllk.kk.",
-    "kggkllkkkkkkkllkkggk",
-    "kggklllrryyblllkkggk",
-    "kggkllllllllllllkggk",
-    ".kk.kllllllllllk.kk.",
-    "....kllllllllllk....",
-    "....kkkkkkkkkkkk....",
-    ".....kgggk.kgggk....",
-    ".....kgggk.kgggk....",
-    "....kkkkkk.kkkkkk...",
-    "....kkkkkk.kkkkkk...",
-]
-ROBOT_CMAP = dict(k=BLACK, g=LGRAY, e=BLUE, l=LGRAY, r=RED, y=YELLOW, b=GREEN)
-ROBOT = sprite(ROBOT_ROWS, ROBOT_CMAP)
-ROBOT_LIT = sprite(ROBOT_ROWS, dict(ROBOT_CMAP, e=GREEN, y=ORANGE))
 
-BULB = sprite([
-    "...kkkk...",
-    "..kyyyyk..",
-    ".kyywyyyk.",
-    "kyywyyyyyk",
-    "kyyyyyyyyk",
-    "kyyyyyyyyk",
-    ".kyyyyyyk.",
-    "..kyyyyk..",
-    "...kggk...",
-    "...kggk...",
-    "...kkkk...",
-], dict(k=BLACK, y=YELLOW, w=WHITE, g=LGRAY))
-BULB_OFF = sprite([
-    "...kkkk...",
-    "..kddddk..",
-    ".kddwdddk.",
-    "kddwdddddk",
-    "kddddddddk",
-    "kddddddddk",
-    ".kddddddk.",
-    "..kddddk..",
-    "...kggk...",
-    "...kggk...",
-    "...kkkk...",
-], dict(k=BLACK, d=DGRAY, w=LGRAY, g=LGRAY))
+def arms_up(rows, top):
+    """腕をばんざいに（左右2pxの余白に腕を描く）。rows は pad 済み。"""
+    rows = list(rows)
+    for dy, l, r in [(5, "kk", "kk"), (6, "ss", "ss"), (7, "ss", "ss"), (8, "ks", "sk"),
+                     (9, "ks", "sk"), (10, "ks", "sk"), (11, "ks", "sk"), (12, ".k", "k.")]:
+        y = top + dy
+        rows[y] = l + rows[y][2:18] + r
+    # 下がっていた腕を消す
+    for dy in (15, 16):
+        y = top + dy
+        fill = rows[y][2:18][5]
+        rows[y] = "...k" + fill * 12 + "k..."
+    return rows
+
+
+def make_person(hair, cloth, ribbon, body=BODY_CASUAL, hat=False, extra=None):
+    cm = dict(k=BLACK, h=hair, s=PEACH, r=ribbon, d=cloth, w=WHITE, p=PINK, b=BROWN,
+              a=LGRAY, y=YELLOW, c=RED, v=PLUM)
+    head = WIZ_HAT + HEAD[2:] if hat else list(HEAD)
+    top = 4 if hat else 0  # 帽子で頭が下がる分
+    idle = pad(head + body)
+    blink = list(idle)
+    blink[7 + top] = "..%s.." % EYES_CLOSED[0]
+    blink[8 + top] = "..%s.." % EYES_CLOSED[1]
+    cheer = arms_up(idle, top)
+    happy = list(cheer)
+    happy[7 + top] = "..%s.." % EYES_HAPPY[0]
+    happy[8 + top] = "..%s.." % EYES_HAPPY[1]
+    out = {k: sprite(v, cm) for k, v in
+           dict(idle=idle, blink=blink, cheer=cheer, happy=happy).items()}
+    if extra:
+        for k in out:
+            extra(out[k], k)
+    return out
+
+
+SWORD = sprite([
+    "..w..",
+    ".kwk.",
+    ".kwk.",
+    ".kwk.",
+    ".kwk.",
+    ".kwk.",
+    ".kwk.",
+    "kyyyk",
+    ".kbk.",
+    ".kbk.",
+    "..k..",
+], dict(k=BLACK, w=WHITE, y=YELLOW, b=BROWN))
+
+
+def add_sword(im, pose):
+    if pose in ("cheer", "happy"):
+        im.alpha_composite(SWORD, (15, 0))
+    else:
+        im.alpha_composite(SWORD, (15, 7))
+
+
+# 主人公リナ（現実 / 剣士）…顔と髪型は同じ
+RINA = make_person(BROWN, BLUE, RED)
+RINA_KNIGHT = make_person(BROWN, BLUE, RED, body=BODY_KNIGHT, extra=add_sword)
+# 仲間たち（現実）。1人目は冒険の世界で魔法使いになる
+PAL1 = make_person(BLACK, GREEN, YELLOW)
+PAL1_WIZ = make_person(BLACK, GREEN, YELLOW, body=BODY_WIZARD, hat=True)
+PAL2 = make_person(ORANGE, PINK, BLUE)
+GM = make_person(LAV, ORANGE, GREEN)
+
+GUARD = sprite([
+    "......rr........",
+    ".....rrrr.......",
+    "....kkkkkkkk....",
+    "...kaaaaaaaak...",
+    "..kaaaaaaaaaak..",
+    "..kakkkkkkkkak..",
+    "..kaksksskskak..",
+    "..kaksssssskak..",
+    "..kaaaaaaaaaak..",
+    ".kaaddddddddaak.",
+    "kaaaddddddddaaak",
+    "kssaddyyyyddassk",
+    "kssaddddddddassk",
+    ".kkaddddddddakk.",
+    "..kaaaaaaaaaak..",
+    "..kaaaakkaaaak..",
+    "..kaaak..kaaak..",
+    "..kaaak..kaaak..",
+    "..kaaak..kaaak..",
+    "..kaaak..kaaak..",
+    "..kaaak..kaaak..",
+    "..kgggk..kgggk..",
+    ".kkkkkk..kkkkkk.",
+], dict(k=BLACK, a=LGRAY, d=RED, y=YELLOW, s=PEACH, g=DGRAY, r=RED))
+
+DRAGON_ROWS = [
+    "..........................kk",
+    "........................kkggk",
+    "...GG..................kggggk",
+    "..GGGG................kggkwgk",
+    ".GGGGGG..............kgggkkggkk",
+    ".GGGGGGG............kggggggggggk",
+    "..GGGGGGG...........kggggggwgwgk",
+    "...GGGGGGG.........kgggggkkkkkk",
+    "....GGGGGGGk.......kggggk",
+    ".....GGGGGGgk.....kgggggk",
+    "......GGGGggggkkkkgggggk",
+    ".......kggggggggggggggk",
+    "......kgggggyyyyyyggggk",
+    ".....kggggyyyyyyyyyggk",
+    "....kgggggyyyyyyyyyggk",
+    "...kggggggyyyyyyyyggk",
+    "..kgggk.kgyyyyyyyyggk",
+    ".kggk...kggyyyyyygggk",
+    "kggk....kgggggggggggk",
+    "kgk.....kgggk..kgggk",
+    ".k......kgggk..kgggk",
+    "........kwkwk..kwkwk",
+    "........kkkkk..kkkkk",
+]
+DRAGON_CMAP = dict(k=BLACK, g=GREEN, G=DGREEN, y=YELLOW, w=WHITE, p=PINK)
+# 左向き（主人公たちの方を向く）
+DRAGON = ImageOps.mirror(sprite(DRAGON_ROWS, DRAGON_CMAP))
+_friendly = list(DRAGON_ROWS)
+_friendly[3] = "..GGGG................kggkkgk"   # にっこり目
+_friendly[6] = "..GGGGGGG...........kggppggggggk"  # ほっぺ
+_friendly[7] = "...GGGGGGG.........kgggggkggggk"   # 口を閉じる
+DRAGON_FRIEND = ImageOps.mirror(sprite(_friendly, DRAGON_CMAP))
 
 HEART = sprite([
     ".kk.kk.",
@@ -191,95 +273,48 @@ HEART = sprite([
     "...k...",
 ], dict(k=BLACK, p=RED, w=WHITE))
 
-# カードの絵（TRPG っぽい4枚 + はずれ1枚）
-ICON_DRAGON = sprite([
-    "............",
-    ".......gg...",
-    "..g...gggg..",
-    ".ggg.gggkgg.",
-    "gggggggggggr",
-    ".gggggggg...",
-    "..gggggggg..",
-    "..ggyyyygg..",
-    ".gg.yyyy.gg.",
-    ".g..g..g..g.",
-    "....g..g....",
-    "............",
-], dict(g=GREEN, k=BLACK, r=RED, y=YELLOW))
-ICON_DICE = sprite([
-    "............",
-    "..kkkkkkkk..",
-    ".kwwwwwwwwk.",
-    ".kwrwwwwwwk.",
-    ".kwwwwwwwwk.",
-    ".kwwwwrwwwk.",
-    ".kwwwwwwwwk.",
-    ".kwwwwwwrwk.",
-    ".kwwwwwwwwk.",
-    "..kkkkkkkk..",
-    "............",
-    "............",
-], dict(k=BLACK, w=WHITE, r=RED))
-ICON_SWORD = sprite([
-    "..........w.",
-    ".........ww.",
-    "........ww..",
-    ".......ww...",
-    "......ww....",
-    ".....ww.....",
-    "..y.ww......",
-    "...yw.......",
-    "...by.......",
-    "..b..y......",
-    ".b..........",
-    "............",
-], dict(w=WHITE, y=YELLOW, b=BROWN))
-ICON_CHEST = sprite([
-    "............",
-    "............",
-    "..bbbbbbbb..",
-    ".bbbbbbbbbb.",
-    ".bybbbbbbyb.",
-    ".yyyyyyyyyy.",
-    ".bbbbyybbbb.",
-    ".bybbyybbyb.",
-    ".bbbbbbbbbb.",
-    ".yyyyyyyyyy.",
-    "............",
-    "............",
-], dict(b=BROWN, y=YELLOW))
-ICON_BLUR = sprite([
-    "............",
-    "..gg....ll..",
-    ".glg..llgl..",
-    "..g.lgl..g..",
-    ".l..gg..lg..",
-    "..lg..gl....",
-    ".g..lg..gl..",
-    "..gl..lg..l.",
-    ".l..g..l.g..",
-    "..gl..g.l...",
-    "....lg..g...",
-    "............",
-], dict(g=DGRAY, l=LAV))
+BREAD = sprite([
+    "..kkkkkk..",
+    ".koyoyook.",
+    "kooooooook",
+    "kyoyoyoyok",
+    ".kkkkkkkk.",
+], dict(k=BLACK, o=ORANGE, y=YELLOW))
 
-CARD_ICONS = [ICON_DICE, ICON_DRAGON, ICON_BLUR, ICON_SWORD, ICON_CHEST]
-CARD_BG = [BLUE, NAVY, DGRAY, PLUM, DGREEN]
-GOOD = [True, True, False, True, True]
+SHEET = sprite([
+    "kkkkkkkkkk",
+    "kwwwwwwwwk",
+    "kwrrwwwwwk",
+    "kwwwwwwwwk",
+    "kwlllllwwk",
+    "kwwwwwwwwk",
+    "kwllllwwwk",
+    "kwwwwwwwwk",
+    "kwlllllwwk",
+    "kwwwwwwwwk",
+    "kkkkkkkkkk",
+], dict(k=BLACK, w=WHITE, r=RED, l=LGRAY))
+
+PIPS = {1: [(1, 1)], 2: [(0, 0), (2, 2)], 3: [(0, 0), (1, 1), (2, 2)],
+        4: [(0, 0), (2, 0), (0, 2), (2, 2)], 5: [(0, 0), (2, 0), (1, 1), (0, 2), (2, 2)],
+        6: [(0, 0), (0, 1), (0, 2), (2, 0), (2, 1), (2, 2)]}
 
 
-def make_card(icon, bg):
-    cw, ch = 26, 32
-    im = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+def die_img(n):
+    im = Image.new("RGBA", (15, 15), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    d.rectangle([0, 0, cw - 1, ch - 1], fill=C(BLACK))
-    d.rectangle([1, 1, cw - 2, ch - 2], fill=C(WHITE))
-    d.rectangle([3, 3, cw - 4, ch - 4], fill=C(bg))
-    im.alpha_composite(icon, ((cw - icon.width) // 2, (ch - icon.height) // 2))
+    d.rectangle([0, 0, 14, 14], fill=C(BLACK))
+    d.rectangle([1, 1, 13, 13], fill=C(WHITE))
+    for gx, gy in PIPS[n]:
+        x, y = 3 + gx * 4, 3 + gy * 4
+        if n == 1:
+            d.rectangle([x - 1, y - 1, x + 2, y + 2], fill=C(RED))
+        else:
+            d.rectangle([x, y, x + 1, y + 1], fill=C(BLACK))
     return im
 
 
-CARDS = [make_card(i, b) for i, b in zip(CARD_ICONS, CARD_BG)]
+DICE = {n: die_img(n) for n in range(1, 7)}
 
 # ---------------------------------------------------------------- 描画ヘルパ
 _text_cache = {}
@@ -287,8 +322,7 @@ _text_cache = {}
 
 def text_mask(s):
     if s not in _text_cache:
-        l, t, r, b = FONT.getbbox(s)
-        im = Image.new("L", (max(r, 1) + 1, 17), 0)
+        im = Image.new("L", (max(text_width(s), 1) + 1, 17), 0)
         d = ImageDraw.Draw(im)
         d.fontmode = "1"
         d.text((0, 0), s, font=FONT, fill=255)
@@ -301,6 +335,8 @@ def text_width(s):
 
 
 def draw_text(img, x, y, s, color, scale=1, outline=None, shadow=None):
+    if not s:
+        return
     m = text_mask(s)
     if scale != 1:
         m = m.resize((m.width * scale, m.height * scale), Image.NEAREST)
@@ -331,14 +367,37 @@ def clamp01(t):
 
 
 def blinking(t, seed=0):
-    """時々まばたきする"""
-    p = (t + seed * 1.3) % 2.6
-    return p < 0.12
+    return (t + seed * 1.3) % 2.6 < 0.12
 
 
-# ---------------------------------------------------------------- 会話ウィンドウ
-CPS = 14.0  # 1秒あたりの文字数
+def draw_person(img, person, x, y, t, pose="idle", seed=0, scale=2, crop=None):
+    """x は体の左端（腕用の余白2pxを除いた位置）"""
+    spr = person[pose]
+    if pose == "idle" and blinking(t, seed):
+        spr = person["blink"]
+    if crop:
+        spr = spr.crop((0, 0, spr.width, crop))
+    put(img, spr, x - 2 * scale, y, scale)
+
+
+def sparkle(d, x, y, s, col=WHITE):
+    d.line([x - s, y, x + s, y], fill=C(col))
+    d.line([x, y - s, x, y + s], fill=C(col))
+
+
+# ---------------------------------------------------------------- 会話ウィンドウ・ふきだし
+CPS = 14.0   # 字幕：1秒あたりの文字数
+BCPS = 16.0  # ふきだし
 WIN = (6, 128, 313, 175)
+
+
+def typed(lines, t_start, t, cps):
+    n = int(max(0.0, t - t_start) * cps)
+    out = []
+    for line in lines:
+        out.append(line[:max(0, n)])
+        n -= len(line)
+    return out, n >= 0
 
 
 def draw_window(img, lines, t_start, t):
@@ -347,31 +406,40 @@ def draw_window(img, lines, t_start, t):
     d.rectangle([x0, y0, x1, y1], fill=C(BLACK))
     d.rectangle([x0 + 1, y0 + 1, x1 - 1, y1 - 1], outline=C(WHITE))
     d.rectangle([x0 + 4, y0 + 4, x1 - 4, y1 - 4], outline=C(WHITE))
-    n = int(max(0.0, t - t_start) * CPS)
-    ty = y0 + 7
-    shown_all = True
-    for line in lines:
-        part = line[:max(0, n)]
-        if len(part) < len(line):
-            shown_all = False
-        if part:
-            draw_text(img, x0 + 10, ty, part, WHITE)
-        n -= len(line)
+    shown, done = typed(lines, t_start, t, CPS)
+    ty = y0 + 7 if len(lines) > 1 else y0 + 16
+    for part in shown:
+        draw_text(img, x0 + 10, ty, part, WHITE)
         ty += 18
-    # 全部出たら ▼ を点滅
-    if shown_all and int(t * 3) % 2 == 0:
+    if done and int(t * 3) % 2 == 0:
         cx, cy = x1 - 14, y1 - 12
         d.polygon([(cx, cy), (cx + 6, cy), (cx + 3, cy + 3)], fill=C(WHITE))
 
 
-def char_times(lines, t_start):
-    """1文字ずつの表示時刻（効果音用）"""
+def draw_bubble(img, x, y, lines, t_start, t, tail):
+    """キャラクターのふきだし。(x, y) は左上、tail はしっぽの先。"""
+    d = ImageDraw.Draw(img)
+    w = max(text_width(s) for s in lines) + 10
+    h = 18 * len(lines) + 4
+    x = max(2, min(W - 3 - w, x))
+    tx, ty = tail
+    bx = max(x + 4, min(x + w - 11, tx - 3))
+    by = y + h if ty > y else y
+    d.polygon([(bx, by), (bx + 7, by), (tx, ty)], fill=C(WHITE), outline=C(BLACK))
+    d.rectangle([x, y, x + w, y + h], fill=C(WHITE), outline=C(BLACK))
+    d.line([bx + 1, by, bx + 6, by], fill=C(WHITE))
+    shown, _ = typed(lines, t_start, t, BCPS)
+    for i, part in enumerate(shown):
+        draw_text(img, x + 5, y + 3 + i * 18, part, BLACK)
+
+
+def char_times(lines, t_start, cps):
     out = []
     i = 0
     for line in lines:
         for ch in line:
-            if ch not in " 　":
-                out.append(t_start + i / CPS)
+            if ch not in " 　…":
+                out.append(t_start + i / cps)
             i += 1
     return out
 
@@ -385,18 +453,74 @@ def draw_stage_label(img, label):
 
 
 # ---------------------------------------------------------------- 場面の設定
-TITLE_END = 4.0
+# (開始, 終了, 関数名, ラベル, 字幕行)
 SCENES = [
-    # (開始, 終了, 描画関数名, ラベル, 字幕行)
-    (0.0, 4.0, "title", None, None),
-    (4.0, 9.0, "plan", "STAGE 1", ["TRPGの楽しさ、どう伝える？", "まずは「企画」を思いつこう！"]),
-    (9.0, 14.0, "memo", "STAGE 2", ["思いを言葉にしてメモに書く。", "だれに・雰囲気・伝えたいこと"]),
-    (14.0, 19.0, "robot", "STAGE 3", ["AIロボに頼んで", "冒険の絵をつくってもらおう！"]),
-    (19.0, 24.0, "select", "STAGE 4", ["いい絵を選んで、つなげると", "ひとつの物語になる！"]),
-    (24.0, 30.0, "clear", "STAGE CLEAR", ["見た人の心が動いたら、完成です"]),
+    (0.0, 5.0, "title", None, None),
+    (5.0, 11.0, "become", "STAGE 1", ["自分じゃない「だれか」に", "なりきって、冒険へ出よう！"]),
+    (11.0, 19.0, "talk", "STAGE 2", ["決まった選択肢はいらない。", "自分の言葉で話していい！"]),
+    (19.0, 27.0, "dice", "STAGE 3", ["ドキドキの判定は、", "サイコロで決まる！"]),
+    (27.0, 34.0, "friends", "STAGE 4", ["仲間の一言で、物語は", "思いもよらない方向へ！"]),
+    (34.0, 40.0, "clear", "STAGE CLEAR", ["次の冒険の主人公は、あなたです"]),
 ]
-TEXT_DELAY = 0.55  # 場面開始から字幕が出始めるまで
-TRANS = 0.4  # ブロック遷移（閉じ／開き）の長さ
+TEXT_DELAY = 0.55
+TRANS = 0.4
+
+# ふきだし：場面名 -> [(開始, 終了, x, y, 行, しっぽ先)]（時刻は場面内）
+BUBBLES = {
+    "become": [
+        (2.3, 3.0, 104, 18, ["今日のわたしは…"], (100, 60)),
+        (3.9, 6.0, 104, 18, ["剣士リナ、参上！"], (100, 60)),
+    ],
+    "talk": [
+        (0.8, 2.0, 150, 30, ["とまれ！"], (206, 58)),
+        (3.6, 5.4, 82, 8, ["おなかすいてない？", "パンあげる！"], (72, 55)),
+        (5.5, 7.6, 150, 26, ["…いいやつだな！"], (206, 58)),
+    ],
+    "dice": [
+        (3.5, 4.9, 118, 22, ["おおー！"], (135, 58)),
+        (6.3, 7.6, 176, 20, ["成功！"], (230, 40)),
+    ],
+    "friends": [
+        (0.4, 1.3, 200, 30, ["ガオー！"], (222, 58)),
+        (1.3, 2.5, 74, 22, ["友だちに", "なろう！"], (92, 60)),
+        (2.75, 4.3, 100, 24, ["まさかの展開！？"], (176, 60)),
+        (4.7, 6.6, 196, 26, ["ガオ♪"], (222, 56)),
+    ],
+}
+
+# 現実と冒険の世界を行き来する時刻（場面内）
+WORLD_SWITCH = {
+    "dice": [1.35, 4.95],
+    "friends": [2.6, 4.45],
+}
+WOBBLE = 0.3  # ゆらぎの長さ（片側）
+
+
+def world_of(name, t):
+    """場面内の時刻 t で、冒険('adv') か 現実('real') か"""
+    k = sum(1 for s in WORLD_SWITCH.get(name, []) if t >= s)
+    return "adv" if k % 2 == 0 else "real"
+
+
+def wobble_amount(name, t):
+    a = 0.0
+    for s in WORLD_SWITCH.get(name, []):
+        a = max(a, 1 - abs(t - s) / WOBBLE)
+    return a
+
+
+def apply_wobble(img, amt, t):
+    """画面をゆらゆらさせる（行ごとに横へずらす）。会話ウィンドウより上だけ。"""
+    if amt <= 0:
+        return img
+    a = np.asarray(img).copy()
+    for y in range(128):
+        sh = int(math.sin(y * 0.25 + t * 30) * 18 * amt)
+        a[y] = np.roll(a[y], sh, axis=0)
+    if amt > 0.6:
+        add = int(90 * (amt - 0.6) / 0.4)
+        a[:128] = np.minimum(255, a[:128].astype(np.int16) + add).astype(np.uint8)
+    return Image.fromarray(a)
 
 
 # ---------------------------------------------------------------- 背景
@@ -405,305 +529,354 @@ def stars(img, t, seed=1, n=40, ymax=110):
     px = img.load()
     for i in range(n):
         x, y = rnd.randrange(W), rnd.randrange(ymax)
-        ph = rnd.random() * 6
-        if math.sin(t * 4 + ph) > -0.3:
+        if math.sin(t * 4 + rnd.random() * 6) > -0.3:
             px[x, y] = C(WHITE if i % 3 else YELLOW)
 
 
-def room_bg(img, wall=NAVY, floor=BROWN):
+def sky_field(img, t, sky=BLUE, ground=104):
+    """冒険の世界（草原）"""
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, W, 104], fill=C(wall))
-    # 壁の模様（チェック）
-    for y in range(0, 104, 16):
-        for x in range((y // 16 % 2) * 16, W, 32):
-            d.rectangle([x, y, x + 15, y + 15], fill=C(PLUM if wall == NAVY else wall))
-    d.rectangle([0, 104, W, 127], fill=C(floor))
+    d.rectangle([0, 0, W, ground], fill=C(sky))
+    for cx, cy in [(60, 30), (170, 18), (270, 36)]:
+        x = (cx + t * 6) % (W + 60) - 30
+        d.rectangle([x, cy, x + 26, cy + 6], fill=C(WHITE))
+        d.rectangle([x + 6, cy - 4, x + 18, cy], fill=C(WHITE))
+    for mx in range(-20, W, 70):
+        d.polygon([(mx, ground), (mx + 35, ground - 34), (mx + 70, ground)], fill=C(LAV))
+    d.rectangle([0, ground, W, 127], fill=C(GREEN))
+    d.line([0, ground, W, ground], fill=C(DGREEN))
+    rnd = random.Random(3)
+    for _ in range(26):
+        x, y = rnd.randrange(W), rnd.randrange(ground + 4, 125)
+        d.line([x, y, x + 1, y - 2], fill=C(DGREEN))
+        d.line([x + 2, y, x + 3, y - 2], fill=C(DGREEN))
+
+
+def warm_room(img):
+    """現実の部屋（暖かい色）"""
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 104], fill=C(BROWN))
+    for x in range(8, W, 24):
+        d.line([x, 0, x, 104], fill=C(ORANGE))
+    d.rectangle([0, 104, W, 127], fill=C(PEACH))
     for x in range(0, W, 20):
-        d.line([x, 104, x - 8, 127], fill=C(BLACK))
+        d.line([x, 104, x - 8, 127], fill=C(BROWN))
     d.line([0, 104, W, 104], fill=C(BLACK))
 
 
-def draw_girl(img, x, y, t, pose="idle", seed=0, person=None):
-    p = person or GIRL
-    spr = p[pose]
-    if pose == "idle" and blinking(t, seed):
-        spr = p["blink"]
-    put(img, spr, x - 4, y, 2)  # 腕用の左右2pxの余白ぶん戻す
+TABLE_PEOPLE = [(34, GM), (98, RINA), (184, PAL1), (248, PAL2)]  # x, 人
+
+
+def draw_table(img, t, table_y=92, pose_fn=None, bob_fn=None, lamp=True):
+    """現実のテーブル。4人（GM + プレイヤー3人）がテーブルを囲んでいる。"""
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, table_y + 36], fill=C(BROWN))
+    for x in range(8, W, 24):
+        d.line([x, 0, x, table_y], fill=C(ORANGE))
+    if lamp:
+        d.line([160, 0, 160, 8], fill=C(BLACK))
+        d.polygon([(148, 16), (172, 16), (166, 8), (154, 8)], fill=C(YELLOW), outline=C(BLACK))
+    for i, (px, per) in enumerate(TABLE_PEOPLE):
+        pose = pose_fn(i) if pose_fn else "idle"
+        bob = bob_fn(i) if bob_fn else 0
+        draw_person(img, per, px, table_y - 34 - bob, t, pose, seed=i, crop=17)
+    d.rectangle([0, table_y, W, table_y + 12], fill=C(PEACH))
+    d.line([0, table_y, W, table_y], fill=C(BLACK))
+    d.rectangle([0, table_y + 12, W, table_y + 36], fill=C(BROWN))
+    d.line([0, table_y + 12, W, table_y + 12], fill=C(BLACK))
+    # キャラクターシート
+    for px, _ in TABLE_PEOPLE[1:]:
+        put(img, SHEET.resize((10, 7), Image.NEAREST), px + 10, table_y + 3)
+    # GM のついたて
+    gx = TABLE_PEOPLE[0][0] - 2
+    d.rectangle([gx, table_y - 10, gx + 36, table_y + 8], fill=C(NAVY), outline=C(BLACK))
+    draw_text(img, gx + 11, table_y - 9, "GM", YELLOW)
+
+
+def draw_dream(img, box, content):
+    """テーブルの上に浮かぶ「冒険の世界」"""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    if w < 4 or h < 4:
+        return
+    scene = Image.new("RGB", (w, h), C(BLUE))
+    content(scene)
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=10, fill=255)
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([x0 - 3, y0 - 3, x1 + 2, y1 + 2], radius=12, fill=C(WHITE), outline=C(BLACK))
+    img.paste(scene, (x0, y0), mask)
+
+
+def mini_world(scene, t, friendly=False):
+    d = ImageDraw.Draw(scene)
+    w, h = scene.size
+    for cx in (20, w - 60):
+        d.rectangle([cx, 6, cx + 16, 10], fill=C(WHITE))
+    d.rectangle([0, h - 12, w, h], fill=C(GREEN))
+    # お城
+    d.rectangle([w // 2 - 10, h - 34, w // 2 + 10, h - 12], fill=C(LGRAY))
+    for k in range(w // 2 - 10, w // 2 + 10, 6):
+        d.rectangle([k, h - 38, k + 3, h - 34], fill=C(LGRAY))
+    d.rectangle([w // 2 - 3, h - 22, w // 2 + 3, h - 12], fill=C(BROWN))
+    hop = int(abs(math.sin(t * 6)) * 2) if friendly else 0
+    put(scene, RINA_KNIGHT["cheer" if friendly else "idle"], 10, h - 36 - hop)
+    put(scene, PAL1_WIZ["cheer" if friendly else "idle"], 32, h - 40 - hop)
+    put(scene, DRAGON_FRIEND if friendly else DRAGON, w - 44, h - 35)
+    if friendly:
+        put(scene, HEART, w - 52, h - 46 - int(abs(math.sin(t * 4)) * 4))
 
 
 # ---------------------------------------------------------------- 各場面
 def scene_title(img, t):
     d = ImageDraw.Draw(img)
     d.rectangle([0, 0, W, H], fill=C(NAVY))
-    stars(img, t, seed=3, n=60, ymax=130)
-    # 月
-    d.ellipse([290, 30, 310, 50], fill=C(YELLOW))
-    d.ellipse([297, 26, 317, 46], fill=C(NAVY))
-    # 城のシルエット
-    d.rectangle([0, 138, W, H], fill=C(DGREEN))
-    for bx, bw, bh in [(20, 26, 40), (44, 40, 28), (84, 22, 48), (230, 22, 46), (252, 44, 30), (296, 24, 38)]:
-        d.rectangle([bx, 138 - bh, bx + bw, 138], fill=C(BLACK))
-        for k in range(bx, bx + bw, 6):
-            d.rectangle([k, 138 - bh - 4, k + 2, 138 - bh], fill=C(BLACK))
-    # 窓の灯り
-    for wx, wy in [(92, 104), (238, 106), (30, 110)]:
-        d.rectangle([wx, wy, wx + 3, wy + 5], fill=C(ORANGE))
+    stars(img, t, seed=3, n=50, ymax=128)
     # タイトル（落ちてきて止まる）
     title = "TRPGって？"
     tw = text_width(title) * 3
-    ty = 14 - int((1 - ease_out(t / 0.8)) * 70)
+    ty = 4 - int((1 - ease_out(t / 0.8)) * 70)
     draw_text(img, (W - tw) // 2, ty, title, YELLOW, scale=3, outline=BLACK, shadow=ORANGE)
-    sub = "〜 みんなで物語をつくる遊び 〜"
-    if t > 0.9:
-        draw_text(img, (W - text_width(sub)) // 2, 66, sub, WHITE, outline=BLACK)
-    # サイコロと主人公
-    draw_girl(img, 144, 138 - 48, t)
-    dy = int(abs(math.sin(t * 5)) * 6)
-    put(img, ICON_DICE, 186, 138 - 24 - dy, 2)
-    put(img, ICON_DRAGON, 96, 138 - 26 - int(abs(math.sin(t * 5 + 1.5)) * 4), 2)
+    # テーブルの上に冒険の世界が浮かぶ
+    k = ease_out((t - 0.9) / 0.6)
+    if k > 0:
+        hh = int(50 * k)
+        draw_dream(img, (70, 78 - hh // 2, 250, 78 + hh // 2), lambda s: mini_world(s, t))
+        for bx, by, r in [(106, 114, 3), (110, 122, 2)]:
+            d.ellipse([bx - r, by - r, bx + r, by + r], fill=C(WHITE), outline=C(BLACK))
+    # テーブルを囲む4人
+    tbl = Image.new("RGB", (W, 60), C(BROWN))
+    draw_table(tbl, t, table_y=36, lamp=False)
+    img.paste(tbl.crop((0, 0, W, 50)), (0, 130))
     # PRESS START
-    pressed = t >= 2.9
-    rate = 12 if pressed else 2.5
-    if int(t * rate) % 2 == 0:
+    pressed = t >= 3.9
+    if int(t * (12 if pressed else 2.5)) % 2 == 0:
         s = "PRESS START"
-        draw_text(img, (W - text_width(s)) // 2, 152, s, WHITE, outline=BLACK)
+        draw_text(img, (W - text_width(s)) // 2, 108, s, WHITE, outline=BLACK)
 
 
-def scene_plan(img, t):
-    room_bg(img)
+def poof(img, t, cx, cy):
+    """変身のけむり"""
     d = ImageDraw.Draw(img)
-    # 机と本棚
-    d.rectangle([220, 52, 290, 104], fill=C(BROWN))
-    d.rectangle([220, 52, 290, 104], outline=C(BLACK))
-    for i, col in enumerate([RED, GREEN, BLUE, YELLOW, LAV, ORANGE]):
-        d.rectangle([224 + i * 10, 58, 231 + i * 10, 76], fill=C(col))
-        d.rectangle([224 + i * 10, 58, 231 + i * 10, 76], outline=C(BLACK))
-    d.line([220, 78, 290, 78], fill=C(BLACK))
-    put(img, ICON_DICE, 232, 84)
-    put(img, ICON_SWORD, 256, 84)
-    gx, gy = 144, 56
-    lit = t >= 1.6
-    pose = "cheer" if lit and t < 3.8 else "idle"
-    hop = -int(abs(math.sin((t - 1.6) * 8)) * 4) if 1.6 <= t < 2.2 else 0
-    draw_girl(img, gx, gy + hop, t, pose)
-    # 考え中 … → 電球ピカッ
-    bx, by = gx + 6, gy - 40 + hop
-    if not lit:
-        dots = int(t * 3) % 4
-        for i in range(dots):
-            d.rectangle([gx + 8 + i * 6, gy - 8, gx + 10 + i * 6, gy - 6], fill=C(WHITE))
-        if t > 0.8:
-            put(img, BULB_OFF, bx, by, 2)
+    rnd = random.Random(11)
+    k = clamp01(t / 0.6)
+    for i in range(12):
+        ang = rnd.random() * math.tau
+        dist = 4 + k * 20 * (0.5 + rnd.random())
+        r = int((1 - abs(k - 0.4)) * 12) + 2
+        x, y = cx + math.cos(ang) * dist, cy + math.sin(ang) * dist
+        d.ellipse([x - r, y - r, x + r, y + r], fill=C(WHITE if i % 2 else LGRAY), outline=C(BLACK))
+
+
+def scene_become(img, t):
+    warm_room(img)
+    d = ImageDraw.Draw(img)
+    # 後ろのテーブルと仲間
+    for i, (px, per) in enumerate([(206, PAL1), (262, PAL2)]):
+        draw_person(img, per, px, 42, t, "idle", seed=i + 2, crop=17)
+    d.rectangle([196, 76, 316, 84], fill=C(PEACH), outline=C(BLACK))
+    d.rectangle([196, 84, 316, 104], fill=C(BROWN), outline=C(BLACK))
+    gx, gy = 60, 56
+    if t < 3.3:
+        draw_person(img, RINA, gx, gy, t, "idle")
+        if t >= 0.8:
+            # キャラクターシートを持ち上げる
+            lift = ease_out((t - 0.8) / 0.5)
+            put(img, SHEET, gx + 30, gy + 26 - lift * 14, 2)
+            if lift >= 1 and int(t * 6) % 2 == 0:
+                sparkle(d, gx + 54, gy + 4, 3, YELLOW)
     else:
-        # 光の線
-        k = (t - 1.6)
-        cx, cy = bx + 10, by + 10
-        rlen = 14 + int(3 * math.sin(k * 10))
-        for a in range(8):
-            ang = a * math.pi / 4 + k * 0.8
-            x0 = cx + math.cos(ang) * 14
-            y0 = cy + math.sin(ang) * 14
-            x1 = cx + math.cos(ang) * (rlen + 8)
-            y1 = cy + math.sin(ang) * (rlen + 8)
-            d.line([x0, y0, x1, y1], fill=C(YELLOW if a % 2 else WHITE), width=2)
-        put(img, BULB, bx, by, 2)
+        pose = "cheer" if t >= 3.8 else "idle"
+        hop = int(abs(math.sin((t - 3.8) * 9)) * 5) if 3.8 <= t < 4.5 else 0
+        draw_person(img, RINA_KNIGHT, gx, gy - hop, t, pose)
+        if t >= 3.8:
+            for i in range(5):
+                ph = (t * 1.5 + i / 5) % 1
+                sparkle(d, gx - 8 + i * 12, int(gy + 40 - ph * 50), 2, YELLOW if i % 2 else WHITE)
+    if 3.0 <= t < 3.7:
+        poof(img, t - 3.0, gx + 16, gy + 24)
 
 
-def scene_memo(img, t):
-    room_bg(img, wall=DGREEN, floor=BROWN)
+GATE_X = 236
+
+
+def scene_talk(img, t):
+    sky_field(img, t)
     d = ImageDraw.Draw(img)
-    draw_girl(img, 36, 56, t, "idle")
-    # メモ用紙
-    mx0, my0, mx1, my1 = 106, 16, 300, 118
-    d.rectangle([mx0 + 3, my0 + 3, mx1 + 3, my1 + 3], fill=C(BLACK))
-    d.rectangle([mx0, my0, mx1, my1], fill=C(WHITE))
-    d.rectangle([mx0, my0, mx1, my1], outline=C(BLACK))
-    d.rectangle([mx0, my0, mx1, my0 + 18], fill=C(PINK))
-    d.rectangle([mx0, my0, mx1, my0 + 18], outline=C(BLACK))
-    draw_text(img, mx0 + 6, my0 + 1, "MEMO", WHITE)
-    for i in range(3):
-        yy = my0 + 22 + i * 28
-        d.line([mx0 + 6, yy + 19, mx1 - 6, yy + 19], fill=C(LGRAY))
-    items = ["だれに", "雰囲気", "伝えたいこと"]
-    pen = None
-    for i, head in enumerate(items):
-        t0 = 1.0 + i * 1.0
-        yy = my0 + 22 + i * 28
-        n = int(max(0.0, t - t0) * 10)
-        s = "「" + head + "」"
-        part = s[:n]
-        if part:
-            draw_text(img, mx0 + 26, yy, part, NAVY)
-        if n > 0:
-            # チェックボックス
-            d.rectangle([mx0 + 8, yy + 3, mx0 + 18, yy + 13], outline=C(BLACK))
-            if n >= len(s):
-                d.line([mx0 + 9, yy + 8, mx0 + 12, yy + 11], fill=C(RED), width=2)
-                d.line([mx0 + 12, yy + 11, mx0 + 18, yy + 2], fill=C(RED), width=2)
-        if 0 < n < len(s) + 1:
-            pen = (mx0 + 26 + text_width(part), yy)
-    if pen:
-        px, py = pen
-        wob = int(math.sin(t * 30) * 2)
-        d.line([px + 2, py + 12 + wob, px + 14, py - 4 + wob], fill=C(YELLOW), width=3)
-        d.line([px + 2, py + 12 + wob, px + 4, py + 9 + wob], fill=C(BLACK), width=2)
+    # 城壁と門
+    d.rectangle([GATE_X, 8, W, 104], fill=C(LGRAY))
+    for y in range(8, 104, 8):
+        off = 0 if (y // 8) % 2 else 8
+        for x in range(GATE_X - off, W, 16):
+            d.rectangle([max(GATE_X, x), y, x + 15, y + 7], outline=C(DGRAY))
+    for x in range(GATE_X, W, 12):
+        d.rectangle([x, 2, x + 6, 8], fill=C(LGRAY), outline=C(DGRAY))
+    gx0, gx1, gy0 = GATE_X + 24, GATE_X + 68, 44
+    d.rectangle([gx0, gy0, gx1, 104], fill=C(YELLOW))
+    open_k = ease_out((t - 6.2) / 1.0)
+    door_bottom = 104 - int(open_k * 60)
+    if door_bottom > gy0:
+        d.rectangle([gx0, gy0, gx1, door_bottom], fill=C(BROWN))
+        for x in range(gx0 + 6, gx1, 8):
+            d.line([x, gy0, x, door_bottom], fill=C(BLACK))
+    d.rectangle([gx0, gy0, gx1, 104], outline=C(BLACK))
+    # 門番と槍
+    vx, vy = 190, 58
+    d.line([vx + 30, vy - 16, vx + 30, vy + 46], fill=C(BROWN), width=2)
+    d.polygon([(vx + 27, vy - 16), (vx + 34, vy - 16), (vx + 30, vy - 26)], fill=C(LGRAY), outline=C(BLACK))
+    nod = int(abs(math.sin(t * 8)) * 2) if 5.5 <= t < 6.5 else 0
+    put(img, GUARD, vx, vy + 2 - nod, 2)
+    # 主人公
+    draw_person(img, RINA_KNIGHT, 44, 56, t, "idle")
+    if t >= 4.4:
+        put(img, BREAD, 78, 82 - int(ease_out((t - 4.4) / 0.3) * 4), 2)
+    # 昔のゲームの選択肢 → 押しのける
+    if 1.6 <= t < 3.9:
+        mx, my = 96, 36
+        if t >= 3.2:
+            k = t - 3.2
+            if k < 0.3:
+                mx += int(math.sin(k * 60) * 3)
+            else:
+                my -= int((k - 0.3) ** 2 * 900)
+                mx += int((k - 0.3) * 200)
+        mw, mh = 92, 48
+        d.rectangle([mx, my, mx + mw, my + mh], fill=C(BLACK))
+        d.rectangle([mx + 1, my + 1, mx + mw - 1, my + mh - 1], outline=C(WHITE))
+        d.rectangle([mx + 4, my + 4, mx + mw - 4, my + mh - 4], outline=C(WHITE))
+        draw_text(img, mx + 22, my + 7, "たたかう", WHITE)
+        draw_text(img, mx + 22, my + 25, "にげる", WHITE)
+        sel = 1 if 2.3 <= t < 2.8 else 0
+        if int(t * 5) % 2 == 0 or t >= 3.2:
+            cy = my + 11 + sel * 18
+            d.polygon([(mx + 10, cy), (mx + 10, cy + 8), (mx + 16, cy + 4)], fill=C(WHITE))
+        if t >= 3.2:
+            draw_text(img, 34, 36, "えいっ", YELLOW, outline=BLACK)
 
 
-ROBOT_POS = (218, 60)
-CARD_SLOTS = [(20 + i * 30, 88) for i in range(5)]
+CLIFF_Y = 92
 
 
-def card_fly(i, t):
-    """STAGE3 のカードの位置（ロボットの口から飛び出して並ぶ）"""
-    t0 = 1.2 + i * 0.55
-    rx, ry = ROBOT_POS[0] + 14, ROBOT_POS[1] + 22
-    tx, ty = 58 + i * 30, 34
-    k = clamp01((t - t0) / 0.45)
-    if t < t0:
-        return None
-    e = ease_out(k)
-    x = rx + (tx - rx) * e
-    y = ry + (ty - ry) * e - math.sin(k * math.pi) * 30
-    return x, y
+def scene_dice(img, t):
+    if world_of("dice", t) == "adv":
+        sky_field(img, t, ground=CLIFF_Y)
+        d = ImageDraw.Draw(img)
+        # 崖
+        d.rectangle([120, CLIFF_Y, 206, 127], fill=C(NAVY))
+        d.rectangle([116, CLIFF_Y, 120, 127], fill=C(BROWN))
+        d.rectangle([206, CLIFF_Y, 210, 127], fill=C(BROWN))
+        d.line([120, CLIFF_Y, 120, 127], fill=C(BLACK))
+        d.line([206, CLIFF_Y, 206, 127], fill=C(BLACK))
+        if t < 3:
+            draw_person(img, RINA_KNIGHT, 76, CLIFF_Y - 48, t, "idle")
+            if int(t * 4) % 2 == 0:
+                draw_text(img, 88, CLIFF_Y - 70, "！", YELLOW, outline=BLACK)
+        else:
+            k = clamp01((t - 5.3) / 0.9)
+            gx = 76 + (230 - 76) * k
+            gy = CLIFF_Y - 48 - math.sin(k * math.pi) * 40
+            draw_person(img, RINA_KNIGHT, gx, gy, t, "cheer" if k > 0 else "idle")
+            if t >= 6.2:
+                for i in range(6):
+                    ang = i * math.pi / 3 + t * 2
+                    r = 26 + (t - 6.2) * 20
+                    sparkle(d, int(gx + 16 + math.cos(ang) * r), int(gy + 24 + math.sin(ang) * r * 0.6), 3, YELLOW)
+    else:
+        done = t >= 3.4
+
+        def pose(i):
+            return "cheer" if done else "idle"
+
+        def bob(i):
+            return int(abs(math.sin(t * 9 + i)) * 4) if done else 0
+
+        draw_table(img, t, pose_fn=pose, bob_fn=bob)
+        d = ImageDraw.Draw(img)
+        if 1.35 <= t < 1.8:
+            put(img, DICE[3], 118, 74, 2)  # リナがサイコロを手にする
+        if t >= 1.8:
+            k = clamp01((t - 1.8) / 1.6)
+            x = 118 + (150 - 118) * ease_out(k)
+            y = 74 - abs(math.sin(k * math.pi * 3)) * 22 * (1 - k)
+            face = 6 if done else 1 + int(t * 14) % 6
+            put(img, DICE[face], x, y, 2)
+            if done:
+                for i in range(8):
+                    ang = i * math.pi / 4
+                    r = 20 + int(3 * math.sin(t * 12))
+                    cx, cy = 165, 89
+                    d.line([cx + math.cos(ang) * r, cy + math.sin(ang) * r * 0.7,
+                            cx + math.cos(ang) * (r + 6), cy + math.sin(ang) * (r + 6) * 0.7],
+                           fill=C(YELLOW), width=2)
 
 
-def scene_robot(img, t):
-    room_bg(img, wall=NAVY, floor=DGRAY)
-    d = ImageDraw.Draw(img)
-    # 研究所っぽいパネル
-    for i in range(4):
-        col = GREEN if int(t * 4 + i) % 3 else RED
-        d.rectangle([290, 20 + i * 12, 296, 26 + i * 12], fill=C(col))
-    draw_girl(img, 14, 56, t, "cheer" if t > 2.0 else "idle")
-    working = 0.9 < t < 4.2
-    shake = int(math.sin(t * 40)) if working else 0
-    put(img, ROBOT_LIT if working and int(t * 8) % 2 else ROBOT, ROBOT_POS[0] + shake, ROBOT_POS[1] - 8, 2)
-    # ふきだし
-    if 0.5 < t < 1.2:
-        draw_text(img, ROBOT_POS[0] + 8, ROBOT_POS[1] - 30, "ピピッ", WHITE, outline=BLACK)
-    for i in range(5):
-        p = card_fly(i, t)
-        if p:
-            put(img, CARDS[i], p[0], p[1])
-            # 出たての瞬間キラッ
-            k = t - (1.2 + i * 0.55 + 0.45)
-            if 0 <= k < 0.25:
-                cx, cy = int(p[0]) + 13, int(p[1]) - 4
-                d.line([cx - 4, cy, cx + 4, cy], fill=C(WHITE))
-                d.line([cx, cy - 4, cx, cy + 4], fill=C(WHITE))
+def scene_friends(img, t):
+    if world_of("friends", t) == "adv":
+        after = t >= 4.45
+        sky_field(img, t, sky=BLUE if after else PLUM)
+        d = ImageDraw.Draw(img)
+        draw_person(img, RINA_KNIGHT, 24, 56, t, "cheer" if after else "idle")
+        wpose = "cheer" if (1.3 <= t < 2.6 or after) else "idle"
+        draw_person(img, PAL1_WIZ, 76, 48, t, wpose, seed=1)
+        # 杖
+        d.line([70, 70, 70, 104], fill=C(BROWN), width=2)
+        d.ellipse([66, 62, 74, 70], fill=C(ORANGE if int(t * 6) % 2 else YELLOW), outline=C(BLACK))
+        shake = int(math.sin(t * 50) * 2) if 0.4 <= t < 1.3 else 0
+        put(img, DRAGON_FRIEND if after else DRAGON, 196 + shake, 104 - 46, 2)
+        if after:
+            for n in range(4):
+                ph = (t * 0.8 + n / 4) % 1
+                put(img, HEART, 130 + n * 16, int(84 - ph * 36))
+        if 0.4 <= t < 1.3:
+            # 火の息
+            for i in range(5):
+                fx = 188 - i * 8 - (t * 60 % 8)
+                d.rectangle([fx, 74 + (i % 2) * 3, fx + 5, 78 + (i % 2) * 3], fill=C(ORANGE if i % 2 else RED))
+    else:
+        def bob(i):
+            return int(abs(math.sin(t * 12 + i * 1.7)) * 4)
 
-
-SELECT_TIMES = [1.1, 1.6, 2.1, 2.6, 3.1]  # カーソルが各カードに乗る時刻
-
-
-def scene_select(img, t):
-    room_bg(img, wall=PLUM, floor=BROWN)
-    d = ImageDraw.Draw(img)
-    # 並んだカード（STAGE3 から続く位置）
-    base = [(58 + i * 30, 34) for i in range(5)]
-    connect_t = 3.4
-    k = ease_out((t - connect_t) / 0.7)
-    good_idx = [i for i in range(5) if GOOD[i]]
-    # フィルム帯
-    if t >= connect_t:
-        fx0 = 64
-        d.rectangle([fx0 - 6, 28, fx0 + 4 * 36 + 20, 72], fill=C(BLACK))
-        for x in range(fx0 - 4, fx0 + 4 * 36 + 20, 8):
-            d.rectangle([x, 30, x + 3, 33], fill=C(LGRAY))
-            d.rectangle([x, 67, x + 3, 70], fill=C(LGRAY))
-    for i in range(5):
-        x, y = base[i]
-        chosen = GOOD[i] and t >= SELECT_TIMES[i]
-        if not GOOD[i] and t >= SELECT_TIMES[i]:
-            # はずれは「×」が付いて落ちていく
-            fall = t - SELECT_TIMES[i] - 0.3
-            if fall > 0:
-                y += fall * fall * 200
-                if y > 130:
-                    continue
-            put(img, CARDS[i], x, y)
-            d.line([x + 4, y + 6, x + 22, y + 26], fill=C(RED), width=3)
-            d.line([x + 22, y + 6, x + 4, y + 26], fill=C(RED), width=3)
-            continue
-        if t >= connect_t and GOOD[i]:
-            j = good_idx.index(i)
-            tx, ty = 64 + j * 36 + 4, 34
-            x = x + (tx - x) * k
-            y = y + (ty - y) * k
-        put(img, CARDS[i], x, y)
-        if chosen and t < connect_t:
-            d.rectangle([x - 2, y - 2, x + 27, y + 33], outline=C(YELLOW))
-    # 矢印でつなぐ
-    if k >= 1:
-        for j in range(3):
-            ax = 64 + j * 36 + 4 + 27
-            ay = 50
-            if int(t * 4) % 2 == 0 or t > connect_t + 1.2:
-                d.polygon([(ax + 1, ay - 3), (ax + 7, ay), (ax + 1, ay + 3)], fill=C(YELLOW))
-    # カーソル（▶）
-    if SELECT_TIMES[0] - 0.3 <= t < connect_t:
-        idx = 0
-        for i, st in enumerate(SELECT_TIMES):
-            if t >= st - 0.3:
-                idx = i
-        cx, cy = base[idx][0] + 13, base[idx][1] + 38 + int(abs(math.sin(t * 10)) * 2)
-        d.polygon([(cx, cy), (cx - 5, cy + 7), (cx + 5, cy + 7)], fill=C(WHITE))
-        d.polygon([(cx, cy), (cx - 5, cy + 7), (cx + 5, cy + 7)], outline=C(BLACK))
-    draw_girl(img, 6, 56, t, "cheer" if t > connect_t + 0.8 else "idle")
+        draw_table(img, t, pose_fn=lambda i: "happy", bob_fn=bob)
+        for i, (px, _) in enumerate(TABLE_PEOPLE):
+            if i in (0, 3):
+                draw_text(img, px - 2, 30, "わはは", WHITE, outline=BLACK)
 
 
 def scene_clear(img, t):
+    def bob(i):
+        return int(abs(math.sin(t * 7 + i * 1.3)) * 5) if t >= 0.6 else 0
+
+    draw_table(img, t, pose_fn=lambda i: "happy" if t >= 0.6 else "idle", bob_fn=bob, lamp=False)
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, W, H], fill=C(NAVY))
-    stars(img, t, seed=9, n=30, ymax=100)
-    d.rectangle([0, 104, W, 127], fill=C(DGREEN))
-    d.line([0, 104, W, 104], fill=C(BLACK))
-    # スクリーン（上映中）
-    sx0, sy0, sx1, sy1 = 186, 30, 310, 74
-    d.line([sx0 + 30, sy1, sx0 + 22, 104], fill=C(BLACK), width=2)
-    d.line([sx1 - 30, sy1, sx1 - 22, 104], fill=C(BLACK), width=2)
-    d.rectangle([sx0 - 3, sy0 - 3, sx1 + 3, sy1 + 3], fill=C(LGRAY))
-    d.rectangle([sx0 - 3, sy0 - 3, sx1 + 3, sy1 + 3], outline=C(BLACK))
-    d.rectangle([sx0, sy0, sx1, sy1], fill=C(BLACK))
-    goods = [CARDS[i] for i in range(5) if GOOD[i]]
-    for j, c in enumerate(goods):
-        put(img, c, sx0 + 4 + j * 30, sy0 + 6)
+    # 冒険の思い出
+    draw_dream(img, (118, 6, 312, 50), lambda s: mini_world(s, t, friendly=True))
+    for bx, by, r in [(300, 56, 3), (305, 63, 2)]:
+        d.ellipse([bx - r, by - r, bx + r, by + r], fill=C(WHITE), outline=C(BLACK))
+    # ハイタッチ
+    if 0.6 <= t < 1.4:
+        k = t - 0.6
+        r = int(4 + min(k, 0.4) * 30)
+        for i in range(8):
+            ang = i * math.pi / 4
+            d.line([157 + math.cos(ang) * r * 0.5, 78 + math.sin(ang) * r * 0.5,
+                    157 + math.cos(ang) * r, 78 + math.sin(ang) * r], fill=C(YELLOW), width=2)
+        draw_text(img, 136, 56, "パン！", WHITE, outline=BLACK)
     # 紙吹雪
     rnd = random.Random(5)
-    if t > 0.3:
+    if t > 0.5:
         for n in range(40):
             x = (rnd.randrange(W) + int(math.sin(t * 2 + n) * 6)) % W
-            y = (rnd.random() * 130 + (t - 0.3) * (30 + rnd.random() * 30)) % 128
-            col = [RED, YELLOW, GREEN, BLUE, PINK, ORANGE][n % 6]
+            y = (rnd.random() * 130 + (t - 0.5) * (30 + rnd.random() * 30)) % 126
+            col = [RED, YELLOW, GREEN, BLUE, PINK, WHITE][n % 6]
             d.rectangle([x, int(y), x + 1, int(y) + 1], fill=C(col))
 
-    # 主人公と見た人たち
-    happy = t > 0.6
-    people = [(12, GIRL), (54, VIEWERS[0]), (96, VIEWERS[1]), (138, VIEWERS[2])]
-    for n, (vx, per) in enumerate(people):
-        jump = int(abs(math.sin(t * 7 + n * 1.3)) * 7) if happy else 0
-        draw_girl(img, vx, 56 - jump, t, "cheer" if happy else "idle", seed=n, person=per)
-    # ハート（心が動いた！）：頭の上にふわっと浮かぶ
-    if happy:
-        for n in range(len(people)):
-            for k in range(2):
-                ph = (t * 0.9 + n * 0.37 + k * 0.5) % 1
-                hx = people[n][0] + 12 + (k * 2 - 1) * 10 + int(math.sin(t * 4 + n + k) * 2)
-                hy = 44 - ph * 16
-                if ph < 0.85:
-                    put(img, HEART, hx, hy)
 
-SCENE_FUNCS = dict(title=scene_title, plan=scene_plan, memo=scene_memo,
-                   robot=scene_robot, select=scene_select, clear=scene_clear)
-
+SCENE_FUNCS = dict(title=scene_title, become=scene_become, talk=scene_talk,
+                   dice=scene_dice, friends=scene_friends, clear=scene_clear)
 
 # ---------------------------------------------------------------- 画面切り替え
 BLOCK = 16
-_order = []
-for by in range(0, H, BLOCK):
-    for bx in range(0, W, BLOCK):
-        _order.append((bx, by))
-# 左上から右下へ斜めに、少しゆらぎを加えて埋める
+_order = [(bx, by) for by in range(0, H, BLOCK) for bx in range(0, W, BLOCK)]
 _rng = random.Random(7)
 _keys = {b: (b[0] / W + b[1] / H) + _rng.random() * 0.35 for b in _order}
 _order.sort(key=lambda b: _keys[b])
@@ -724,14 +897,16 @@ def render(t):
         if s <= t < e or (i == len(SCENES) - 1 and t >= s):
             lt = t - s
             SCENE_FUNCS[name](img, lt)
+            for b0, b1, bx, by, blines, tail in BUBBLES.get(name, []):
+                if b0 <= lt < b1:
+                    draw_bubble(img, bx, by, blines, b0, lt, tail)
+            img = apply_wobble(img, wobble_amount(name, lt), lt)
             if lines:
                 draw_window(img, lines, TEXT_DELAY, lt)
             if label:
                 draw_stage_label(img, label)
-            # 開き
             if i > 0 and lt < TRANS:
                 draw_blocks(img, 1 - lt / TRANS)
-            # 閉じ
             if i < len(SCENES) - 1 and e - t < TRANS:
                 draw_blocks(img, 1 - (e - t) / TRANS)
             break
@@ -742,18 +917,21 @@ def render(t):
 SR = 44100
 
 
-def tone(freq, dur, vol=0.2, duty=0.5, kind="square", decay=0.0, slide=0.0):
+def tone(freq, dur, vol=0.2, duty=0.5, kind="square", decay=0.0, slide=0.0, vib=0.0):
     n = int(SR * dur)
     tt = np.arange(n) / SR
     f = freq * (1 + slide * tt / max(dur, 1e-6))
+    if vib:
+        f = f * (1 + vib * np.sin(tt * 2 * math.pi * 18))
     ph = np.cumsum(f) / SR
     if kind == "square":
         w = np.where((ph % 1) < duty, 1.0, -1.0)
     elif kind == "tri":
         w = 4 * np.abs((ph % 1) - 0.5) - 1
-    else:  # noise
+    else:  # noise（ファミコン風に一定間隔で値を保持）
         rng = np.random.default_rng(int(freq))
-        w = rng.choice([-1.0, 1.0], n)
+        hold = max(1, int(SR / freq))
+        w = np.repeat(rng.choice([-1.0, 1.0], n // hold + 1), hold)[:n]
     env = np.ones(n)
     a = min(n, int(SR * 0.004))
     env[:a] = np.linspace(0, 1, a)
@@ -771,79 +949,144 @@ def note(name):
     return 440.0 * 2 ** ((names[p] + (o - 4) * 12 - 9) / 12)
 
 
+def seq(notes, beat, vol=0.14, duty=0.5, decay=0.0):
+    return np.concatenate([tone(note(n), beat * d, vol, duty, decay=decay) for n, d in notes])
+
+
+def silence(sec):
+    return np.zeros(int(SR * sec), np.float32)
+
+
 def se_text():
-    return tone(1200, 0.03, vol=0.08, duty=0.25)
+    return tone(1200, 0.03, vol=0.07, duty=0.25)
+
+
+def se_voice():
+    return tone(620, 0.035, vol=0.08, duty=0.5)
 
 
 def se_decide():
-    return np.concatenate([tone(note("B5"), 0.05, 0.16, 0.5), tone(note("E6"), 0.11, 0.16, 0.5, decay=8)])
+    return np.concatenate([tone(note("B5"), 0.05, 0.15), tone(note("E6"), 0.11, 0.15, decay=8)])
 
 
-def se_item():
-    seq = ["C5", "E5", "G5", "C6", "E6", "G6"]
-    parts = [tone(note(s), 0.05, 0.15, 0.25) for s in seq]
-    parts.append(tone(note("C7"), 0.25, 0.14, 0.25, decay=6))
+def se_cursor():
+    return tone(note("A5"), 0.04, 0.1, 0.25)
+
+
+def se_transform():
+    up = tone(300, 0.45, 0.13, 0.25, slide=4.0)
+    return np.concatenate([up, seq([("C6", 1), ("E6", 1), ("G6", 1), ("C7", 4)], 0.05, 0.12, 0.25, decay=3)])
+
+
+def se_push():
+    return np.concatenate([tone(200, 0.08, 0.15, 0.5, slide=1.5), tone(900, 0.25, 0.1, 0.5, slide=-0.8)])
+
+
+def se_gate():
+    return tone(90, 1.0, 0.12, kind="noise", decay=1.5) + tone(55, 1.0, 0.1, kind="tri", decay=1.5)
+
+
+def se_wobble():
+    return tone(700, 0.6, 0.08, 0.5, vib=0.25, slide=-0.5)
+
+
+def se_dice():
+    parts = []
+    for i in range(12):
+        parts.append(tone(1800 + (i % 3) * 400, 0.025, 0.14, kind="noise", decay=40))
+        parts.append(silence(0.06 + i * 0.006))
     return np.concatenate(parts)
 
 
-def se_card():
-    return np.concatenate([tone(note("G5"), 0.04, 0.12, 0.125),
-                           tone(note("D6"), 0.04, 0.12, 0.125),
-                           tone(note("G6"), 0.1, 0.12, 0.125, decay=12)])
+def se_success():
+    return seq([("G5", 1), ("C6", 1), ("E6", 1), ("G6", 1), ("C7", 4)], 0.06, 0.14, 0.25, decay=2)
 
 
-def se_miss():
-    return tone(300, 0.2, 0.12, 0.5, slide=-0.6)
+def se_jump():
+    return tone(300, 0.3, 0.12, 0.5, slide=2.0)
+
+
+def se_roar():
+    return tone(120, 0.7, 0.18, kind="noise", decay=2.5) + tone(80, 0.7, 0.1, 0.5, slide=-0.3, decay=3)
 
 
 def se_whoosh():
     return tone(3000, 0.35, 0.05, kind="noise", decay=6)
 
 
+def se_clap():
+    return tone(2500, 0.12, 0.2, kind="noise", decay=25)
+
+
+def se_laugh():
+    out = []
+    for i in range(6):
+        out.append(tone(note("E5") * (1.0 + 0.06 * (i % 2)), 0.07, 0.07, 0.25))
+        out.append(silence(0.04))
+    return np.concatenate(out)
+
+
 def se_fanfare():
-    beat = 0.11
+    beat = 0.12
     mel = [("C5", 1), ("E5", 1), ("G5", 1), ("C6", 3),
            ("A5", 1), ("B5", 1), ("C6", 1), ("D6", 3),
            ("E6", 2), ("D6", 1), ("C6", 1), ("E6", 1), ("G6", 6)]
     bass = [("C3", 6), ("F3", 6), ("G3", 5), ("C4", 10)]
-    m = np.concatenate([tone(note(n), beat * d, 0.15, 0.5, decay=1.5) for n, d in mel])
+    m = seq(mel, beat, 0.15, 0.5, decay=1.5)
     b = np.concatenate([tone(note(n), beat * d, 0.22, kind="tri") for n, d in bass])
-    L = max(len(m), len(b))
-    out = np.zeros(L, np.float32)
+    h = np.concatenate([tone(note(n) * 0.8409, beat * d, 0.07, 0.25, decay=1.5) for n, d in mel])
+    out = np.zeros(max(len(m), len(b)), np.float32)
     out[:len(m)] += m
     out[:len(b)] += b
-    # ハモリ(3度下)
-    h = np.concatenate([tone(note(n) * 0.8409, beat * d, 0.07, 0.25, decay=1.5) for n, d in mel])
     out[:len(h)] += h
     return out
 
 
 def build_audio(path):
-    buf = np.zeros(int(SR * DURATION) + SR, np.float32)
+    buf = np.zeros(int(SR * DURATION) + SR * 2, np.float32)
 
     def add(t, snd):
         i = int(t * SR)
         j = min(len(buf), i + len(snd))
         buf[i:j] += snd[: j - i]
 
-    # タイトル：START 決定
-    add(2.9, se_decide())
+    start = {name: s for s, e, name, _, _ in SCENES}
     for i, (s, e, name, label, lines) in enumerate(SCENES):
         if i < len(SCENES) - 1:
             add(e - TRANS, se_whoosh())
         if lines:
-            for ct in char_times(lines, s + TEXT_DELAY):
+            for ct in char_times(lines, s + TEXT_DELAY, CPS):
                 add(ct, se_text())
-    add(4.0 + 1.6, se_item())  # 電球ピカッ
-    for k in range(3):  # メモのチェック
-        add(9.0 + 1.0 + k * 1.0 + 0.8, se_decide())
-    for i in range(5):  # カードが出てくる
-        add(14.0 + 1.2 + i * 0.55 + 0.4, se_card())
-    add(14.0 + 1.2 + 4 * 0.55 + 0.7, se_item())
-    for i, st in enumerate(SELECT_TIMES):  # 選ぶ
-        add(19.0 + st, se_decide() if GOOD[i] else se_miss())
-    add(19.0 + 3.4 + 0.7, se_item())  # つながった
-    add(24.0 + 0.35, se_fanfare())
+        for b0, b1, _, _, blines, _ in BUBBLES.get(name, []):
+            for ct in char_times(blines, s + b0, BCPS):
+                add(ct, se_voice())
+        for sw in WORLD_SWITCH.get(name, []):
+            add(s + sw - WOBBLE, se_wobble())
+    add(3.9, se_decide())                       # PRESS START
+    b = start["become"]                         # STAGE 1 なりきる
+    add(b + 1.3, se_cursor())
+    add(b + 3.0, se_transform())
+    b = start["talk"]                           # STAGE 2 自分の言葉で
+    add(b + 1.6, se_decide())
+    add(b + 2.3, se_cursor())
+    add(b + 2.8, se_cursor())
+    add(b + 3.2, se_push())
+    add(b + 4.4, se_decide())
+    add(b + 6.2, se_gate())
+    add(b + 6.6, se_success())
+    b = start["dice"]                           # STAGE 3 サイコロ
+    add(b + 1.8, se_dice())
+    add(b + 3.4, se_success())
+    add(b + 3.6, se_laugh())
+    add(b + 5.3, se_jump())
+    add(b + 6.2, se_success())
+    b = start["friends"]                        # STAGE 4 仲間
+    add(b + 0.4, se_roar())
+    add(b + 2.75, se_laugh())
+    add(b + 4.7, se_success())
+    b = start["clear"]                          # STAGE CLEAR
+    add(b + 0.4, se_fanfare())
+    add(b + 0.6, se_clap())
     buf = buf[: int(SR * DURATION)]
     peak = np.max(np.abs(buf))
     if peak > 0.95:
@@ -871,8 +1114,10 @@ def write_stills(times, out_dir):
 
 def main():
     if "--stills" in sys.argv:
-        out = sys.argv[sys.argv.index("--stills") + 1] if len(sys.argv) > 2 else "stills"
-        times = [1.0, 3.0, 4.2, 6.5, 8.8, 12.8, 17.5, 21.5, 23.5, 27.5]
+        i = sys.argv.index("--stills")
+        out = sys.argv[i + 1] if len(sys.argv) > i + 1 else "stills"
+        times = [float(x) for x in sys.argv[i + 2:]] or \
+            [2.5, 4.5, 7.0, 9.5, 13.0, 15.5, 17.5, 20.0, 22.8, 25.5, 28.0, 30.0, 32.5, 37.0]
         write_stills(times, out)
         return
     wav = os.path.join(OUT_DIR, "_trpg_audio.wav")
@@ -884,8 +1129,7 @@ def main():
            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-preset", "medium",
            "-c:a", "aac", "-b:a", "160k", "-shortest", "-movflags", "+faststart", mp4]
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    total = int(DURATION * FPS)
-    for f in range(total):
+    for f in range(int(DURATION * FPS)):
         p.stdin.write(upscale(render(f / FPS)).tobytes())
     p.stdin.close()
     p.wait()
