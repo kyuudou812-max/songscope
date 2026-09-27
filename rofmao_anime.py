@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 SS = 3            # 拡大して描いてから縮小し、線をなめらかにする
 CW, CH = 600, 800  # キャラクター画像の大きさ
-LINE = (70, 40, 35)
+LINE = (120, 78, 66)
 
 
 def catmull(pts, n=12):
@@ -79,6 +79,14 @@ class Canvas:
         return self.img.resize((CW, CH), Image.LANCZOS)
 
 
+def blur_layer(layer, color, radius):
+    """単色の層をぼかす（端が黒ずまないように、透明度だけをぼかす）"""
+    a = layer.img.split()[3].filter(ImageFilter.GaussianBlur(radius * SS))
+    layer.img = Image.new("RGBA", layer.img.size, color + (255,))
+    layer.img.putalpha(a)
+    return layer
+
+
 def clip_to(layer, shape_layer):
     """layer を shape_layer の塗られた部分だけに切り抜く"""
     a = np.array(layer.img)
@@ -97,10 +105,10 @@ SKIN_SH = (240, 196, 178)
 IRIS_TOP = (96, 56, 26)
 IRIS_BOT = (214, 150, 80)
 JACKET = (248, 248, 252)
-JACKET_SH = (205, 208, 220)
+JACKET_SH = (218, 220, 232)
 TEE = (38, 38, 44)
 
-FACE = [(226, 250), (224, 300), (230, 360), (252, 410), (300, 452), (348, 410), (370, 360), (376, 300), (374, 250)]
+FACE = [(220, 250), (218, 300), (226, 350), (250, 394), (300, 426), (350, 394), (374, 350), (382, 300), (380, 250)]
 
 
 class Narrow:
@@ -110,7 +118,7 @@ class Narrow:
         self.cv, self.k = cv, k
 
     def f(self, pts):
-        return [(300 + (x - 300) * self.k, y) for x, y in pts]
+        return [(300 + (x - 300) * self.k, y - 36 if y < 800 else y) for x, y in pts]
 
     def poly(self, pts, *a, **kw):
         self.cv.poly(self.f(pts), *a, **kw)
@@ -119,14 +127,14 @@ class Narrow:
         self.cv.line(self.f(pts), *a, **kw)
 
     def ellipse(self, cx, cy, *a, **kw):
-        self.cv.ellipse(300 + (cx - 300) * self.k, cy, *a, **kw)
+        self.cv.ellipse(300 + (cx - 300) * self.k, cy - 36, *a, **kw)
 
 
 def body(cv):
     cv = Narrow(cv)
     # 首
     cv.poly([(272, 420), (328, 420), (334, 520), (266, 520)], SKIN, LINE)
-    cv.poly([(272, 440), (328, 440), (330, 470), (270, 478)], SKIN_SH)
+    cv.poly([(272, 456), (328, 456), (330, 470), (270, 476)], SKIN_SH)
     # 黒いTシャツ（V字）
     cv.poly([(170, 560), (430, 560), (470, 800), (130, 800)], TEE, LINE)
     cv.poly([(262, 505), (338, 505), (300, 590)], SKIN, LINE)
@@ -142,10 +150,15 @@ def body(cv):
         # 襟
         cv.poly([(300 + side * 36, 470), (300 + side * 90, 500), (300 + side * 110, 560), (300 + side * 56, 620),
                  (300 + side * 40, 540)], JACKET, LINE)
-        # 影
-        cv.poly([(300 + side * 70, 640), (300 + side * 110, 580), (300 + side * 140, 800), (300 + side * 70, 800)],
-                JACKET_SH)
-        cv.line([(300 + side * 200, 640), (300 + side * 230, 800)], JACKET_SH, 3)
+        # 影（ぼかして重ねる）
+        soft = cv.cv.layer()
+        Narrow(soft).poly([(300 + side * 60, 620), (300 + side * 120, 560), (300 + side * 150, 800),
+                           (300 + side * 60, 800)], JACKET_SH)
+        Narrow(soft).poly([(300 + side * 250, 600), (300 + side * 290, 800), (300 + side * 230, 800)], JACKET_SH)
+        blur_layer(soft, JACKET_SH, 10)
+        shape = cv.cv.layer()
+        Narrow(shape).poly(pts, (0, 0, 0))
+        cv.cv.paste(clip_to(soft, shape))
     # 赤いライン
     cv.line([(470, 660), (560, 640)], (215, 70, 60), 5, smooth=False)
     cv.line([(470, 676), (560, 656)], (40, 40, 48), 3, smooth=False)
@@ -171,7 +184,9 @@ def face(cv, expr):
     cv.ellipse(388, 326, 2.6, 2.6, (200, 200, 210), LINE, 1)
     # 前髪の影（おでこ）
     sh = cv.layer()
-    sh.poly(catmull([(224, 250), (260, 300), (300, 280), (340, 300), (376, 250), (376, 230), (224, 230)], 8), SKIN_SH)
+    sh.poly(catmull([(218, 250), (256, 306), (300, 290), (344, 306), (382, 250), (382, 230), (218, 230)], 8), SKIN_SH)
+    sh.poly(catmull([(214, 300), (232, 380), (270, 420), (240, 420), (214, 380)], 6), SKIN_SH)
+    blur_layer(sh, SKIN_SH, 9)
     shape = cv.layer()
     shape.poly(f, (0, 0, 0))
     cv.paste(clip_to(sh, shape))
@@ -179,13 +194,13 @@ def face(cv, expr):
     for side in (-1, 1):
         blush = Image.new("RGBA", (CW * SS, CH * SS), (0, 0, 0, 0))
         bd = ImageDraw.Draw(blush)
-        cx, cy = 300 + side * 52, 376
+        cx, cy = 300 + side * 54, 368
         bd.ellipse([(cx - 20) * SS, (cy - 8) * SS, (cx + 20) * SS, (cy + 8) * SS], fill=(255, 150, 150, 110))
         blush = blush.filter(ImageFilter.GaussianBlur(4 * SS))
         cv.img.alpha_composite(blush)
     eyes(cv, expr)
     # 鼻
-    cv.line([(302, 372), (298, 384), (304, 386)], (205, 150, 130), 1.6)
+    cv.line([(302, 364), (299, 372), (304, 374)], (215, 165, 145), 1.4)
     mouth(cv, expr)
 
 
@@ -242,14 +257,14 @@ def eyes(cv, expr):
 
 def mouth(cv, expr):
     if expr == "laugh":
-        m = catmull([(276, 402), (300, 404), (324, 402), (316, 422), (300, 428), (284, 422)], 8)
+        m = catmull([(280, 388), (300, 390), (320, 388), (313, 404), (300, 410), (287, 404)], 8)
         cv.poly(m, (160, 50, 60), LINE, 2)
-        cv.poly([(282, 404), (318, 404), (316, 410), (284, 410)], (255, 255, 255))
-        cv.ellipse(300, 422, 10, 5, (240, 110, 120))
+        cv.poly([(285, 390), (315, 390), (313, 395), (287, 395)], (255, 255, 255))
+        cv.ellipse(300, 404, 8, 4, (240, 110, 120))
     elif expr == "serious":
-        cv.line([(286, 410), (300, 408), (314, 410)], (150, 80, 70), 2)
+        cv.line([(288, 394), (300, 392), (312, 394)], (150, 80, 70), 2)
     else:
-        cv.line([(286, 404), (300, 410), (314, 404)], (150, 80, 70), 2)
+        cv.line([(288, 390), (300, 395), (312, 390)], (150, 80, 70), 2)
 
 
 def bangs(cv):
@@ -268,15 +283,18 @@ def bangs(cv):
     right[1] = ([(308, 170), (318, 220), (322, 268), (316, 300)], 14)
     for center, w in left + right:
         pts = strand(center, w)
-        cv.poly(pts, HAIR, LINE, 1.8)
+        cv.poly(pts, HAIR, LINE, 1.4)
     # 毛先の外はね
     for side in (-1, 1):
         base = 300 + side * 92
         cv.poly(strand([(base, 300), (base + side * 10, 330), (base + side * 26, 342)], 10), HAIR, LINE, 1.8)
     # 影とツヤ
+    shade, shine = cv.layer(), cv.layer()
     for side in (-1, 1):
-        cv.line([(300 + side * 6, 158), (300 + side * 30, 200), (300 + side * 44, 260)], HAIR_SH, 3)
-        cv.line([(300 + side * 40, 150), (300 + side * 64, 176), (300 + side * 80, 214)], HAIR_HI, 5)
+        shade.line([(300 + side * 8, 170), (300 + side * 28, 214), (300 + side * 40, 262)], HAIR_SH, 6)
+        shine.line([(300 + side * 40, 150), (300 + side * 64, 176), (300 + side * 80, 214)], HAIR_HI, 10)
+    cv.paste(blur_layer(shade, HAIR_SH, 3))
+    cv.paste(blur_layer(shine, HAIR_HI, 3))
     # つむじのライン
     cv.line([(300, 118), (300, 160)], HAIR_SH, 2.2, smooth=False)
 
