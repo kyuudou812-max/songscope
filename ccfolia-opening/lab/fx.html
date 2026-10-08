@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>FX Lab</title>
+<!--
+  演出サンプル集。?fx=<名前> でひとつの演出を表示し、setTime(t, frame) でその時刻の見た目にする。
+  すべて時刻から決まる描き方なので、何度書き出しても同じ映像になる。
+-->
+<style>
+  @font-face { font-family: "Mincho"; src: url("../fonts/ShipporiMincho-Medium.ttf"); }
+  @font-face { font-family: "Gothic"; src: url("../fonts/ZenKakuGothicNew-Medium.ttf"); }
+  html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; background: #050505; }
+  #stage { position: absolute; inset: 0; overflow: hidden; }
+  #stage > * { position: absolute; left: 0; top: 0; }
+  .center { width: 1280px; height: 720px; display: flex; align-items: center; justify-content: center; }
+</style>
+<script type="importmap">{ "imports": { "three": "./node_modules/three/build/three.module.js",
+                                         "gsap": "./node_modules/gsap/index.js" } }</script>
+</head>
+<body>
+<div id="stage"></div>
+<svg width="0" height="0" style="position:absolute">
+  <filter id="ink"><feTurbulence id="inkTurb" type="fractalNoise" baseFrequency="0.035" numOctaves="3" seed="4"/>
+    <feDisplacementMap id="inkDisp" in="SourceGraphic" scale="60"/></filter>
+</svg>
+<script type="module">
+import * as THREE from "three";
+import { gsap } from "gsap";
+
+const W = 1280, H = 720;
+const stage = document.getElementById("stage");
+const BG = "../build/bg_placeholder.png";
+const clamp = x => Math.min(Math.max(x, 0), 1);
+const ease = x => { x = clamp(x); return x * x * (3 - 2 * x); };
+const rng = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+const el = (tag, css = "", html = "") => { const e = document.createElement(tag); e.style.cssText = css; e.innerHTML = html; stage.appendChild(e); return e; };
+const canvas = () => { const c = el("canvas"); c.width = W; c.height = H; return c; };
+const loadImg = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = src; });
+
+// WebGL のフラグメントシェーダーを1枚の板に描く小さな道具
+function shaderCanvas(frag, tex) {
+  const c = canvas(), gl = c.getContext("webgl2", { preserveDrawingBuffer: true });
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(s); return s; };
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl.VERTEX_SHADER, `#version 300 es
+    in vec2 a; out vec2 uv; void main(){ uv = a * .5 + .5; gl_Position = vec4(a, 0, 1); }`));
+  gl.attachShader(p, sh(gl.FRAGMENT_SHADER, `#version 300 es
+    precision highp float; in vec2 uv; out vec4 o; uniform float t; uniform sampler2D tex;
+    float h(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float n(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+      return mix(mix(h(i), h(i+vec2(1,0)), f.x), mix(h(i+vec2(0,1)), h(i+vec2(1,1)), f.x), f.y); }
+    float fbm(vec2 p){ float v = 0., a = .5; for (int k = 0; k < 6; k++){ v += a * n(p); p *= 2.03; a *= .5; } return v; }
+    ${frag}`));
+  gl.linkProgram(p); gl.useProgram(p);
+  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const a = gl.getAttribLocation(p, "a"); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+  if (tex) { const tx = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tx);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); }
+  const ut = gl.getUniformLocation(p, "t");
+  return t => { gl.viewport(0, 0, W, H); gl.uniform1f(ut, t); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); };
+}
+
+// ---------------- 演出 ----------------
+const FX = {
+  // 1. 文字がにじみ出る（SVGフィルターで歪みを弱めていく）
+  async ink() {
+    const box = el("div", "", "");
+    box.className = "center";
+    box.innerHTML = `<div style="font:80px Mincho;color:#e8e2dc;letter-spacing:.12em;filter:url(#ink)">暗闇の向こうに</div>`;
+    const d = document.getElementById("inkDisp"), tb = document.getElementById("inkTurb"), txt = box.firstChild;
+    return t => { const k = ease(t / 2.0); d.setAttribute("scale", 90 * (1 - k));
+      tb.setAttribute("baseFrequency", 0.02 + 0.03 * (1 - k)); txt.style.opacity = ease(t / 1.2);
+      txt.style.textShadow = `0 0 ${12 * (1 - k)}px rgba(200,40,30,.6)`; };
+  },
+  // 2. グリッチ（色ずれと横ずれ）
+  async glitch() {
+    const box = el("div"); box.className = "center";
+    box.innerHTML = ["#ff2a2a", "#2affff", "#f2f2f2"].map(c =>
+      `<div style="position:absolute;font:72px Gothic;color:${c};mix-blend-mode:screen;letter-spacing:.06em">誰も居ない事を</div>`).join("");
+    const L = [...box.children];
+    return (t, f) => { const r = rng(f * 7 + 1), on = r() < 0.35 || (t > 1.1 && t < 1.3);
+      L.forEach((e, i) => { const dx = on ? (r() - .5) * 26 : 0, dy = on ? (r() - .5) * 6 : 0;
+        e.style.transform = i < 2 ? `translate(${dx}px,${dy}px)` : "";
+        const y0 = r() * 100, y1 = y0 + 6 + r() * 14;
+        e.style.clipPath = on && i === 2 && r() < .6 ? `polygon(0 0,100% 0,100% ${y0}%,0 ${y0}%,0 ${y1}%,100% ${y1}%,100% 100%,0 100%)` : "none"; }); };
+  },
+  // 3. 文字が粒になって崩れる
+  async dissolve() {
+    const c = canvas(), g = c.getContext("2d");
+    const off = document.createElement("canvas"); off.width = W; off.height = H;
+    const o = off.getContext("2d"); o.fillStyle = "#fff"; o.font = "88px Gothic"; o.textAlign = "center"; o.textBaseline = "middle";
+    o.fillText("証明して下さい", W / 2, H / 2);
+    const d = o.getImageData(0, 0, W, H).data, P = [], r = rng(9);
+    for (let y = 0; y < H; y += 3) for (let x = 0; x < W; x += 3) if (d[(y * W + x) * 4 + 3] > 128)
+      P.push([x, y, r() * .9, (r() - .5) * 120, -40 - r() * 160, r()]);
+    return t => { g.clearRect(0, 0, W, H);
+      for (const [x, y, delay, vx, vy, s] of P) { const k = Math.max(0, t - 0.6 - delay * (x / W) * 1.6);
+        const a = 1 - clamp(k / 1.2); if (a <= 0) continue;
+        g.fillStyle = `rgba(235,230,225,${a})`;
+        g.fillRect(x + vx * k + Math.sin(k * 6 + s * 9) * 6 * k, y + vy * k * k, 2.2, 2.2); } };
+  },
+  // 4. 縦書きの文字が1文字ずつ降りてくる（GSAPのタイムラインを時刻で止める）
+  async kinetic() {
+    const box = el("div", "left:600px;top:70px;writing-mode:vertical-rl;font:60px Gothic;color:#eeece8;letter-spacing:.06em");
+    box.innerHTML = [..."見つめれば形を成す"].map(ch => `<span style="display:inline-block">${ch}</span>`).join("");
+    const tl = gsap.timeline({ paused: true });
+    tl.from(box.children, { y: -40, opacity: 0, filter: "blur(8px)", duration: .5, stagger: .14, ease: "back.out(2)" });
+    return t => tl.seek(t, false);
+  },
+  // 5. 蛍光灯の明滅
+  async flicker() {
+    const img = el("img", "width:1280px;height:720px"); img.src = BG; await img.decode();
+    return (t, f) => { const r = rng(Math.floor(t * 18) + 3)(); let b = 1;
+      if (r < .18) b = .15; else if (r < .3) b = .55; if (t > 1.6 && t < 1.9) b = .05;
+      img.style.filter = `brightness(${b * 1.25}) contrast(1.1)`; };
+  },
+  // 6. 光の筋に舞うほこり
+  async dust() {
+    const c = canvas(), g = c.getContext("2d"), r = rng(5);
+    const D = Array.from({ length: 260 }, () => [r() * W, r() * H, .5 + r() * 2.2, r() * 6.28, .2 + r() * .8]);
+    return t => { g.fillStyle = "#050505"; g.fillRect(0, 0, W, H);
+      const gr = g.createLinearGradient(380, 0, 900, H); gr.addColorStop(0, "rgba(220,190,160,.0)");
+      gr.addColorStop(.5, "rgba(220,190,160,.16)"); gr.addColorStop(1, "rgba(220,190,160,.0)");
+      g.fillStyle = gr; g.beginPath(); g.moveTo(560, 0); g.lineTo(720, 0); g.lineTo(1050, H); g.lineTo(380, H); g.fill();
+      for (const [x, y, s, ph, sp] of D) { const px = x + Math.sin(t * sp + ph) * 30 + t * 8, py = y - t * 14 * sp;
+        const inBeam = Math.abs(px - (640 + (py / H - .5) * 300)) < 260;
+        g.fillStyle = `rgba(240,225,205,${inBeam ? .55 : .06})`; g.beginPath(); g.arc(px, (py + H) % H, s, 0, 6.28); g.fill(); } };
+  },
+  // 7. 渦巻く煙（WebGLシェーダー）
+  async smoke() {
+    const draw = shaderCanvas(`void main(){ vec2 p = uv * vec2(3.2, 1.8);
+      float q = fbm(p + vec2(0., t * .15)); float v = fbm(p + 2.5 * q + vec2(t * .08, -t * .05));
+      float m = smoothstep(.35, .85, v) * (1. - .6 * length(uv - .5));
+      o = vec4(vec3(.42, .26, .22) * m * 1.4, 1.); }`);
+    return t => draw(t);
+  },
+  // 8. 暗闇が迫ってくる（周辺から黒が侵食する）
+  async vignette() {
+    const img = el("img", "width:1280px;height:720px"); img.src = BG; await img.decode();
+    const draw = shaderCanvas(`void main(){ vec2 p = (uv - .5) * vec2(1.78, 1.);
+      float edge = .95 - .42 * smoothstep(0., 2.4, t); float wob = fbm(p * 3. + t * .6) * .25;
+      float a = smoothstep(edge - .25, edge, length(p) + wob); o = vec4(0, 0, 0, a); }`);
+    stage.lastChild.style.mixBlendMode = "normal";
+    return t => draw(t);
+  },
+  // 9. 古いフィルム（傷・ほこり・揺れ・明滅）
+  async film() {
+    const img = el("img", "width:1300px;height:740px;left:-10px;top:-10px"); img.src = BG; await img.decode();
+    const c = canvas(), g = c.getContext("2d");
+    return (t, f) => { const r = rng(f * 13 + 2);
+      img.style.transform = `translate(${(r() - .5) * 4}px,${(r() - .5) * 6}px)`;
+      img.style.filter = `sepia(.6) brightness(${.85 + r() * .25}) contrast(1.2)`;
+      g.clearRect(0, 0, W, H);
+      for (let k = 0; k < 2; k++) if (r() < .7) { const x = r() * W; g.strokeStyle = `rgba(230,220,200,${.15 + r() * .3})`;
+        g.lineWidth = .6 + r(); g.beginPath(); g.moveTo(x, 0); g.lineTo(x + (r() - .5) * 20, H); g.stroke(); }
+      for (let k = 0; k < 14; k++) { g.fillStyle = r() < .5 ? "rgba(0,0,0,.7)" : "rgba(240,235,220,.5)";
+        g.beginPath(); g.arc(r() * W, r() * H, r() * 2.5, 0, 6.28); g.fill(); } };
+  },
+  // 10. ビデオテープの乱れ
+  async vhs() {
+    const img = await loadImg(BG), c = canvas(), g = c.getContext("2d");
+    return (t, f) => { const r = rng(f * 5 + 11); g.drawImage(img, 0, 0, W, H);
+      const band = (t * 260) % (H + 200) - 100;
+      for (let y = 0; y < H; y += 4) { const d = Math.abs(y - band) < 40 ? (r() - .5) * 40 : (r() < .02 ? (r() - .5) * 14 : 0);
+        if (d) g.drawImage(c, 0, y, W, 4, d, y, W, 4); }
+      g.globalCompositeOperation = "screen"; g.globalAlpha = .35; g.drawImage(img, 5, 0, W, H);
+      g.globalCompositeOperation = "source-over"; g.globalAlpha = 1;
+      g.fillStyle = "rgba(0,0,0,.25)"; for (let y = 0; y < H; y += 3) g.fillRect(0, y, W, 1);
+      const im = g.getImageData(0, 0, W, H), dd = im.data;
+      for (let k = 0; k < dd.length; k += 4) { const n = (r() - .5) * 40; dd[k] += n; dd[k + 1] += n; dd[k + 2] += n; }
+      g.putImageData(im, 0, 0); };
+  },
+  // 11. 奥行きのあるカメラの前進（Three.js：絵を何枚かの板に分けて置く）
+  async parallax() {
+    const ren = new THREE.WebGLRenderer({ preserveDrawingBuffer: true, antialias: true }); ren.setSize(W, H);
+    stage.appendChild(ren.domElement);
+    const scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x050505, .05);
+    const cam = new THREE.PerspectiveCamera(40, W / H, .1, 100);
+    const tex = await new THREE.TextureLoader().loadAsync(BG); tex.colorSpace = THREE.SRGBColorSpace;
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(16, 9), new THREE.MeshBasicMaterial({ map: tex }));
+    wall.position.z = -6; scene.add(wall);
+    const r = rng(21), pts = new THREE.BufferGeometry(), pos = [];
+    for (let k = 0; k < 400; k++) pos.push((r() - .5) * 10, (r() - .5) * 6, -r() * 5);
+    pts.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    scene.add(new THREE.Points(pts, new THREE.PointsMaterial({ color: 0xd8c8b8, size: .025, transparent: true, opacity: .7 })));
+    return t => { const k = ease(t / 2.5); cam.position.set(Math.sin(t * .8) * .08, .05, 4 - 2.6 * k);
+      cam.lookAt(0, 0, -6); ren.render(scene, cam); };
+  },
+  // 12. 焼けるように黒へ消える（ノイズのしきい値で切り替え）
+  async burn() {
+    const img = await loadImg(BG);
+    const draw = shaderCanvas(`void main(){ vec3 c = texture(tex, uv).rgb; float v = fbm(uv * vec2(6., 3.4));
+      float th = smoothstep(.3, 2.2, t) * 1.2; float e = smoothstep(th - .08, th, v) - smoothstep(th, th + .02, v);
+      vec3 col = v < th ? vec3(0.) : c; col += vec3(1., .35, .12) * e * 2.; o = vec4(col, 1.); }`, img);
+    return t => draw(t);
+  },
+  // 13. 一瞬だけ反転（サブリミナル）
+  async flash() {
+    const img = el("img", "width:1280px;height:720px"); img.src = BG; await img.decode();
+    return (t, f) => { const fl = f === 29 || f === 31, neg = f === 30;
+      img.style.filter = neg ? "invert(1) contrast(1.6)" : fl ? "brightness(4)" : t > 1.35 ? "brightness(0)" : "none"; };
+  },
+  // 14. 懐中電灯で暗闇を照らす
+  async torch() {
+    const img = await loadImg(BG), c = canvas(), g = c.getContext("2d");
+    return t => { g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+      const x = 300 + 500 * ease(t / 2.3) + Math.sin(t * 7) * 6, y = 380 + Math.sin(t * 2.3) * 40;
+      g.save(); const gr = g.createRadialGradient(x, y, 20, x, y, 230);
+      gr.addColorStop(0, "rgba(0,0,0,1)"); gr.addColorStop(1, "rgba(0,0,0,0)");
+      g.drawImage(img, 0, 0, W, H); g.globalCompositeOperation = "destination-in"; g.fillStyle = gr; g.fillRect(0, 0, W, H);
+      g.restore(); };
+  },
+};
+
+const name = new URLSearchParams(location.search).get("fx");
+await document.fonts.load("80px Mincho"); await document.fonts.load("80px Gothic");
+const update = await FX[name]();
+window.setTime = (t, f) => { update(t, f); };  // GSAP のタイムラインは then を持つので、返り値を渡さない
+window.FX_NAMES = Object.keys(FX);
+window.ready = true;
+</script>
+</body>
+</html>

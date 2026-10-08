@@ -2,3 +2,4 @@ ccfolia-opening/fonts/
 ccfolia-opening/build/
 ccfolia-opening/*.local.*
 __pycache__/
+node_modules/
