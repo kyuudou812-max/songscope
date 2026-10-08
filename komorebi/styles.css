@@ -1,0 +1,321 @@
+:root {
+  --ink: #2f3b2a;
+  --cream: #fbf6e9;
+  --leaf: #6f9b52;
+  --leaf-deep: #3f6b3a;
+  --accent: #e98a4e;
+  --pond: #6fb3c9;
+  --card: rgba(251, 246, 233, 0.96);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #cfe4b8;
+  color: var(--ink);
+  font-family: "Zen Kaku Gothic New", "Hiragino Sans", "Segoe UI", sans-serif;
+  touch-action: none;
+  overscroll-behavior: none;
+  color-scheme: light;
+}
+
+#app { position: fixed; inset: 0; width: 100%; height: 100%; }
+
+canvas#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* ---------- HUD ---------- */
+#hud {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  z-index: 5;
+}
+
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.tab {
+  border: none;
+  cursor: pointer;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-family: "Zen Maru Gothic", sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  background: rgba(255,255,255,0.55);
+  color: var(--ink);
+  box-shadow: 0 2px 6px rgba(63,80,40,0.15);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.tab.active {
+  background: var(--leaf-deep);
+  color: var(--cream);
+}
+.tab.locked {
+  background: rgba(255,255,255,0.35);
+  color: rgba(47,59,42,0.55);
+}
+.tab.glow {
+  animation: tabGlow 1.4s ease-in-out infinite;
+}
+@keyframes tabGlow {
+  0%,100% { box-shadow: 0 2px 6px rgba(63,80,40,0.15); }
+  50% { box-shadow: 0 0 0 6px rgba(233,138,78,0.35); }
+}
+
+.hudRight { display: flex; align-items: center; gap: 6px; }
+
+.clock {
+  background: rgba(255,255,255,0.55);
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(63,80,40,0.15);
+}
+
+.iconBtn {
+  border: none;
+  cursor: pointer;
+  background: rgba(255,255,255,0.55);
+  color: var(--ink);
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  box-shadow: 0 2px 6px rgba(63,80,40,0.15);
+  white-space: nowrap;
+}
+.iconBtn.round {
+  padding: 8px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-weight: 700;
+}
+
+/* ---------- Joystick ---------- */
+#joystick {
+  position: absolute;
+  left: max(20px, env(safe-area-inset-left));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 5;
+  touch-action: none;
+}
+#joyBase {
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.35);
+  border: 2px solid rgba(255,255,255,0.6);
+  position: relative;
+}
+#joyKnob {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.85);
+  box-shadow: 0 2px 8px rgba(63,80,40,0.3);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* ---------- Discovery card ---------- */
+.discoveryCard {
+  position: absolute;
+  top: max(64px, calc(env(safe-area-inset-top) + 54px));
+  left: 50%;
+  transform: translate(-50%, 0);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--card);
+  border-radius: 20px;
+  padding: 12px 18px;
+  box-shadow: 0 10px 30px rgba(63,80,40,0.35);
+  z-index: 8;
+  max-width: min(86vw, 380px);
+  transition: transform .35s cubic-bezier(.2,1.4,.4,1), opacity .3s ease;
+  opacity: 1;
+}
+.discoveryCard.hidden {
+  opacity: 0;
+  transform: translate(-50%, -30px);
+  pointer-events: none;
+}
+.dcEmoji { font-size: 40px; line-height: 1; flex: none; }
+.dcTag {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.dcName {
+  font-family: "Zen Maru Gothic", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  margin: 2px 0 2px;
+}
+.dcFlavor { font-size: 12px; color: rgba(47,59,42,0.75); line-height: 1.4; }
+
+/* ---------- Toast ---------- */
+.toast {
+  position: absolute;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(63,107,58,0.92);
+  color: var(--cream);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  z-index: 8;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+  transition: opacity .3s ease, transform .3s ease;
+}
+.toast.hidden { opacity: 0; transform: translateX(-50%) translateY(10px); pointer-events: none; }
+
+/* ---------- Overlays ---------- */
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: rgba(47,59,42,0.55);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  text-align: center;
+}
+.overlay.hidden { display: none; }
+
+.introTitle {
+  font-family: "Zen Maru Gothic", sans-serif;
+  font-size: 46px;
+  font-weight: 700;
+  color: var(--cream);
+  margin: 0 0 6px;
+  text-shadow: 0 4px 18px rgba(0,0,0,0.25);
+}
+.introSub {
+  color: rgba(251,246,233,0.9);
+  font-size: 14px;
+  line-height: 1.8;
+  margin-bottom: 22px;
+}
+.introRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(251,246,233,0.14);
+  color: var(--cream);
+  padding: 10px 16px;
+  border-radius: 14px;
+  font-size: 13px;
+  margin-bottom: 8px;
+  max-width: 360px;
+  width: 100%;
+  text-align: left;
+}
+.introIcon { font-size: 18px; flex: none; }
+
+.startBtn {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  margin-top: 18px;
+  padding: 14px 46px;
+  font-family: "Zen Maru Gothic", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  border-radius: 999px;
+  color: var(--cream);
+  background: linear-gradient(135deg, var(--leaf), var(--accent));
+  box-shadow: 0 10px 26px rgba(0,0,0,0.28);
+}
+.startBtn:active { transform: scale(0.96); }
+.startBtn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+
+/* ---------- Zukan ---------- */
+#zukanOverlay { background: rgba(47,59,42,0.75); justify-content: flex-start; }
+.zukanHead {
+  width: 100%;
+  max-width: 640px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.zukanHead h2 {
+  font-family: "Zen Maru Gothic", sans-serif;
+  color: var(--cream);
+  margin: 0;
+  font-size: 22px;
+}
+.zukanBody {
+  width: 100%;
+  max-width: 640px;
+  overflow-y: auto;
+  flex: 1;
+  padding-bottom: 20px;
+}
+.zukanSection { margin-bottom: 18px; }
+.zukanSectionTitle {
+  color: var(--cream);
+  font-size: 13px;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  text-align: left;
+  opacity: 0.85;
+}
+.zukanGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+.zukanCard {
+  background: var(--card);
+  border-radius: 14px;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-height: 92px;
+  justify-content: center;
+}
+.zukanCard .em { font-size: 26px; }
+.zukanCard .nm { font-size: 11px; font-weight: 500; }
+.zukanCard.undiscovered { background: rgba(251,246,233,0.35); }
+.zukanCard.undiscovered .em { opacity: 0.5; filter: grayscale(1); }
+.zukanCard.undiscovered .nm { color: rgba(251,246,233,0.7); }
+.zukanCard.rarity-uncommon { box-shadow: 0 0 0 2px rgba(255,209,102,0.6) inset; }
+.zukanCard.rarity-rare { box-shadow: 0 0 0 2px rgba(255,107,158,0.7) inset; }
+.zukanCard.rarity-ultra { box-shadow: 0 0 0 2px rgba(199,125,255,0.85) inset; }
+.zukanLock {
+  color: rgba(251,246,233,0.85);
+  font-size: 13px;
+  background: rgba(0,0,0,0.15);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+@media (max-width: 420px) {
+  .introTitle { font-size: 38px; }
+  .clock { display: none; }
+}

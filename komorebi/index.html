@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>こもれび</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="game"></canvas>
+
+    <div id="hud">
+      <div class="tabs" id="biomeTabs"></div>
+      <div class="hudRight">
+        <div class="clock" id="clockChip">☀️ 昼</div>
+        <button id="zukanBtn" class="iconBtn" title="図鑑">📖 <span id="zukanCount">0/17</span></button>
+        <button id="helpBtn" class="iconBtn round" title="遊び方">?</button>
+        <button id="muteBtn" class="iconBtn round" title="mute">🔊</button>
+      </div>
+    </div>
+
+    <div id="joystick">
+      <div id="joyBase"><div id="joyKnob"></div></div>
+    </div>
+
+    <div id="discoveryCard" class="discoveryCard hidden">
+      <div class="dcEmoji" id="dcEmoji">🐦</div>
+      <div class="dcBody">
+        <div class="dcTag" id="dcTag">はじめて出会った</div>
+        <div class="dcName" id="dcName">スズメ</div>
+        <div class="dcFlavor" id="dcFlavor"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <div id="introOverlay" class="overlay">
+      <h1 class="introTitle">こもれび</h1>
+      <p class="introSub">静かな庭で、生き物たちとそっと出会う。<br>減らない・失敗しない、のんびり図鑑集め。</p>
+      <div class="introRow"><span class="introIcon">🕹️</span>ジョイスティック / WASD・矢印キーで移動</div>
+      <div class="introRow"><span class="introIcon">🤫</span>生き物に近づいたら、じっと動かず観察しよう</div>
+      <div class="introRow"><span class="introIcon">📖</span>集めるほど、新しいエリアが解放される</div>
+      <button id="introBtn" class="startBtn">はじめる</button>
+    </div>
+
+    <div id="zukanOverlay" class="overlay hidden">
+      <div class="zukanHead">
+        <h2>図鑑</h2>
+        <button id="zukanClose" class="iconBtn round">×</button>
+      </div>
+      <div id="zukanBody" class="zukanBody"></div>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
