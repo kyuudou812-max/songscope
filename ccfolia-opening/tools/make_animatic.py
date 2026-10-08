@@ -25,7 +25,6 @@ SR = 48000
 # ---- 秒割り（案A） ----
 T_BG_IN = (2.0, 3.6)      # ドアが暗闇から浮かび上がる
 T_TAG = (5.0, 6.4)        # 一文の1行目・2行目が出る時刻
-T_FACE = (6.0, 6.9)       # 隙間の暗闇が一瞬だけ顔に見える
 T_CUT = 8.0               # 真っ黒に切り替え、音も消える
 T_TITLE = 8.6             # タイトル
 T_CARD = 11.0             # 辞書カードのタイプ打ち開始
@@ -117,14 +116,6 @@ def frame(i):
                          .filter(ImageFilter.GaussianBlur(1.5)), np.float32) / 40 - 3
         arr[y0:y1, x0:x1] += noise[..., None] * 5 * a
         img = Image.fromarray(np.clip(arr + grain(i, 6), 0, 255).astype(np.uint8)).convert("RGBA")
-        # 一瞬だけ顔に見える配置（目2つと口）
-        fa = ease((t - T_FACE[0]) / 0.3) * (1 - ease((t - (T_FACE[1] - 0.3)) / 0.3))
-        if fa > 0:
-            face = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            fd = ImageDraw.Draw(face)
-            for cx, cy, r in [(492, 330, 6), (519, 332, 6), (505, 378, 8)]:
-                fd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(38, 35, 33, int(255 * fa)))
-            img = Image.alpha_composite(img, face.filter(ImageFilter.GaussianBlur(3)))
         d = ImageDraw.Draw(img)
         for n, line in enumerate(["それはどこにでも存在し、", "見つめれば形を成そうとする。"]):
             la = ease((t - T_TAG[n]) / 0.9)
@@ -167,9 +158,6 @@ def audio():
     whine = 0.018 * np.sin(2 * np.pi * 6400 * t) * np.clip((t - 3) / 4, 0, 1)
     env = np.clip(t / 2.0, 0, 1) * (t < T_CUT)
     out += (drone + rumble + whine) * env
-    # 顔が見える瞬間だけ、唸りがわずかに膨らむ
-    swell = np.exp(-((t - 6.45) / 0.35) ** 2) * (t < T_CUT)
-    out += 0.12 * np.sin(2 * np.pi * 82 * t) * swell
     # タイトルの低い一撃
     k = t >= T_TITLE
     tt = t[k] - T_TITLE

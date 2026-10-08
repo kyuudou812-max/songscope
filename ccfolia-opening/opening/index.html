@@ -53,7 +53,7 @@
 <script>
 // ---- 秒割り（STORYBOARD.md の案A） ----
 const T = {
-  bgIn: [2.0, 3.6], tag: [5.0, 6.4], face: [6.0, 6.9], cut: 8.0,
+  bgIn: [2.0, 3.6], tag: [5.0, 6.4], cut: 8.0,
   title: 8.6, titleDur: 1.4, card: 11.0, typeStep: 0.055,
 };
 const GAP = { x0: 470, x1: 540, y0: 150, y1: 690 };   // 背景のドアの隙間
@@ -98,14 +98,6 @@ function drawGap(t, frame, a) {
     img.data.set([v, v * .95, v * .92, 255 * a * (0.25 + r() * 0.35)], i * 4);
   }
   c.putImageData(img, 0, 0);
-  // 一瞬だけ顔に見える3つの点
-  const fa = ease((t - T.face[0]) / 0.3) * (1 - ease((t - (T.face[1] - 0.3)) / 0.3));
-  if (fa > 0) {
-    c.fillStyle = `rgba(40,37,35,${fa * 0.8})`;
-    for (const [x, y, rad] of [[22, 180, 6], [49, 182, 6], [35, 228, 8]]) {
-      c.beginPath(); c.arc(x, y, rad, 0, Math.PI * 2); c.fill();
-    }
-  }
 }
 
 function drawGrain(frame) {
@@ -121,7 +113,7 @@ window.setTime = function (t, frame) {
   $("#bg").style.display = show("bg") && before ? "" : "none";
   $("#bg").style.opacity = bgA;
 
-  // 隙間のざらつきと顔
+  // 隙間のざらつき
   gapCv.style.display = show("gap") && before ? "" : "none";
   if (show("gap") && before) drawGap(t, frame, bgA);
 
