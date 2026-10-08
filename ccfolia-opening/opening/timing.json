@@ -1,0 +1,15 @@
+{
+  "_comment": "オープニングの秒割り（v3）。映像（opening/index.html）と音（tools/make_audio.py）の両方がこのファイルを読む。単位は秒。",
+  "duration": 15.0,
+  "droneIn": [0.0, 1.5],
+  "bgIn": [1.5, 3.2],
+  "tag": [3.0, 3.9],
+  "tagCharStep": 0.045,
+  "swell": [5.6, 6.6],
+  "cut": 6.6,
+  "hit": 6.88,
+  "slit": [6.6, 7.4],
+  "title": [7.0, 8.5],
+  "card": 8.7,
+  "typeStep": 0.04
+}

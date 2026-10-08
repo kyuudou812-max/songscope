@@ -4,10 +4,18 @@
 <meta charset="utf-8">
 <title>Opening</title>
 <!--
-  オープニングの画面を HTML で組み、時刻 t を指定して1コマずつ描く。
-  setTime(t) を呼ぶと、その時刻の見た目になる（リアルタイム再生はしない）。
-  ?layer=all … 全部入りのプレビュー
-  ?layer=<名前> … その層だけを透明背景で描く（ココフォリア用の書き出し）
+  オープニングの画面を HTML で組み、時刻 t を指定して1コマずつ描く（v3）。
+  秒割りは timing.json。書き出し側が setTiming() で渡す。
+  ?layer=all … 全部入りのプレビュー / ?layer=<名前> … その層だけを透明背景で描く（ココフォリア用）
+
+  v3 で入れたこと（research/motion-graphics-and-video-skills.md の改善案）
+   1. ドアの隙間（縦の黒い線）を唯一の象徴にする
+   2. 黒へのカットのあと、隙間と同じ位置に縦書きタイトルが現れる（マッチカット）
+   5. 辞書カードを読み切れる長さにする（打ち出しを速く、止めを長く）
+   6. 入ってくる動きは ease-out にそろえる
+   7. タイトルにだけ、にじみとかすかな揺れ（手作業のような不完全さ）
+   8. ドアは動かさない
+   ※ 3・4（逆再生の盛り上がり音、一撃を映像より先に鳴らす）は音の側（tools/make_audio.py）
 -->
 <style>
   @font-face { font-family: "Mincho"; src: url("../fonts/ShipporiMincho-Medium.ttf"); }
@@ -16,48 +24,55 @@
   body.opaque { background: #040404; }
   .layer { position: absolute; inset: 0; }
   #bg { width: 1280px; height: 720px; }
+  #reveal { width: 1280px; height: 720px; }
   #gap { position: absolute; filter: blur(1.2px); }
   #grain { width: 1280px; height: 720px; opacity: .045; mix-blend-mode: screen; }
 
   #tagline { top: 590px; height: 100px; display: flex; flex-direction: column; align-items: center; gap: 10px;
              font-family: "Mincho"; font-size: 28px; color: #ded8d2; letter-spacing: .08em; }
-  #tagline span { opacity: 0; }
+  #tagline span { display: inline-block; opacity: 0; }
 
-  #title { left: 0; top: 0; }
-  #title .main { position: absolute; top: 132px; right: 300px; writing-mode: vertical-rl;
-                 font-family: "Gothic"; font-size: 58px; line-height: 1.32; letter-spacing: .04em; color: #eeece8; }
-  #title .sub { position: absolute; top: 140px; right: 255px; writing-mode: vertical-rl; text-orientation: upright;
-                font-family: "Gothic"; font-size: 19px; letter-spacing: .32em; color: #eeece8; }
+  #slit { position: absolute; width: 2px; background: #d9d3cd; }
 
-  #card { left: 110px; top: 206px; width: 560px; font-family: "Mincho"; color: #e1dcd6; }
+  #title .col { position: absolute; writing-mode: vertical-rl; font-family: "Gothic"; font-size: 58px;
+                letter-spacing: .04em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
+  #title .sub { position: absolute; writing-mode: vertical-rl; text-orientation: upright; font-family: "Gothic";
+                font-size: 19px; letter-spacing: .32em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
+
+  #card { left: 730px; top: 250px; width: 470px; font-family: "Mincho"; color: #e1dcd6; }
   #card .no { font-size: 22px; letter-spacing: .1em; }
   #card .head { font-size: 34px; margin-top: 18px; }
   #card .pos { font-size: 22px; margin-top: 14px; }
-  #card .def { font-size: 24px; line-height: 1.7; margin-top: 16px; }
+  #card .def { font-size: 24px; line-height: 1.7; margin-top: 16px; line-break: strict; word-break: auto-phrase; }
   #card .caret { display: inline-block; width: 2px; height: 1em; background: #e1dcd6; vertical-align: -0.12em; margin-left: 2px; }
 </style>
 </head>
 <body>
 <img id="bg" class="layer" src="../build/bg_placeholder.png">
-<canvas id="gap" width="70" height="540"></canvas>
+<div id="reveal" class="layer"></div>
+<canvas id="gap"></canvas>
 <div id="tagline" class="layer"><div></div><div></div></div>
-<div id="title" class="layer">
+<div id="slit"></div>
+<div id="title" class="layer" style="filter:url(#ink)">
   <div class="sub">クトゥルフ神話TRPG</div>
-  <div class="main">暗闇の向こうに<br>誰も居ない事を<br>証明して下さい</div>
+  <div class="col">暗闇の向こうに</div><div class="col">誰も居ない事を</div><div class="col">証明して下さい</div>
 </div>
 <div id="card" class="layer">
   <div class="no"></div><div class="head"></div><div class="pos"></div><div class="def"></div>
 </div>
 <canvas id="grain" class="layer" width="640" height="360"></canvas>
+<svg width="0" height="0" style="position:absolute">
+  <filter id="ink" x="-10%" y="-10%" width="120%" height="120%">
+    <feTurbulence id="inkTurb" type="fractalNoise" baseFrequency="0.04" numOctaves="3" seed="7"/>
+    <feDisplacementMap id="inkDisp" in="SourceGraphic" scale="0"/>
+  </filter>
+</svg>
 
 <script>
-// ---- 秒割り（STORYBOARD.md の案A） ----
-const T = {
-  bgIn: [2.0, 3.6], tag: [5.0, 6.4], cut: 8.0,
-  title: 8.6, titleDur: 1.4, card: 11.0, typeStep: 0.055,
-};
-const GAP = { x0: 470, x1: 540, y0: 150, y1: 690 };   // 背景のドアの隙間
+const GAP = { x0: 470, x1: 540, y0: 150, y1: 690 };   // 背景のドアの隙間（本番の背景が決まったら合わせる）
+const GAP_CX = (GAP.x0 + GAP.x1) / 2;
 const TAGLINE = ["それはどこにでも存在し、", "見つめれば形を成そうとする。"];
+const COL_PITCH = 78, TITLE_TOP = 210;
 
 const params = new URLSearchParams(location.search);
 const LAYER = params.get("layer") || "all";
@@ -66,92 +81,108 @@ if (LAYER === "all") document.body.classList.add("opaque");
 
 const $ = s => document.querySelector(s);
 const clamp = x => Math.min(Math.max(x, 0), 1);
-const ease = x => { x = clamp(x); return x * x * (3 - 2 * x); };
-
-// 同じ時刻なら毎回同じ模様になる乱数
+const span = (t, [a, b]) => clamp((t - a) / (b - a));
+const easeOut = x => 1 - Math.pow(1 - clamp(x), 3);            // 入ってくる動き
+const easeIn = x => Math.pow(clamp(x), 3);                      // 出ていく動き
 function rng(seed) {
   return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
 }
 
-// 辞書カードの文面（シナリオ本文なので、外から window.EP として渡す）
+let T = null;
+window.setTiming = timing => { T = timing; };
 let cardParts = [];
-function setEpisode(ep) {
+window.setEpisode = ep => {
   cardParts = [[".no", ep.no], [".head", `■ ${ep.word}（${ep.kana}）`], [".pos", ep.pos], [".def", ep.def]];
-}
-window.setEpisode = setEpisode;
+};
 
-// 一文は1文字ずつ span にして、少しずつずらして浮かべる
+// 一文：1文字ずつ span にする
 const tagRows = [...document.querySelectorAll("#tagline > div")];
 TAGLINE.forEach((line, r) => { tagRows[r].innerHTML = [...line].map(c => `<span>${c}</span>`).join(""); });
 
+// タイトル：中央の列を隙間の真上に置く（マッチカット）
+const cols = [...document.querySelectorAll("#title .col")];
+cols.forEach((c, k) => Object.assign(c.style, { left: (GAP_CX + (1 - k) * COL_PITCH) + "px", top: TITLE_TOP + "px" }));
+Object.assign($("#title .sub").style, { left: (GAP_CX + COL_PITCH + 52) + "px", top: (TITLE_TOP + 6) + "px" });
+
 const gapCv = $("#gap");
-Object.assign(gapCv.style, { left: GAP.x0 + "px", top: GAP.y0 + "px",
-                             width: (GAP.x1 - GAP.x0) + "px", height: (GAP.y1 - GAP.y0) + "px" });
+Object.assign(gapCv.style, { left: GAP.x0 + "px", top: GAP.y0 + "px" });
 gapCv.width = GAP.x1 - GAP.x0; gapCv.height = GAP.y1 - GAP.y0;
 
-function drawGap(t, frame, a) {
+function drawGap(frame, a) {
   const c = gapCv.getContext("2d"), w = gapCv.width, h = gapCv.height;
   const img = c.createImageData(w, h), r = rng(frame * 977 + 13);
-  for (let i = 0; i < w * h; i++) {
-    const v = 8 + r() * 22;
-    img.data.set([v, v * .95, v * .92, 255 * a * (0.25 + r() * 0.35)], i * 4);
-  }
+  for (let i = 0; i < w * h; i++) { const v = 8 + r() * 22; img.data.set([v, v * .95, v * .92, 255 * a * (0.25 + r() * 0.35)], i * 4); }
   c.putImageData(img, 0, 0);
 }
-
 function drawGrain(frame) {
   const c = $("#grain").getContext("2d"), img = c.createImageData(640, 360), r = rng(frame * 31 + 7);
   for (let i = 0; i < 640 * 360; i++) { const v = r() * 255; img.data.set([v, v, v, 255], i * 4); }
   c.putImageData(img, 0, 0);
 }
+const vis = (sel, on) => { $(sel).style.display = on ? "" : "none"; return on; };
 
 window.setTime = function (t, frame) {
   const before = t < T.cut;
-  // 背景：暗闇から浮かび上がる
-  const bgA = ease((t - T.bgIn[0]) / (T.bgIn[1] - T.bgIn[0]));
-  $("#bg").style.display = show("bg") && before ? "" : "none";
-  $("#bg").style.opacity = bgA;
+
+  // 背景：隙間を中心に、暗闇が外へ引いていく（ease-out）
+  vis("#bg", show("bg") && before);
+  const rv = easeOut(span(t, T.bgIn));
+  if (vis("#reveal", show("bg") && before)) {
+    const r0 = -50 + 140 * rv;
+    $("#reveal").style.background =
+      `radial-gradient(ellipse 55% 85% at ${GAP_CX + 60}px 420px, rgba(0,0,0,0) ${r0}%, rgba(0,0,0,1) ${r0 + 45}%)`;
+  }
 
   // 隙間のざらつき
-  gapCv.style.display = show("gap") && before ? "" : "none";
-  if (show("gap") && before) drawGap(t, frame, bgA);
+  if (vis("#gap", show("gap") && before)) drawGap(frame, rv);
 
-  // 一文：行ごと・文字ごとに少し遅れて浮かぶ
-  $("#tagline").style.display = show("tagline") && before ? "" : "none";
+  // 一文：1文字ずつ、下から少し浮き上がって現れる（ease-out）
+  vis("#tagline", show("tagline") && before);
   tagRows.forEach((row, r) => [...row.children].forEach((s, k) => {
-    s.style.opacity = ease((t - T.tag[r] - k * 0.035) / 0.6);
+    const a = easeOut((t - T.tag[r] - k * T.tagCharStep) / 0.7);
+    s.style.opacity = a; s.style.transform = `translateY(${(1 - a) * 6}px)`;
   }));
 
-  // タイトル：ぼやけた状態からくっきり
-  const ta = ease((t - T.title) / T.titleDur);
-  $("#title").style.display = show("title") && !before ? "" : "none";
-  $("#title").style.opacity = ta;
-  $("#title").style.filter = `blur(${(1 - ta) * 5}px)`;
+  // 黒へのカット直後、隙間の縦線だけが残像のように残り、タイトルの列へ縮んでいく
+  if (vis("#slit", show("title") && !before && t < T.slit[1])) {
+    const k = span(t, T.slit), y0 = GAP.y0 + (TITLE_TOP - GAP.y0) * easeOut(k), y1 = GAP.y1 + (TITLE_TOP + 430 - GAP.y1) * easeOut(k);
+    Object.assign($("#slit").style, { left: (GAP_CX - 1) + "px", top: y0 + "px", height: (y1 - y0) + "px",
+                                       opacity: (1 - easeIn(k)) * 0.7 });
+  }
 
-  // 辞書カード：1文字ずつ打ち出す
-  $("#card").style.display = show("card") && !before ? "" : "none";
-  let n = Math.max(0, Math.floor((t - T.card) / T.typeStep) + (t >= T.card ? 1 : 0));
-  const total = cardParts.reduce((s, [, txt]) => s + [...txt].length, 0);
+  // タイトル：中央の列から順に、にじみながら現れる。その後もかすかに揺れ続ける
+  if (vis("#title", show("title") && !before)) {
+    const r = rng(frame * 53 + 5), jump = r() < 0.05;
+    cols.forEach((c, k) => {
+      const order = [1, 0, 2][k];                               // 中央→右→左
+      const a = easeOut((t - T.title[0] - order * 0.18) / (T.title[1] - T.title[0] - 0.36));
+      c.style.opacity = a;
+      c.style.filter = `blur(${(1 - a) * 4}px)`;
+    });
+    $("#title .sub").style.opacity = easeOut((t - T.title[0] - 0.6) / 0.9);
+    const settle = easeOut(span(t, T.title));
+    document.getElementById("inkDisp").setAttribute("scale", (1 - settle) * 45 + 1.2);
+    document.getElementById("inkTurb").setAttribute("baseFrequency", 0.04 + (r() - .5) * 0.004);
+    $("#title").style.transform = `translate(${(r() - .5) * (jump ? 2.4 : 0.6)}px, ${(r() - .5) * (jump ? 2 : 0.5)}px)`;
+  }
+
+  // 辞書カード：1文字ずつ打ち出す（等速＝機械的な質感）
+  vis("#card", show("card") && !before);
+  let n = t >= T.card ? Math.floor((t - T.card) / T.typeStep) + 1 : 0;
+  const total = cardParts.reduce((s, [, txt]) => s + [...txt].length, 0), typed = n;
   for (const [sel, txt] of cardParts) {
     const chars = [...txt], k = Math.max(0, Math.min(chars.length, n));
     $("#card " + sel).textContent = chars.slice(0, k).join("");
     n -= chars.length;
   }
-  // 打ち終わったあとのカーソルは0.5秒ごとに点滅
-  const typed = Math.floor((t - T.card) / T.typeStep) + 1;
-  const caretOn = t >= T.card && (typed < total || Math.floor(t * 2) % 2 === 0);
-  document.querySelectorAll("#card .caret").forEach(e => e.remove());
-  if (caretOn) {
-    const lastFilled = [...cardParts].reverse().find(([sel]) => $("#card " + sel).textContent);
-    if (lastFilled) $("#card " + lastFilled[0]).insertAdjacentHTML("beforeend", '<span class="caret"></span>');
+  if (t >= T.card && (typed < total || Math.floor(t * 2) % 2 === 0)) {
+    const last = [...cardParts].reverse().find(([sel]) => $("#card " + sel).textContent);
+    if (last) $("#card " + last[0]).insertAdjacentHTML("beforeend", '<span class="caret"></span>');
   }
 
-  // 画面全体の粒子（プレビューのみ）
-  $("#grain").style.display = LAYER === "all" ? "" : "none";
-  if (LAYER === "all") drawGrain(frame);
+  if (vis("#grain", LAYER === "all")) drawGrain(frame);
 };
-window.TIMING = T;
 </script>
 </body>
 </html>
