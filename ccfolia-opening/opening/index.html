@@ -169,7 +169,7 @@ window.setTime = function (t, frame) {
 
   // 辞書カード：1文字ずつ打ち出す（等速＝機械的な質感）
   vis("#card", show("card") && !before);
-  let n = t >= T.card ? Math.floor((t - T.card) / T.typeStep) + 1 : 0;
+  let n = t >= T.card - 1e-6 ? Math.floor((t - T.card) / T.typeStep + 1e-6) + 1 : 0;  // 1e-6 は小数の誤差で1文字ずれないため
   const total = cardParts.reduce((s, [, txt]) => s + [...txt].length, 0), typed = n;
   for (const [sel, txt] of cardParts) {
     const chars = [...txt], k = Math.max(0, Math.min(chars.length, n));

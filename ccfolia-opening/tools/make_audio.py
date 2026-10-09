@@ -63,13 +63,18 @@ def main():
     hit += 0.3 * rng.normal(0, 1, k.sum()) * np.exp(-th * 20)
     out[k] += hit
 
-    # タイプ音：1文字に1回
-    click_len = int(0.012 * SR)
-    click = rng.normal(0, 1, click_len) * np.exp(-np.linspace(0, 6, click_len))
-    click = np.diff(click, prepend=0) * 0.12
+    # タイプ音：1文字に1回。低い「コッ」という芯と、控えめな打鍵の擦れを混ぜる。
+    # 毎回少しだけ高さと強さを変え、同じ音の機械的な繰り返しにしない。
+    # （以前は雑音の高域だけを使っていたため、エネルギーの85%が6kHz以上に偏り、耳に痛かった）
+    key_len = int(0.045 * SR)
+    kt = np.arange(key_len) / SR
     for j in range(card_chars()):
+        f0 = 260 * (0.9 + 0.2 * rng.random())
+        body = np.sin(2 * np.pi * f0 * kt) * np.exp(-kt * 90)
+        tick = lowpass(rng.normal(0, 1, key_len), 12) * np.exp(-kt * 400) * 0.6
+        key = (body + tick) * 0.16 * (0.75 + 0.25 * rng.random())
         s = int((T["card"] + j * T["typeStep"]) * SR)
-        out[s:s + click_len] += click[: max(0, n - s)]
+        out[s:s + key_len] += key[: max(0, n - s)]
 
     out = out / max(1e-9, np.abs(out).max()) * 0.85  # 音割れしないよう、最大音量を0.85にそろえる
     path = ROOT / "build" / f"opening_audio_ep{ep_no}.wav"
