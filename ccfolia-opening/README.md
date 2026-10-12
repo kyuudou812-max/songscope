@@ -32,7 +32,7 @@ CoCシナリオ「暗闇の向こうに誰も居ない事を証明して下さ�
 | 1〜2 | 技術検証 | `test-kit/` をココフォリアで試し、結果を `test-results.md` に記録する | 結果待ち |
 | 2〜3 | 前提の確定 | シナリオ確認済み。全9話共通のOP＋話ごとの辞書カード、ネタバレなしの案Aに決定 | 済 |
 | 3〜4 | 演出の研究 | `TECHNIQUES.md`（演出サンプル14種）、`../research/motion-graphics-and-video-skills.md`（動き・編集・音・色の勉強ノート） | 済 |
-| 4〜5 | 絵コンテ | `STORYBOARD.md`（v3）。秒割りは `opening/timing.json`、映像は `tools/render_opening.mjs`、音は `tools/make_audio.py` | v3 |
+| 4〜5 | 絵コンテ | `STORYBOARD.md`（v4）。秒割りは `opening/timing.json`、位置は `opening/layout.json`、映像は `tools/render_opening.mjs`、音は `tools/make_audio.py`、仮の背景は `tools/make_bg_placeholder.py` | v4 |
 | 6〜10 | 素材制作 | 各層の素材と確認用プレビュー動画を作る | |
 | 10〜12 | 組み込み | ココフォリアにシーンを組み、操作手順書を作る | |
 | 12〜13 | 事前読み込みと動作確認 | 初回のカクつき対策、別のPCやスマホでの確認 | |

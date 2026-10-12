@@ -22,6 +22,7 @@ const fps = Number(args.fps ?? 24);
 const from = Number(args.from ?? 0);
 const timing = JSON.parse(readFileSync(join(ROOT, "opening", "timing.json"), "utf8"));
 const to = Number(args.to ?? timing.duration);
+const layout = JSON.parse(readFileSync(join(ROOT, "opening", "layout.json"), "utf8"));
 const out = join(ROOT, "build", args.out ?? `frames_${layer}_ep${ep}`);
 
 const episodes = JSON.parse(readFileSync(join(ROOT, "episodes.local.json"), "utf8"));
@@ -31,7 +32,8 @@ mkdirSync(out, { recursive: true });
 const browser = await playwright.chromium.launch({ args: ["--allow-file-access-from-files"] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 await page.goto(pathToFileURL(join(ROOT, "opening", "index.html")).href + `?layer=${layer}`);
-await page.evaluate(async ([e, tm]) => { await document.fonts.ready; window.setTiming(tm); window.setEpisode(e); }, [episodes[ep], timing]);
+await page.evaluate(async ([e, tm, lo]) => { await document.fonts.ready; window.setTiming(tm); window.setLayout(lo); window.setEpisode(e); },
+                    [episodes[ep], timing, layout]);
 await page.waitForLoadState("networkidle");
 
 const first = Math.round(from * fps), last = Math.round(to * fps);

@@ -45,6 +45,22 @@ def main():
     a0, a1 = T["droneIn"]
     out += drone * np.clip((t - a0) / (a1 - a0), 0, 1) * (t < cut)
 
+    # 鼓動：唸りの底に、ごく小さく。見ている人自身の体の音のように聞かせる（クワイエット・プレイス）
+    # 少しずつ速くなり（56→68 bpm）、カットで唸りと一緒に消える
+    h0, h1 = T["heart"]
+    bt = h0
+    while bt < h1:
+        k = (bt - h0) / (h1 - h0)
+        for off, f, amp in ((0.0, 52, 1.0), (0.27, 60, 0.7)):        # ドッ、クン
+            s = int((bt + off) * SR)
+            m = min(int(0.16 * SR), int(h1 * SR) - s)
+            if m <= 0:
+                continue
+            tt = np.arange(m) / SR
+            beat = np.sin(2 * np.pi * f * tt) * np.exp(-tt * 28) * amp
+            out[s:s + m] += beat * 0.16 * min(1.0, (bt - h0) / 1.5 + 0.2)
+        bt += 60 / (56 + 12 * k)
+
     # 逆再生の盛り上がり：残響のような尾を作って逆向きにし、カットの瞬間で切る
     s0, s1 = T["swell"]
     m = int((s1 - s0) * SR)
