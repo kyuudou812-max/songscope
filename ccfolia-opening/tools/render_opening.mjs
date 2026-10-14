@@ -21,19 +21,25 @@ const layer = args.layer ?? "all";
 const fps = Number(args.fps ?? 24);
 const from = Number(args.from ?? 0);
 const timing = JSON.parse(readFileSync(join(ROOT, "opening", "timing.json"), "utf8"));
-const to = Number(args.to ?? timing.duration);
 const layout = JSON.parse(readFileSync(join(ROOT, "opening", "layout.json"), "utf8"));
 const out = join(ROOT, "build", args.out ?? `frames_${layer}_ep${ep}`);
 
 const episodes = JSON.parse(readFileSync(join(ROOT, "episodes.local.json"), "utf8"));
+const escalation = JSON.parse(readFileSync(join(ROOT, "opening", "escalation.json"), "utf8")).episodes[ep];
+// 長さ：辞書カードを打ち終わってから2秒は止めて見せる（最短は timing.duration）
+const e0 = episodes[ep];
+const cardChars = [e0.no, `■ ${e0.word}（${e0.kana}）`, e0.pos, e0.def].reduce((n, s) => n + [...s].length, 0);
+const duration = Math.max(timing.duration, Math.ceil((timing.card + cardChars * timing.typeStep + 2.0) * 24) / 24);
+const to = Number(args.to ?? duration);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 
 const browser = await playwright.chromium.launch({ args: ["--allow-file-access-from-files"] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 await page.goto(pathToFileURL(join(ROOT, "opening", "index.html")).href + `?layer=${layer}`);
-await page.evaluate(async ([e, tm, lo]) => { await document.fonts.ready; window.setTiming(tm); window.setLayout(lo); window.setEpisode(e); },
-                    [episodes[ep], timing, layout]);
+await page.evaluate(async ([e, tm, lo, es]) => { await document.fonts.ready; window.setTiming(tm); window.setEscalation(es);
+                                                  window.setLayout(lo); window.setEpisode(e); },
+                    [episodes[ep], timing, layout, escalation]);
 await page.waitForLoadState("networkidle");
 
 const first = Math.round(from * fps), last = Math.round(to * fps);
@@ -43,4 +49,4 @@ for (let f = first; f < last; f++) {
                           omitBackground: layer !== "all" });
 }
 await browser.close();
-console.log(`${last - first} frames → ${out}`);
+console.log(`${last - first} frames (${duration.toFixed(3)}s) → ${out}`);

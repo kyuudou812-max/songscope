@@ -1,4 +1,4 @@
-"""オープニングの仮の音を合成する（v3）。秒割りは opening/timing.json を読む。
+"""オープニングの仮の音を合成する（v5）。秒割りは opening/timing.json、話ごとの変化は opening/escalation.json を読む。
 
 使い方: python3 make_audio.py [話数]
 出力: build/opening_audio_ep{N}.wav
@@ -19,6 +19,12 @@ SR = 48000
 T = json.loads((ROOT / "opening" / "timing.json").read_text(encoding="utf-8"))
 ep_no = sys.argv[1] if len(sys.argv) > 1 else "1"
 EP = json.loads((ROOT / "episodes.local.json").read_text(encoding="utf-8"))[ep_no]
+ESC = json.loads((ROOT / "opening" / "escalation.json").read_text(encoding="utf-8"))["episodes"][ep_no]
+
+
+def snap(x):
+    # 音と映像を合わせる時刻はコマの区切り（1/24秒）に置く。opening/index.html と同じ丸め方
+    return np.floor(x * 24 + 0.5) / 24
 
 
 def card_chars():
@@ -31,23 +37,41 @@ def lowpass(x, k):
     return np.convolve(x, np.ones(k) / k, "same")
 
 
+def duration():
+    # 辞書カードを打ち終わってから2秒は止めて見せる（tools/render_opening.mjs と同じ計算）
+    return max(T["duration"], np.ceil((T["card"] + card_chars() * T["typeStep"] + 2.0) * 24) / 24)
+
+
 def main():
-    n = int(T["duration"] * SR)
+    n = int(duration() * SR)
     t = np.arange(n) / SR
     rng = np.random.default_rng(1)
     out = np.zeros(n)
     cut = T["cut"]
 
-    # 唸り：低い2音＋ごろごろした雑音。カットで突然消える
-    drone = 0.22 * np.sin(2 * np.pi * 55 * t) + 0.10 * np.sin(2 * np.pi * 110.7 * t)
-    drone += lowpass(rng.normal(0, 1, n), 400) * 2.0
-    drone += 0.016 * np.sin(2 * np.pi * 6400 * t) * np.clip((t - 2.0) / 4, 0, 1)
+    # 蛍光灯のハム音：画面に映っている蛍光灯が鳴らしている音（音にも「理由」を持たせる）
+    # 電源50Hzの2倍の100Hzと、その倍音。小さいスピーカーでも聞こえるよう、200〜600Hzの倍音で存在感を出す
+    # 話が進むほど、音程がわずかに下がり（humDetune）、ジリジリした歪み（humBuzz）が増える
+    f0 = 100 + ESC["humDetune"]
+    hum = sum(a * np.sin(2 * np.pi * f0 * h * t) for h, a in ((1, 0.20), (2, 0.16), (3, 0.10), (4, 0.07), (5, 0.04), (6, 0.03)))
+    hum = np.tanh(hum * (1 + 6 * ESC["humBuzz"])) / (1 + 2 * ESC["humBuzz"])
+    hum += lowpass(rng.normal(0, 1, n), 400) * 0.6                   # 建物のごく低い空気の音
+    # 蛍光灯が一瞬暗くなる3コマ：ハム音も同じコマで落ち込み、パチッと鳴る（映像と同じ数値）
+    lamp = np.ones(n)
+    for ft in ESC["flickers"]:
+        for k, dim in enumerate((0.55, 0.2, 0.45)):
+            a, b = int((snap(ft) + k / 24) * SR), int((snap(ft) + (k + 1) / 24) * SR)
+            lamp[a:b] = 1 - dim
+        s0 = int(snap(ft) * SR)
+        m = int(0.03 * SR)
+        out[s0:s0 + m] += rng.normal(0, 1, m) * np.exp(-np.arange(m) / SR * 160) * 0.25
     a0, a1 = T["droneIn"]
-    out += drone * np.clip((t - a0) / (a1 - a0), 0, 1) * (t < cut)
+    out += hum * lamp * np.clip((t - a0) / (a1 - a0), 0, 1) * (t < cut)
 
     # 鼓動：唸りの底に、ごく小さく。見ている人自身の体の音のように聞かせる（クワイエット・プレイス）
-    # 少しずつ速くなり（56→68 bpm）、カットで唸りと一緒に消える
+    # 少しずつ速くなり、カットでハム音と一緒に消える
     h0, h1 = T["heart"]
+    b0, b1 = ESC["bpm"]                                              # 話が進むほど速い
     bt = h0
     while bt < h1:
         k = (bt - h0) / (h1 - h0)
@@ -57,9 +81,11 @@ def main():
             if m <= 0:
                 continue
             tt = np.arange(m) / SR
-            beat = np.sin(2 * np.pi * f * tt) * np.exp(-tt * 28) * amp
+            # 小さいスピーカーでも感じられるよう、2倍・3倍の成分を少し足す
+            beat = (np.sin(2 * np.pi * f * tt) + 0.5 * np.sin(4 * np.pi * f * tt) + 0.25 * np.sin(6 * np.pi * f * tt)) \
+                * np.exp(-tt * 28) * amp
             out[s:s + m] += beat * 0.16 * min(1.0, (bt - h0) / 1.5 + 0.2)
-        bt += 60 / (56 + 12 * k)
+        bt += 60 / (b0 + (b1 - b0) * k)
 
     # 逆再生の盛り上がり：残響のような尾を作って逆向きにし、カットの瞬間で切る
     s0, s1 = T["swell"]

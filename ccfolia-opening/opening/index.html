@@ -33,6 +33,7 @@
   #tagline span { display: inline-block; opacity: 0; }
 
   #slit { position: absolute; width: 2px; background: #d9d3cd; }
+  #gapExtra { position: absolute; background: #030303; }
 
   #title .col { position: absolute; writing-mode: vertical-rl; font-family: "Gothic"; font-size: 58px;
                 letter-spacing: .04em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
@@ -52,6 +53,8 @@
 <div id="reveal" class="layer"></div>
 <canvas id="dust" class="layer" width="1280" height="720"></canvas>
 <canvas id="gap"></canvas>
+<div id="gapExtra"></div>
+<div id="flicker" class="layer" style="background:#000"></div>
 <div id="tagline" class="layer"><div></div><div></div></div>
 <div id="slit"></div>
 <div id="title" class="layer" style="filter:url(#ink)">
@@ -104,6 +107,9 @@ TAGLINE.forEach((line, r) => { tagRows[r].innerHTML = [...line].map(c => `<span>
 const cols = [...document.querySelectorAll("#title .col")];
 const gapCv = $("#gap");
 let DUST = [];
+let ESC = { gapExtra: 0, flickers: [], breath: 0.12, dust: 120 };
+const snap = t => Math.floor(t * 24 + 0.5) / 24;   // 音と合わせる時刻はコマの区切りに置く
+window.setEscalation = e => { ESC = e; };
 
 window.setLayout = layout => {
   GAP = layout.gap; LAMP = layout.lamp;
@@ -116,7 +122,7 @@ window.setLayout = layout => {
   gapCv.width = GAP.x1 - GAP.x0; gapCv.height = GAP.y1 - GAP.y0;
   // 塵：蛍光灯の下の空間にだけ、ごくわずかに漂わせる（新海誠：止まった画面にも小さな動き）
   const r = rng(77), lx = (LAMP.x0 + LAMP.x1) / 2;
-  DUST = Array.from({ length: 140 }, () => ({
+  DUST = Array.from({ length: ESC.dust }, () => ({
     x: lx + (r() - .5) * 620, y: LAMP.y1 + r() * 420, size: .6 + r() * 1.3,
     vx: (r() - .5) * 6, vy: 2 + r() * 5, ph: r() * 6.28, tw: .4 + r() * .8 }));
 };
@@ -137,7 +143,7 @@ function drawDust(t, a) {
 function drawGap(t, frame, a) {
   const c = gapCv.getContext("2d"), w = gapCv.width, h = gapCv.height;
   const img = c.createImageData(w, h), r = rng(frame * 977 + 13);
-  const breath = 1 + 0.15 * Math.sin(2 * Math.PI * t / 3.4);   // 隙間の呼吸（約3.4秒周期、明るさ±2段階ほど）
+  const breath = 1 + ESC.breath * Math.sin(2 * Math.PI * t / 3.4);   // 隙間の呼吸（約3.4秒周期。話が進むほど深くなる）
   for (let i = 0; i < w * h; i++) { const v = (8 + r() * 22) * breath; img.data.set([v, v * .95, v * .92, 255 * a * (0.25 + r() * 0.35)], i * 4); }
   c.putImageData(img, 0, 0);
 }
@@ -163,6 +169,20 @@ window.setTime = function (t, frame) {
   // 隙間のざらつき
   if (vis("#gap", show("gap") && before)) drawGap(t, frame, rv);
   if (vis("#dust", show("dust") && before)) drawDust(t, rv);
+
+  // 隙間がわずかに広がる（話が進むほど）
+  if (vis("#gapExtra", show("gap") && before && ESC.gapExtra > 0))
+    Object.assign($("#gapExtra").style, { left: GAP.x1 + "px", top: GAP.y0 + "px",
+                                          width: ESC.gapExtra + "px", height: (GAP.y1 - GAP.y0) + "px", opacity: rv });
+
+  // 蛍光灯が一瞬暗くなる（3コマ）。話が進むほど回数が増える。1秒3回以内
+  let dim = 0;
+  for (const ft of ESC.flickers) {
+    const k = Math.round((t - snap(ft)) * 24);
+    if (k >= 0 && k < 3) dim = [0.55, 0.2, 0.45][k];
+  }
+  vis("#flicker", show("flicker") && before && dim > 0);
+  $("#flicker").style.opacity = dim;
 
   // 一文：1文字ずつ、下から少し浮き上がって現れる（ease-out）
   vis("#tagline", show("tagline") && before);

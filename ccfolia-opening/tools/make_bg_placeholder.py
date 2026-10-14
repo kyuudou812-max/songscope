@@ -60,6 +60,7 @@ def main():
     ImageDraw.Draw(glow).rectangle(LAMP, fill=255)
     glow = glow.filter(ImageFilter.GaussianBlur(28))
     arr = np.array(base, np.float32) + np.array(glow, np.float32)[..., None] * np.array([0.55, 0.5, 0.42])
+    arr += np.random.default_rng(5).normal(0, 1.5, arr.shape)        # 細かい粒子（ディザ）：暗いグラデーションの縞を防ぐ
     vign = 1 - 0.55 * np.clip(((xx - W / 2) / (W * 0.65)) ** 2 + ((yy - H / 2) / (H * 0.75)) ** 2, 0, 1)
     out = Image.fromarray(np.clip(arr * vign[..., None], 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.8))
     ImageDraw.Draw(out).text((20, 690), "仮の背景", font=ImageFont.truetype(str(ROOT / "fonts" / "ZenKakuGothicNew-Medium.ttf"), 18),
