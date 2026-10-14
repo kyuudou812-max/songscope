@@ -20,6 +20,7 @@ T = json.loads((ROOT / "opening" / "timing.json").read_text(encoding="utf-8"))
 ep_no = sys.argv[1] if len(sys.argv) > 1 else "1"
 EP = json.loads((ROOT / "episodes.local.json").read_text(encoding="utf-8"))[ep_no]
 ESC = json.loads((ROOT / "opening" / "escalation.json").read_text(encoding="utf-8"))["episodes"][ep_no]
+FLICKER = json.loads((ROOT / "opening" / "flicker.json").read_text(encoding="utf-8"))["episodes"][ep_no]["frames"]
 
 
 def snap(x):
@@ -56,15 +57,20 @@ def main():
     hum = sum(a * np.sin(2 * np.pi * f0 * h * t) for h, a in ((1, 0.20), (2, 0.16), (3, 0.10), (4, 0.07), (5, 0.04), (6, 0.03)))
     hum = np.tanh(hum * (1 + 6 * ESC["humBuzz"])) / (1 + 2 * ESC["humBuzz"])
     hum += lowpass(rng.normal(0, 1, n), 400) * 0.6                   # 建物のごく低い空気の音
-    # 蛍光灯が一瞬暗くなる3コマ：ハム音も同じコマで落ち込み、パチッと鳴る（映像と同じ数値）
+    # 蛍光灯の明滅（opening/flicker.json と同じコマ）：暗いコマではハム音が落ち込み、
+    # 暗くなり始めるたびに「カチッ」と鳴る。音の強さ・長さ・音色は1回ごとにばらつかせる
     lamp = np.ones(n)
-    for ft in ESC["flickers"]:
-        for k, dim in enumerate((0.55, 0.2, 0.45)):
-            a, b = int((snap(ft) + k / 24) * SR), int((snap(ft) + (k + 1) / 24) * SR)
-            lamp[a:b] = 1 - dim
-        s0 = int(snap(ft) * SR)
-        m = int(0.03 * SR)
-        out[s0:s0 + m] += rng.normal(0, 1, m) * np.exp(-np.arange(m) / SR * 160) * 0.25
+    dims = dict((f, d) for f, d in FLICKER)
+    for f, d in FLICKER:
+        a, b = int(f / 24 * SR), int((f + 1) / 24 * SR)
+        lamp[a:b] = 1 - d
+        # ジジッという放電の雑音（暗いコマの間だけ）
+        out[a:b] += rng.normal(0, 1, b - a) * 0.05 * d * (0.5 + rng.random())
+        if dims.get(f - 1, 0) <= 0.2 < d:                          # 暗くなり始めた瞬間
+            m = int(rng.uniform(0.008, 0.03) * SR)
+            sm = max(2, int(rng.uniform(2, 10)))                  # 音色：数字が大きいほどこもる
+            click = lowpass(rng.normal(0, 1, m), sm) * np.exp(-np.arange(m) / SR * rng.uniform(120, 260))
+            out[a:a + m] += click * rng.uniform(0.15, 0.35) * np.sqrt(sm)
     a0, a1 = T["droneIn"]
     out += hum * lamp * np.clip((t - a0) / (a1 - a0), 0, 1) * (t < cut)
 
@@ -105,16 +111,18 @@ def main():
     hit += 0.3 * rng.normal(0, 1, k.sum()) * np.exp(-th * 20)
     out[k] += hit
 
-    # タイプ音：1文字に1回。低い「コッ」という芯と、控えめな打鍵の擦れを混ぜる。
-    # 毎回少しだけ高さと強さを変え、同じ音の機械的な繰り返しにしない。
-    # （以前は雑音の高域だけを使っていたため、エネルギーの85%が6kHz以上に偏り、耳に痛かった）
-    key_len = int(0.045 * SR)
+    # タイプ音：古い機械が重く打つ「カタッ」。1文字に1回。
+    # 音程のある成分（澄んだ音）を使うと「ポコポコ」と可愛くなるので、雑音だけで作る：
+    #   低い打撃（こもった雑音）＋ 乾いた打鍵（中域の雑音）＋ ごくわずかな部屋の響き
+    # 毎回、強さ・こもり具合・長さを少しずつ変える
+    key_len = int(0.09 * SR)
     kt = np.arange(key_len) / SR
     for j in range(card_chars()):
-        f0 = 260 * (0.9 + 0.2 * rng.random())
-        body = np.sin(2 * np.pi * f0 * kt) * np.exp(-kt * 90)
-        tick = lowpass(rng.normal(0, 1, key_len), 12) * np.exp(-kt * 400) * 0.6
-        key = (body + tick) * 0.16 * (0.75 + 0.25 * rng.random())
+        thud = lowpass(rng.normal(0, 1, key_len), int(rng.integers(50, 80))) * np.exp(-kt * rng.uniform(55, 80)) * 6.0
+        hit = np.diff(lowpass(rng.normal(0, 1, key_len), int(rng.integers(6, 12))), prepend=0)
+        hit *= np.exp(-kt * rng.uniform(250, 400)) * 4.0
+        room = lowpass(rng.normal(0, 1, key_len), 20) * np.exp(-kt * 30) * 0.25
+        key = (thud + hit + room) * 0.11 * rng.uniform(0.7, 1.0)
         s = int((T["card"] + j * T["typeStep"]) * SR)
         out[s:s + key_len] += key[: max(0, n - s)]
 

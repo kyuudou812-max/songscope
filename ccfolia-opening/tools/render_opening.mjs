@@ -26,6 +26,7 @@ const out = join(ROOT, "build", args.out ?? `frames_${layer}_ep${ep}`);
 
 const episodes = JSON.parse(readFileSync(join(ROOT, "episodes.local.json"), "utf8"));
 const escalation = JSON.parse(readFileSync(join(ROOT, "opening", "escalation.json"), "utf8")).episodes[ep];
+const flicker = JSON.parse(readFileSync(join(ROOT, "opening", "flicker.json"), "utf8")).episodes[ep].frames;
 // 長さ：辞書カードを打ち終わってから2秒は止めて見せる（最短は timing.duration）
 const e0 = episodes[ep];
 const cardChars = [e0.no, `■ ${e0.word}（${e0.kana}）`, e0.pos, e0.def].reduce((n, s) => n + [...s].length, 0);
@@ -37,9 +38,9 @@ mkdirSync(out, { recursive: true });
 const browser = await playwright.chromium.launch({ args: ["--allow-file-access-from-files"] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
 await page.goto(pathToFileURL(join(ROOT, "opening", "index.html")).href + `?layer=${layer}`);
-await page.evaluate(async ([e, tm, lo, es]) => { await document.fonts.ready; window.setTiming(tm); window.setEscalation(es);
+await page.evaluate(async ([e, tm, lo, es, fl]) => { await document.fonts.ready; window.setTiming(tm); window.setEscalation(es); window.setFlicker(fl);
                                                   window.setLayout(lo); window.setEpisode(e); },
-                    [episodes[ep], timing, layout, escalation]);
+                    [episodes[ep], timing, layout, escalation, flicker]);
 await page.waitForLoadState("networkidle");
 
 const first = Math.round(from * fps), last = Math.round(to * fps);

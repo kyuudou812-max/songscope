@@ -110,6 +110,8 @@ let DUST = [];
 let ESC = { gapExtra: 0, flickers: [], breath: 0.12, dust: 120 };
 const snap = t => Math.floor(t * 24 + 0.5) / 24;   // 音と合わせる時刻はコマの区切りに置く
 window.setEscalation = e => { ESC = e; };
+let FLICKER = new Map();   // コマ番号 → 暗さ（opening/flicker.json）
+window.setFlicker = frames => { FLICKER = new Map(frames); };
 
 window.setLayout = layout => {
   GAP = layout.gap; LAMP = layout.lamp;
@@ -175,12 +177,8 @@ window.setTime = function (t, frame) {
     Object.assign($("#gapExtra").style, { left: GAP.x1 + "px", top: GAP.y0 + "px",
                                           width: ESC.gapExtra + "px", height: (GAP.y1 - GAP.y0) + "px", opacity: rv });
 
-  // 蛍光灯が一瞬暗くなる（3コマ）。話が進むほど回数が増える。1秒3回以内
-  let dim = 0;
-  for (const ft of ESC.flickers) {
-    const k = Math.round((t - snap(ft)) * 24);
-    if (k >= 0 && k < 3) dim = [0.55, 0.2, 0.45][k];
-  }
+  // 蛍光灯の明滅：切れかけた蛍光灯のように、長さも暗さも点き直しも毎回ばらばら（tools/make_flicker.py）
+  const dim = FLICKER.get(frame) ?? 0;
   vis("#flicker", show("flicker") && before && dim > 0);
   $("#flicker").style.opacity = dim;
 
