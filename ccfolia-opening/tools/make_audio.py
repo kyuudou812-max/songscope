@@ -38,6 +38,54 @@ def lowpass(x, k):
     return np.convolve(x, np.ones(k) / k, "same")
 
 
+def modes(rng, freqs, decays, amps, length):
+    """短く減衰する、音程の揃わない（非調和の）共振の束。数ミリ秒で消えるので、耳は音の高さを聞き取れない"""
+    tt = np.arange(length) / SR
+    return sum(a * np.sin(2 * np.pi * f * tt + rng.uniform(0, 6.28)) * np.exp(-tt * d) for f, d, a in zip(freqs, decays, amps))
+
+
+def strike(rng, length, scale, lo):
+    """1回の当たり：ごく短い雑音の立ち上がり＋キーキャップの共振（1〜5kHz）＋本体のわずかな鳴り（数百Hz）"""
+    tt = np.arange(length) / SR
+    burst = np.diff(rng.normal(0, 1, length), prepend=0) * np.exp(-tt * 2500) * 0.5
+    cap = modes(rng, [rng.uniform(1600, 2400) * lo, rng.uniform(3000, 4200) * lo, rng.uniform(4800, 6200) * lo],
+                [rng.uniform(500, 800), rng.uniform(700, 1100), rng.uniform(900, 1400)], [1.0, 0.6, 0.3], length)
+    body = modes(rng, [rng.uniform(420, 700) * lo], [rng.uniform(140, 220)], [0.25], length)
+    return (burst + cap + body) * scale
+
+
+def keystroke(rng, big=False):
+    """キーボードの1打（構造上の自然な音）：
+    ①押し込んで底に当たる「カッ」（主役）
+    ②指を離してばねで戻り、上に当たる小さな「カチ」（0.05〜0.11秒後）
+    ③大きいキー（Enter）はキーキャップが大きいぶん低めに鳴り、支えの金具がかすかにカタつく
+    200Hz未満はほぼ出さない（部品が小さく軽いので、構造上出ない）"""
+    lo = 0.7 if big else 1.0
+    length = int(0.16 * SR)
+    out = np.zeros(length)
+    down = strike(rng, int(0.03 * SR), rng.uniform(0.8, 1.0) * (1.3 if big else 1.0), lo)
+    out[:len(down)] += down
+    if big:  # 金具の揺れ：小さい当たりが2〜3回
+        for _ in range(int(rng.integers(2, 4))):
+            k = int(rng.uniform(0.004, 0.014) * SR)
+            r = strike(rng, int(0.01 * SR), rng.uniform(0.12, 0.25), 1.3)
+            out[k:k + len(r)] += r
+    k = int(rng.uniform(0.05, 0.11) * SR)
+    up = strike(rng, int(0.02 * SR), rng.uniform(0.25, 0.4), 1.15 * lo)
+    out[k:k + len(up)] += up
+    # 静かな部屋のごくわずかな響き（7〜13ミリ秒後の小さなこだま）
+    for dly, g in ((0.007, 0.12), (0.013, 0.07)):
+        k = int(dly * SR)
+        out[k:] += lowpass(out[:-k], 4) * g
+    return out * 0.45  # 一撃より控えめに（タイプ音の一瞬の山が全体で一番大きくならないように）
+
+
+def place(out, sig, t0, n):
+    s0 = int(t0 * SR)
+    if 0 <= s0 < n:
+        out[s0:s0 + len(sig)] += sig[: n - s0]
+
+
 def duration():
     # 辞書カードを打ち終わってから2秒は止めて見せる（tools/render_opening.mjs と同じ計算）
     return max(T["duration"], np.ceil((T["card"] + card_chars() * T["typeStep"] + 2.0) * 24) / 24)
@@ -111,20 +159,17 @@ def main():
     hit += 0.3 * rng.normal(0, 1, k.sum()) * np.exp(-th * 20)
     out[k] += hit
 
-    # タイプ音：古い機械が重く打つ「カタッ」。1文字に1回。
-    # 音程のある成分（澄んだ音）を使うと「ポコポコ」と可愛くなるので、雑音だけで作る：
-    #   低い打撃（こもった雑音）＋ 乾いた打鍵（中域の雑音）＋ ごくわずかな部屋の響き
-    # 毎回、強さ・こもり具合・長さを少しずつ変える
-    key_len = int(0.09 * SR)
-    kt = np.arange(key_len) / SR
+    # タイプ音：キーボードの構造から組み立てる（tools/make_audio.py の keystroke() を参照）
+    parts = [EP["no"], f"■ {EP['word']}（{EP['kana']}）", EP["pos"], EP["def"]]
+    line_starts, j = set(), 0
+    for p in parts:
+        line_starts.add(j)
+        j += len(p)
     for j in range(card_chars()):
-        thud = lowpass(rng.normal(0, 1, key_len), int(rng.integers(50, 80))) * np.exp(-kt * rng.uniform(55, 80)) * 6.0
-        hit = np.diff(lowpass(rng.normal(0, 1, key_len), int(rng.integers(6, 12))), prepend=0)
-        hit *= np.exp(-kt * rng.uniform(250, 400)) * 4.0
-        room = lowpass(rng.normal(0, 1, key_len), 20) * np.exp(-kt * 30) * 0.25
-        key = (thud + hit + room) * 0.11 * rng.uniform(0.7, 1.0)
-        s = int((T["card"] + j * T["typeStep"]) * SR)
-        out[s:s + key_len] += key[: max(0, n - s)]
+        t0 = T["card"] + j * T["typeStep"]
+        if j in line_starts and j > 0:                               # 行が変わる＝Enter（文字の直前に押す）
+            place(out, keystroke(rng, big=True), t0 - rng.uniform(0.05, 0.07), n)
+        place(out, keystroke(rng), t0 + rng.uniform(0.0, 0.012), n)  # 人の打鍵らしく、わずかに遅れる
 
     out = out / max(1e-9, np.abs(out).max()) * 0.85  # 音割れしないよう、最大音量を0.85にそろえる
     path = ROOT / "build" / f"opening_audio_ep{ep_no}.wav"
