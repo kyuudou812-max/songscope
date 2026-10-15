@@ -62,8 +62,7 @@ def typewriter_strike(rng):
     """古い手動タイプライターの1打（構造から組み立てる）：
     ①活字が紙越しにゴムの胴（プラテン）を叩く「タッ」：乾いた高めの当たり＋ゴムの厚み（主役）
     ②鉄の本体の短い金属の余韻
-    ③紙送りの爪が1目盛り進む「チッ」（叩いた10〜20ミリ秒後）
-    ④活字の腕が定位置に戻る小さな「カタ」（60〜90ミリ秒後）
+    （構造上は③紙送りの「チッ」④活字の腕の戻りもあるが、音の密度が上がりすぎるので鳴らさない）
     澄んだ音（サイン波）や短い遅れのこだまは使わない（人工的・金属的なうねりになって気持ち悪く聞こえるため）"""
     L = int(0.16 * SR)
     out = np.zeros(L)
@@ -74,12 +73,8 @@ def typewriter_strike(rng):
                 rng.uniform(25, 40), rng.uniform(70, 110)) * 0.035
     for sig in (slap, platen, body):
         out[:len(sig)] += sig * force
-    k = int(rng.uniform(0.010, 0.020) * SR)                          # 紙送りの爪
-    esc = bandnoise(rng, int(0.008 * SR), 3500, 8000, 900) * 0.3
-    out[k:k + len(esc)] += esc
-    k = int(rng.uniform(0.060, 0.090) * SR)                          # 活字の腕が戻る
-    back = bandnoise(rng, int(0.02 * SR), 600, 2500, 500) * 0.22
-    out[k:k + len(back)] += back
+    # ③紙送りの爪 ④活字の腕の戻り は入れない（聞き比べで決定）。
+    # 1文字に小さな音が3つ鳴ると1秒に約36回になり、虫がうごめくような気持ち悪さになったため
     return out
 
 
@@ -189,7 +184,7 @@ def main():
     hit += 0.3 * rng.normal(0, 1, k.sum()) * np.exp(-th * 20)
     out[k] += hit
 
-    # タイプ音：古い手動タイプライター。1文字に1打、行が変わるところで紙送り
+    # タイプ音：古い手動タイプライターの「タッ」を1文字に1つだけ（聞き比べでB案に決定）
     parts = [EP["no"], f"■ {EP['word']}（{EP['kana']}）", EP["pos"], EP["def"]]
     line_starts, j = set(), 0
     for p in parts:
@@ -198,8 +193,6 @@ def main():
     typing = np.zeros(n)
     for j in range(card_chars()):
         t0 = T["card"] + j * T["typeStep"]
-        if j in line_starts and j > 0:                               # 行が変わる＝紙送り（文字の直前）
-            place(typing, typewriter_linefeed(rng), t0 - 0.075, n)
         place(typing, typewriter_strike(rng), t0 + rng.uniform(0.0, 0.010), n)  # 人の打鍵らしく、わずかに遅れる
     out += room(typing, rng) * 1.1
 
