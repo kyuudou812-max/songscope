@@ -6,7 +6,7 @@
 <!--
   オープニングの画面を HTML で組み、時刻 t を指定して1コマずつ描く（v3）。
   秒割りは timing.json。書き出し側が setTiming() で渡す。
-  ?layer=all … 全部入りのプレビュー / ?layer=<名前> … その層だけを透明背景で描く（ココフォリア用）
+  ?layer=all … 全部入りのプレビュー / ?layer=<名前>[,<名前>…] … その層だけを透明背景で描く（ココフォリア用）
 
   v3 で入れたこと（research/motion-graphics-and-video-skills.md の改善案）
    1. ドアの隙間（縦の黒い線）を唯一の象徴にする
@@ -55,6 +55,7 @@
 <canvas id="gap"></canvas>
 <div id="gapExtra"></div>
 <div id="flicker" class="layer" style="background:#000"></div>
+<div id="cutblack" class="layer" style="background:#040404"></div>
 <div id="tagline" class="layer"><div></div><div></div></div>
 <div id="slit"></div>
 <div id="title" class="layer" style="filter:url(#ink)">
@@ -80,7 +81,9 @@ const COL_PITCH = 78, TITLE_H = 422;   // 縦書きタイトル1列の高さ（�
 
 const params = new URLSearchParams(location.search);
 const LAYER = params.get("layer") || "all";
-const show = name => LAYER === "all" || LAYER === name;
+// ココフォリア用：?layer=reveal,flicker,cutblack のように、複数の層をまとめて1枚に描ける
+const LAYERS = new Set(LAYER.split(","));
+const show = name => LAYER === "all" || LAYERS.has(name);
 if (LAYER === "all") document.body.classList.add("opaque");
 
 const $ = s => document.querySelector(s);
@@ -165,15 +168,18 @@ window.setTime = function (t, frame) {
   // 背景：隙間を中心に、暗闇が外へ引いていく（ease-out）
   vis("#bg", show("bg") && before);
   const rv = easeOut(span(t, T.bgIn));
-  if (vis("#reveal", show("bg") && before)) {
+  if (vis("#reveal", show("reveal") && before)) {
     const r0 = -50 + 140 * rv;
     $("#reveal").style.background =
       `radial-gradient(ellipse 60% 90% at ${GAP_CX}px ${GAP_CY}px, rgba(0,0,0,0) ${r0}%, rgba(0,0,0,1) ${r0 + 45}%)`;
   }
 
+  // 蛍光灯の明滅の暗さ。明滅と別の層に描くとき（ココフォリアでは明滅の層より上に来る）は、ここで暗くしておく
+  const dim = FLICKER.get(frame) ?? 0, lit = show("flicker") ? rv : rv * (1 - dim);
+
   // 隙間のざらつき
-  if (vis("#gap", show("gap") && before)) drawGap(t, frame, rv);
-  if (vis("#dust", show("dust") && before)) drawDust(t, rv);
+  if (vis("#gap", show("gap") && before)) drawGap(t, frame, lit);
+  if (vis("#dust", show("dust") && before)) drawDust(t, lit);
 
   // 隙間がわずかに広がる（話が進むほど）
   // 隙間が広がる向き：ドアの板がある側（layout.json の gap.grow）へ広げる
@@ -184,9 +190,11 @@ window.setTime = function (t, frame) {
   }
 
   // 蛍光灯の明滅：切れかけた蛍光灯のように、長さも暗さも点き直しも毎回ばらばら（tools/make_flicker.py）
-  const dim = FLICKER.get(frame) ?? 0;
   vis("#flicker", show("flicker") && before && dim > 0);
   $("#flicker").style.opacity = dim;
+
+  // カット後の黒（全部入りでは body の黒。ココフォリアでは背景の絵を隠す層として描く）
+  vis("#cutblack", show("cutblack") && !before);
 
   // 一文：1文字ずつ、下から少し浮き上がって現れる（ease-out）
   vis("#tagline", show("tagline") && before);
