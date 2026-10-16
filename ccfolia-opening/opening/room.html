@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>Room</title>
+<!--
+  ココフォリアの部屋で、オープニングの前後に使う止め絵（tools/make_room.py が1枚ずつ書き出す）。
+  ?view=wait  … 待機：隙間の縦線だけがかすかに見える（OPの象徴を先に置いておく）
+  ?view=break … 休憩：同じ縦線と「休憩中」
+  ?view=end   … 終了：OPと同じ位置のタイトル＋「第N話　終」（setEnd で話数を渡す）
+  位置は opening/layout.json（隙間の位置）から決める。OPのタイトルと同じ場所に出る。
+-->
+<style>
+  @font-face { font-family: "Mincho"; src: url("../fonts/ShipporiMincho-Medium.ttf"); }
+  @font-face { font-family: "Gothic"; src: url("../fonts/ZenKakuGothicNew-Medium.ttf"); }
+  html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; background: #040404; }
+  .abs { position: absolute; }
+  #slit { width: 2px; background: #d9d3cd; opacity: .32; }
+  #note { font-family: "Mincho"; font-size: 22px; letter-spacing: .3em; color: #8d857e; writing-mode: vertical-rl; }
+  #title .col { position: absolute; writing-mode: vertical-rl; font-family: "Gothic"; font-size: 58px;
+                letter-spacing: .04em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
+  #title .sub { position: absolute; writing-mode: vertical-rl; text-orientation: upright; font-family: "Gothic";
+                font-size: 19px; letter-spacing: .32em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
+  #end { font-family: "Mincho"; font-size: 26px; letter-spacing: .3em; color: #b9b1aa; }
+</style>
+</head>
+<body>
+<div id="slit" class="abs"></div>
+<div id="note" class="abs"></div>
+<div id="title" class="abs" style="inset:0">
+  <div class="sub">クトゥルフ神話TRPG</div>
+  <div class="col">暗闇の向こうに</div><div class="col">誰も居ない事を</div><div class="col">証明して下さい</div>
+</div>
+<div id="end" class="abs"></div>
+<script>
+const COL_PITCH = 78, TITLE_H = 422;   // opening/index.html と同じ
+const view = new URLSearchParams(location.search).get("view");
+const $ = s => document.querySelector(s);
+window.setLayout = layout => {
+  const g = layout.gap, cx = (g.x0 + g.x1) / 2, cy = (g.y0 + g.y1) / 2, top = Math.round(cy - TITLE_H / 2);
+  // 縦線：OPで黒へ切り替わった直後と同じ位置・長さ
+  Object.assign($("#slit").style, { left: (cx - 1) + "px", top: g.y0 + "px", height: (g.y1 - g.y0) + "px" });
+  Object.assign($("#note").style, { left: (cx + 40) + "px", top: (g.y1 - 4) + "px", transform: "translateY(-100%)" });
+  [...document.querySelectorAll("#title .col")].forEach((c, k) =>
+    Object.assign(c.style, { left: (cx + (1 - k) * COL_PITCH) + "px", top: top + "px" }));
+  Object.assign($("#title .sub").style, { left: (cx + COL_PITCH + 52) + "px", top: (top + 6) + "px" });
+  Object.assign($("#end").style, { left: "90px", top: (top + TITLE_H - 30) + "px" });
+  $("#slit").style.display = view === "end" ? "none" : "";
+  $("#note").style.display = view === "end" ? "none" : "";
+  $("#title").style.display = view === "end" ? "" : "none";
+  $("#end").style.display = view === "end" ? "" : "none";
+  $("#note").textContent = view === "break" ? "休憩中" : "まもなく始まります";
+};
+window.setEnd = no => { $("#end").textContent = `${no}　終`; };
+</script>
+</body>
+</html>

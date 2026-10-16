@@ -34,7 +34,7 @@ CoCシナリオ「暗闇の向こうに誰も居ない事を証明して下さ�
 | 3〜4 | 演出の研究 | `TECHNIQUES.md`（演出サンプル14種）、`../research/motion-graphics-and-video-skills.md`（動き・編集・音・色の勉強ノート） | 済 |
 | 4〜5 | 絵コンテ | `STORYBOARD.md`（v5、話ごとの変化表つき）。秒割りは `opening/timing.json`、位置は `opening/layout.json`、映像は `tools/render_opening.mjs`、音は `tools/make_audio.py`、話ごとの変化は `opening/escalation.json`、仮の背景は `tools/make_bg_placeholder.py` | v5 |
 | 6〜10 | 素材制作 | 各層の素材と確認用プレビュー動画を作る。`tools/export_ccfolia.py` で全9話分を書き出す | 書き出し済み・実機確認待ち |
-| 10〜12 | 組み込み | ココフォリアにシーンを組む。手順は `CCFOLIA-SETUP.md` | 手順書あり |
+| 10〜12 | 組み込み | ココフォリアにシーンを組む。OPは `CCFOLIA-SETUP.md`、部屋全体（待機・探索・休憩・終了）は `ROOM-SETUP.md`（素材は `tools/make_room.py`） | 手順書あり |
 | 12〜13 | 事前読み込みと動作確認 | 初回のカクつき対策、別のPCやスマホでの確認 | |
 | 14 | 通し稽古と仕上げ | 本番と同じ流れで流して調整する | |
 
@@ -45,7 +45,9 @@ CoCシナリオ「暗闇の向こうに誰も居ない事を証明して下さ�
 - `tools/` … 素材を生成するスクリプト
 - `opening/index.html` … オープニングの画面（文字・動き）を HTML で組んだもの。`tools/render_opening.mjs` で1コマずつ書き出す（`--layer` で層ごとに透明背景でも書き出せる）
 - `STORYBOARD.md` … 絵コンテ・層の分け方・背景画像の指示文
-- `CCFOLIA-SETUP.md` … ココフォリアでのシーンの組み方と流し方
+- `CCFOLIA-SETUP.md` … ココフォリアでのOPのシーンの組み方と流し方
+- `ROOM-SETUP.md` … OPが浮かないための部屋全体の構成（待機・探索・休憩・終了）
+- `opening/room.html` … 待機・休憩・終了の止め絵
 - `test-results.md` … 技術検証の結果
 - `fonts/`, `build/`, `episodes.local.json` … git の対象外（フォントは Google Fonts から取得。辞書カードの文面はシナリオ本文のため入れない）
 
