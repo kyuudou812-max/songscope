@@ -121,6 +121,9 @@ window.setLayout = layout => {
   cols.forEach((c, k) => Object.assign(c.style, { left: (GAP_CX + (1 - k) * COL_PITCH) + "px", top: TITLE_TOP + "px" }));
   Object.assign($("#title .sub").style, { left: (GAP_CX + COL_PITCH + 52) + "px", top: (TITLE_TOP + 6) + "px" });
   Object.assign(gapCv.style, { left: GAP.x0 + "px", top: GAP.y0 + "px" });
+  // 辞書カード：タイトルと重ならない側に置く（隙間が画面の右寄りなら左側へ）
+  $("#card").style.left = (GAP_CX > 600 ? 90 : 730) + "px";
+  if (layout.bg) $("#bg").src = layout.bg;
   gapCv.width = GAP.x1 - GAP.x0; gapCv.height = GAP.y1 - GAP.y0;
   // 塵：蛍光灯の下の空間にだけ、ごくわずかに漂わせる（新海誠：止まった画面にも小さな動き）
   const r = rng(77), lx = (LAMP.x0 + LAMP.x1) / 2;
@@ -173,9 +176,12 @@ window.setTime = function (t, frame) {
   if (vis("#dust", show("dust") && before)) drawDust(t, rv);
 
   // 隙間がわずかに広がる（話が進むほど）
-  if (vis("#gapExtra", show("gap") && before && ESC.gapExtra > 0))
-    Object.assign($("#gapExtra").style, { left: GAP.x1 + "px", top: GAP.y0 + "px",
+  // 隙間が広がる向き：ドアの板がある側（layout.json の gap.grow）へ広げる
+  if (vis("#gapExtra", show("gap") && before && ESC.gapExtra > 0)) {
+    const gx = GAP.grow === "left" ? GAP.x0 - ESC.gapExtra : GAP.x1;
+    Object.assign($("#gapExtra").style, { left: gx + "px", top: GAP.y0 + "px",
                                           width: ESC.gapExtra + "px", height: (GAP.y1 - GAP.y0) + "px", opacity: rv });
+  }
 
   // 蛍光灯の明滅：切れかけた蛍光灯のように、長さも暗さも点き直しも毎回ばらばら（tools/make_flicker.py）
   const dim = FLICKER.get(frame) ?? 0;

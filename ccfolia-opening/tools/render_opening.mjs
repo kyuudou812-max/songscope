@@ -3,6 +3,7 @@
 // 使い方:
 //   node tools/render_opening.mjs --ep 1 --layer all            → build/frames_all_ep1/
 //   node tools/render_opening.mjs --ep 1 --layer title --from 8 --to 15
+//   node tools/render_opening.mjs --ep 1 --layout build/bgcand/layout1.json --out cand1   （背景の候補を試す）
 // layer=all 以外は透明背景で書き出す（ココフォリア用の層）。
 import { createRequire } from "node:module";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
@@ -21,7 +22,7 @@ const layer = args.layer ?? "all";
 const fps = Number(args.fps ?? 24);
 const from = Number(args.from ?? 0);
 const timing = JSON.parse(readFileSync(join(ROOT, "opening", "timing.json"), "utf8"));
-const layout = JSON.parse(readFileSync(join(ROOT, "opening", "layout.json"), "utf8"));
+const layout = JSON.parse(readFileSync(join(ROOT, args.layout ?? join("opening", "layout.json")), "utf8"));
 const out = join(ROOT, "build", args.out ?? `frames_${layer}_ep${ep}`);
 
 const episodes = JSON.parse(readFileSync(join(ROOT, "episodes.local.json"), "utf8"));
@@ -42,6 +43,7 @@ await page.evaluate(async ([e, tm, lo, es, fl]) => { await document.fonts.ready;
                                                   window.setLayout(lo); window.setEpisode(e); },
                     [episodes[ep], timing, layout, escalation, flicker]);
 await page.waitForLoadState("networkidle");
+await page.evaluate(() => document.querySelector("#bg").decode());
 
 const first = Math.round(from * fps), last = Math.round(to * fps);
 for (let f = first; f < last; f++) {
