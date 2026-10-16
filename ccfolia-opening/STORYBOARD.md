@@ -73,4 +73,7 @@ v3 の根拠は `research/motion-graphics-and-video-skills.md`、v4 の根拠は
 
 - 作った画像は 1920×1080 か 1280×720 で保存する
 - 画像が決まったら、隙間と蛍光灯の位置を `opening/layout.json` に合わせる（タイトルの位置・塵・暗闇の引き方がそこから決まる）
-- 仮の背景は `tools/make_bg_placeholder.py` で作っている
+- **採用した背景**：1枚目（ペン画・赤茶）。元の画像は `assets/bg_corridor_original.png`（1672×941）、1280×720 に縮めたものが `opening/bg.png`。位置は `opening/layout.json` に合わせ済み（隙間 x664〜689・y251〜448、ドアの板の側＝左へ広がる）
+- 2枚目（アニメ塗り）は、隙間の足もとに中からの光が漏れているのと、窓の外の青空と窓明かりが目を引くため見送った
+- 辞書カードは、隙間が画面の右寄りなのでタイトルと重ならない左側に置く
+- 仮の背景は `tools/make_bg_placeholder.py` で作れる

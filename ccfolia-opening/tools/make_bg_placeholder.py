@@ -3,10 +3,10 @@
 本番は ChatGPT などで作った絵に差し替える。構図の考え方は STORYBOARD.md の指示文と同じ。
   - 遠くから広く撮る（黒沢清・イット・フォローズ）：ドアは小さく、周りに空間を残す
   - 光には理由を（ディーキンス）：手前の天井の蛍光灯だけが光源。奥ほど暗く、隙間が一番暗い
-ドアの隙間などの位置は opening/layout.json に書き出し、映像側がそれを読む。
+ドアの隙間などの位置は build/layout_placeholder.json に書き出す（--layout で試せる）。
 
 使い方: python3 make_bg_placeholder.py
-出力: build/bg_placeholder.png, opening/layout.json
+出力: build/bg_placeholder.png, build/layout_placeholder.json（本番の背景は opening/bg.png と opening/layout.json）
 """
 import json
 from pathlib import Path
@@ -69,12 +69,13 @@ def main():
     out.save(ROOT / "build" / "bg_placeholder.png")
 
     layout = {
-        "_comment": "背景の絵に合わせた位置（px、1280×720基準）。本番の背景に差し替えたら、ここを合わせる。",
+        "_comment": "仮の背景に合わせた位置（px、1280×720基準）。render_opening.mjs --layout build/layout_placeholder.json で使う。",
+        "bg": "../build/bg_placeholder.png",
         "gap": {"x0": GAP[0], "x1": GAP[2], "y0": GAP[1], "y1": GAP[3]},
         "lamp": {"x0": LAMP[0], "y0": LAMP[1], "x1": LAMP[2], "y1": LAMP[3]},
     }
-    (ROOT / "opening" / "layout.json").write_text(json.dumps(layout, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print("build/bg_placeholder.png, opening/layout.json")
+    (ROOT / "build" / "layout_placeholder.json").write_text(json.dumps(layout, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print("build/bg_placeholder.png, build/layout_placeholder.json")
 
 
 if __name__ == "__main__":
