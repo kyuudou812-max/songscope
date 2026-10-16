@@ -28,6 +28,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 OUT = BUILD / "ccfolia"
+FPS = json.loads((ROOT / "opening" / "timing.json").read_text(encoding="utf-8"))["fps"]   # 技術検証で24より30がなめらかだった
 LIMIT = 5 * 1024 * 1024          # PRO の1ファイルの上限
 DARK = "reveal,flicker,cutblack"
 PANEL = "dust,gap,tagline,title,card"
@@ -49,7 +50,7 @@ def render(ep, layer, name):
 
 def webp(src, dst, *vf):
     # 可逆圧縮：文字がくっきりし、暗いグラデーションの縞も出ず、この内容では非可逆の画質90より小さい
-    run("ffmpeg", "-loglevel", "error", "-y", "-framerate", "24", "-i", str(src / "f%04d.png"), *vf,
+    run("ffmpeg", "-loglevel", "error", "-y", "-framerate", str(FPS), "-i", str(src / "f%04d.png"), *vf,
         "-c:v", "libwebp_anim", "-lossless", "1", "-compression_level", "6", "-loop", "1", str(dst))
 
 

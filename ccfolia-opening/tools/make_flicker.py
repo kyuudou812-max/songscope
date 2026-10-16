@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
-FPS = 24
+FPS = json.loads((ROOT / "opening" / "timing.json").read_text(encoding="utf-8"))["fps"]
 WINDOW = (3.2, 7.3)        # 明滅してよい時間帯（一文の途中〜カットの手前）
 MIN_GAP = 0.75             # 明滅と明滅の間隔（秒）。1秒3回以内かどうかは別に確かめる
 
@@ -31,7 +31,7 @@ def event(rng):
 
 
 def dips_per_second_ok(timeline):
-    """どの1秒（24コマ）をとっても、暗くなり始める回数が3回以下か"""
+    """どの1秒（FPSコマ）をとっても、暗くなり始める回数が3回以下か"""
     starts = [f for f in range(1, len(timeline)) if timeline[f] > 0.2 >= timeline[f - 1]]
     return all(sum(1 for s in starts if a <= s < a + FPS) <= 3 for a in range(len(timeline)))
 

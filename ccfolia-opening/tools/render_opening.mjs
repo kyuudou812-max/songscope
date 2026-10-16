@@ -19,9 +19,9 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((acc, v, i, a) =>
   v.startsWith("--") ? [...acc, [v.slice(2), a[i + 1]]] : acc, []));
 const ep = args.ep ?? "1";
 const layer = args.layer ?? "all";
-const fps = Number(args.fps ?? 24);
 const from = Number(args.from ?? 0);
 const timing = JSON.parse(readFileSync(join(ROOT, "opening", "timing.json"), "utf8"));
+const fps = Number(args.fps ?? timing.fps);
 const layout = JSON.parse(readFileSync(join(ROOT, args.layout ?? join("opening", "layout.json")), "utf8"));
 const out = join(ROOT, "build", args.out ?? `frames_${layer}_ep${ep}`);
 
@@ -31,7 +31,7 @@ const flicker = JSON.parse(readFileSync(join(ROOT, "opening", "flicker.json"), "
 // 長さ：辞書カードを打ち終わってから2秒は止めて見せる（最短は timing.duration）
 const e0 = episodes[ep];
 const cardChars = [e0.no, `■ ${e0.word}（${e0.kana}）`, e0.pos, e0.def].reduce((n, s) => n + [...s].length, 0);
-const duration = Math.max(timing.duration, Math.ceil((timing.card + cardChars * timing.typeStep + 2.0) * 24) / 24);
+const duration = Math.max(timing.duration, Math.ceil((timing.card + cardChars * timing.typeStep + 2.0) * fps) / fps);
 const to = Number(args.to ?? duration);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });

@@ -24,8 +24,8 @@ FLICKER = json.loads((ROOT / "opening" / "flicker.json").read_text(encoding="utf
 
 
 def snap(x):
-    # 音と映像を合わせる時刻はコマの区切り（1/24秒）に置く。opening/index.html と同じ丸め方
-    return np.floor(x * 24 + 0.5) / 24
+    # 音と映像を合わせる時刻はコマの区切り（1/fps秒）に置く。opening/index.html と同じ丸め方
+    return np.floor(x * T["fps"] + 0.5) / T["fps"]
 
 
 def card_chars():
@@ -113,7 +113,7 @@ def place(out, sig, t0, n):
 
 def duration():
     # 辞書カードを打ち終わってから2秒は止めて見せる（tools/render_opening.mjs と同じ計算）
-    return max(T["duration"], np.ceil((T["card"] + card_chars() * T["typeStep"] + 2.0) * 24) / 24)
+    return max(T["duration"], np.ceil((T["card"] + card_chars() * T["typeStep"] + 2.0) * T["fps"]) / T["fps"])
 
 
 def main():
@@ -135,7 +135,7 @@ def main():
     lamp = np.ones(n)
     dims = dict((f, d) for f, d in FLICKER)
     for f, d in FLICKER:
-        a, b = int(f / 24 * SR), int((f + 1) / 24 * SR)
+        a, b = int(f / T["fps"] * SR), int((f + 1) / T["fps"] * SR)
         lamp[a:b] = 1 - d
         # ジジッという放電の雑音（暗いコマの間だけ）
         out[a:b] += rng.normal(0, 1, b - a) * 0.05 * d * (0.5 + rng.random())

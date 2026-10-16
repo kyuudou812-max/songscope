@@ -111,7 +111,7 @@ const cols = [...document.querySelectorAll("#title .col")];
 const gapCv = $("#gap");
 let DUST = [];
 let ESC = { gapExtra: 0, flickers: [], breath: 0.12, dust: 120 };
-const snap = t => Math.floor(t * 24 + 0.5) / 24;   // 音と合わせる時刻はコマの区切りに置く
+const snap = t => Math.floor(t * T.fps + 0.5) / T.fps;   // 音と合わせる時刻はコマの区切りに置く
 window.setEscalation = e => { ESC = e; };
 let FLICKER = new Map();   // コマ番号 → 暗さ（opening/flicker.json）
 window.setFlicker = frames => { FLICKER = new Map(frames); };
@@ -228,7 +228,7 @@ window.setTime = function (t, frame) {
 
   // 辞書カード：1文字ずつ打ち出す（等速＝機械的な質感）
   vis("#card", show("card") && !before);
-  let n = t >= T.card - 1e-6 ? Math.floor((t - T.card) / T.typeStep + 1e-6) + 1 : 0;  // 1e-6 は小数の誤差で1文字ずれないため
+  let n = t >= T.card - 1e-6 ? Math.floor((t - T.card) / T.typeStep + 1e-3) + 1 : 0;  // 1e-3 は小数の誤差（typeStep=0.066667 など）で1文字ずれないため
   const total = cardParts.reduce((s, [, txt]) => s + [...txt].length, 0), typed = n;
   for (const [sel, txt] of cardParts) {
     const chars = [...txt], k = Math.max(0, Math.min(chars.length, n));
