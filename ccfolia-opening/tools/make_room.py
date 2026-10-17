@@ -29,6 +29,7 @@ OUT = BUILD / "ccfolia" / "room"
 T = json.loads((ROOT / "opening" / "timing.json").read_text(encoding="utf-8"))
 EPISODES = json.loads((ROOT / "episodes.local.json").read_text(encoding="utf-8"))
 SR = 48000
+CARD_W, CARD_H = 570, 360          # 辞書カードの大きさ（ココフォリアのパネル 19×12 マスと同じ比率）
 
 
 def dither_jpg(img, path, sigma=1.5, seed=1):
@@ -101,11 +102,13 @@ def cards():
                         "--to", f"{t + 1 / T['fps']:.3f}", "--out", f"room_card_ep{ep}"], check=True, cwd=ROOT,
                        stdout=subprocess.DEVNULL)
         im = Image.open(BUILD / f"room_card_ep{ep}" / "f0000.png").convert("RGBA")
-        x0, y0, x1, y1 = im.getbbox()
+        text = im.crop(im.getbbox())
+        # 全話同じ大きさ（19:12）にそろえる。ココフォリアでパネルの大きさを1つに決めても、話によって縦横比がゆがまない
         pad = 28
-        card = im.crop((x0 - pad, y0 - pad, x1 + pad, y1 + pad))
-        back = Image.new("RGBA", card.size, (4, 4, 4, 150))     # 何の上に置いても読めるよう、薄い黒を敷く
-        Image.alpha_composite(back, card).save(OUT / f"21_card_ep{ep}.png")
+        assert text.width + 2 * pad <= CARD_W and text.height + 2 * pad <= CARD_H, (ep, text.size)
+        card = Image.new("RGBA", (CARD_W, CARD_H), (4, 4, 4, 150))  # 何の上に置いても読めるよう、薄い黒を敷く
+        card.alpha_composite(text, (pad, pad))
+        card.save(OUT / f"21_card_ep{ep}.png")
 
 
 def ambient():

@@ -12,7 +12,7 @@
   01_bg_corridor.jpg       … 背景（細かい粒子入り）
   epN/02_dark_epN.webp     … 前景：暗闇が引く・蛍光灯の明滅・カット後の黒（640×360、1回再生）
   epN/03_panel_epN.webp    … マーカーパネル：塵・隙間・一文・タイトル・辞書カード（1280×720、1回再生）
-  epN/04_sound_epN.mp3     … BGM：オープニングの音
+  epN/04_sound_epN.mp3     … BGM：オープニングの音＋無音10分（ループで頭に戻らないように）
 
 使い方: python3 tools/export_ccfolia.py [話数 ...]   （省略時は全9話）
 """
@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
 OUT = BUILD / "ccfolia"
 FPS = json.loads((ROOT / "opening" / "timing.json").read_text(encoding="utf-8"))["fps"]   # 技術検証で24より30がなめらかだった
+PAD_SEC = 600                    # OPの音のあとにつなげる無音（秒）
 LIMIT = 5 * 1024 * 1024          # PRO の1ファイルの上限
 DARK = "reveal,flicker,cutblack"
 PANEL = "dust,gap,tagline,title,card"
@@ -62,8 +63,11 @@ def episode(ep):
     render(ep, PANEL, f"cc_panel_ep{ep}")
     webp(BUILD / f"cc_panel_ep{ep}", d / f"03_panel_ep{ep}.webp")
     run("python3", "tools/make_audio.py", ep)
+    # BGMはループするので、OPのあとに無音を10分つなげて、頭から鳴り直さないようにする。
+    # カットインの効果音なら1回で止まるが、シーンの切り替えとは別のクリックになり、映像と音がずれる
+    # （可変ビットレートにすると、無音の部分はほとんど容量を食わない）
     run("ffmpeg", "-loglevel", "error", "-y", "-i", str(BUILD / f"opening_audio_ep{ep}.wav"),
-        "-c:a", "libmp3lame", "-b:a", "192k", str(d / f"04_sound_ep{ep}.mp3"))
+        "-af", f"apad=whole_dur={PAD_SEC}", "-c:a", "libmp3lame", "-q:a", "2", str(d / f"04_sound_ep{ep}.mp3"))
     return [(p.relative_to(OUT), p.stat().st_size) for p in sorted(d.iterdir())]
 
 
