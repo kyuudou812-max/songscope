@@ -9,7 +9,7 @@ BGM（mediaRef / soundRef）は書き出しに含まれないため、ここで�
 やること:
   - 第3話まで作ってある「OP第N話」「探索第N話」「終了第N話」をお手本に、第4話〜第9話を足す
   - 終了第N話の背景を、その話の「第N話　終」の絵にそろえる
-  - 探索の辞書カードを、全話同じ大きさの新しいカード（21_card_epN.png）に差し替える（パネルの大きさはそのまま）
+  - 探索の辞書カードを、全話同じ大きさの新しいカード（21_card_epN.webp）に差し替え、パネルを 38×24 マスにする
   - シーンの並び順を「待機・休憩・第1話（OP・探索・終了）・第2話…」に整える
   - どこからも使われなくなった画像を外す
 
@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CC = ROOT / "build" / "ccfolia"
 TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
 ID_CHARS = string.ascii_letters + string.digits
+CARD_SIZE = (38, 24)              # 探索の辞書カードのパネル（マス）。19×12 では字が小さすぎた
 
 
 def episode_of(name):
@@ -59,7 +60,7 @@ def main(src, dst):
 
     def assets(ep):
         return {"dark": add(CC / f"ep{ep}" / f"02_dark_ep{ep}.webp"), "panel": add(CC / f"ep{ep}" / f"03_panel_ep{ep}.webp"),
-                "card": add(CC / "room" / f"21_card_ep{ep}.png"), "end": add(CC / "room" / f"40_end_ep{ep}.jpg")}
+                "card": add(CC / "room" / f"21_card_ep{ep}.webp"), "end": add(CC / "room" / f"40_end_ep{ep}.jpg")}
 
     def apply(kind, scene, a):
         if kind == "OP":
@@ -69,6 +70,7 @@ def main(src, dst):
         elif kind == "探索":
             for m in scene["markers"].values():
                 m["imageUrl"] = a["card"]
+                m["width"], m["height"] = CARD_SIZE
         elif kind == "終了":
             scene["backgroundUrl"] = a["end"]
 

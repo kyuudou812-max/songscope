@@ -9,7 +9,7 @@
 出力（build/ccfolia/room/）:
   10_wait.jpg / 11_grain_loop.webp   … 待機（背景／前景）
   20_play.jpg                        … 探索の背景
-  21_card_epN.png                    … 探索に置く辞書カード（マーカーパネル）
+  21_card_epN.webp                   … 探索に置く辞書カード（マーカーパネル）
   22_ambient_hum_loop.mp3            … 探索のBGM（60秒でつながるループ）
   30_break.jpg                       … 休憩の背景
   40_end_epN.jpg                     … 終了の背景
@@ -106,9 +106,15 @@ def cards():
         # 全話同じ大きさ（19:12）にそろえる。ココフォリアでパネルの大きさを1つに決めても、話によって縦横比がゆがまない
         pad = 28
         assert text.width + 2 * pad <= CARD_W and text.height + 2 * pad <= CARD_H, (ep, text.size)
-        card = Image.new("RGBA", (CARD_W, CARD_H), (4, 4, 4, 150))  # 何の上に置いても読めるよう、薄い黒を敷く
+        card = Image.new("RGBA", (CARD_W, CARD_H), (0, 0, 0, 0))
         card.alpha_composite(text, (pad, pad))
-        card.save(OUT / f"21_card_ep{ep}.png")
+        # 読みやすさのため、文字の形に沿ったぼんやりした影だけを敷く。四角い黒地は背景から浮いて見えるので使わない
+        halo = card.getchannel("A").filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(12))
+        halo = halo.point(lambda v: min(255, int(v * 1.6)))
+        shadow = Image.new("RGBA", card.size, (4, 4, 4, 0))
+        shadow.putalpha(halo)
+        # PNG はココフォリアで256色に変換されて影に縞が出るため、そのまま保たれる可逆 WebP にする
+        Image.alpha_composite(shadow, card).save(OUT / f"21_card_ep{ep}.webp", lossless=True)
 
 
 def ambient():
