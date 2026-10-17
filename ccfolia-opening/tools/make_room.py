@@ -13,7 +13,7 @@
   22_ambient_hum_loop.mp3            … 探索のBGM（60秒でつながるループ）
   30_break.jpg                       … 休憩の背景
   40_end_epN.jpg                     … 終了の背景
-  50_slot_pc.webp / 51_slot_npc.webp … PC・NPCの駒の置き場（スクリーンパネル）
+  50_slot_pcN.webp / 51_slot_npcN.webp … PC1〜4・NPC1〜2の駒の置き場（スクリーンパネル、ラベル入り）
 
 使い方: python3 tools/make_room.py
 """
@@ -143,23 +143,41 @@ def ambient():
 
 
 def slots():
-    """駒の置き場（スクリーンパネル）：蛍光灯の下に立っているような淡い光の円すいと、足もとの光だまり。
-    四角い枠は暗い背景から浮くので描かない。32×46マス（1マス10px）で、駒サイズ44の全身立ち絵が収まる"""
-    W, H = 320, 460
+    """駒の置き場（スクリーンパネル）：蛍光灯の下に立っているような淡い光の円すいと、足もとの光だまり、その下に小さなラベル。
+    四角い枠は暗い背景から浮くので描かない。32×46マス（1マス10px）で、駒サイズ40の全身立ち絵が光だまりに立つ。
+    ラベルは頭の上（光の出どころ）に置く。足もとの下はココフォリアが駒の名前を出すので重なる。
+    書体と色は STYLE.md のとおり（ラベルはしっぽり明朝、控えめな文字の白。光は蛍光灯の色）"""
+    from PIL import ImageDraw, ImageFont
+    W, H, FLOOR = 320, 460, 434                       # FLOOR＝足もと（光だまりの中心）
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    for tint, light, name in (((236, 214, 184), 1.0, "50_slot_pc"),     # PC：蛍光灯と同じ暖かい白
-                              ((160, 170, 185), 0.6, "51_slot_npc")):   # NPC：少し暗く、冷たい
-        half = 40 + (yy / H) * 110
-        cone = np.clip(1 - np.abs(xx - W / 2) / half, 0, 1) ** 1.6 * (0.35 + 0.65 * (1 - yy / H)) * light
-        fy = H - 26
-        pool = np.exp(-(((xx - W / 2) / 105) ** 2 + ((yy - fy) / 16) ** 2)) * light * 1.4
-        shadow = np.exp(-(((xx - W / 2) / 70) ** 2 + ((yy - fy) / 7) ** 2)) * 0.55
+    font = ImageFont.truetype(str(ROOT / "fonts" / "ShipporiMincho-Medium.ttf"), 22)
+    labels = [("50_slot_pc", f"PC {k}", 1.0) for k in range(1, 5)] + [("51_slot_npc", f"NPC {k}", 0.6) for k in range(1, 3)]
+    for name, label, light in labels:                 # NPC は同じ色のまま、光を弱くして沈める
+        top = 0.35 + 0.65 * (1 - np.clip(yy / FLOOR, 0, 1))
+        half = 40 + np.clip(yy / FLOOR, 0, 1) * 110
+        cone = np.clip(1 - np.abs(xx - W / 2) / half, 0, 1) ** 1.6 * top * light
+        pool = np.exp(-(((xx - W / 2) / 105) ** 2 + ((yy - FLOOR) / 16) ** 2)) * light * 1.4
+        shadow = np.exp(-(((xx - W / 2) / 70) ** 2 + ((yy - FLOOR) / 7) ** 2)) * 0.55
         alpha = np.clip(cone * 0.10 + pool * 0.22, 0, 1)
-        out_a = alpha + shadow * (1 - alpha)                           # 光の上に、足もとの影を黒で重ねる
-        rgb = np.array(tint, np.float32)[None, None, :] * (alpha / np.maximum(out_a, 1e-6))[..., None]
+        out_a = alpha + shadow * (1 - alpha)          # 光の上に、足もとの影を黒で重ねる
+        rgb = np.array((236, 214, 184), np.float32)[None, None, :] * (alpha / np.maximum(out_a, 1e-6))[..., None]
         out_a = np.clip(out_a + np.random.default_rng(3).normal(0, 0.004, out_a.shape), 0, 1)  # 縞を防ぐ細かい粒子
-        img = np.dstack([np.clip(rgb, 0, 255), out_a * 255]).astype(np.uint8)
-        Image.fromarray(img, "RGBA").save(OUT / f"{name}.webp", lossless=True)
+        img = Image.fromarray(np.dstack([np.clip(rgb, 0, 255), out_a * 255]).astype(np.uint8), "RGBA")
+        # ラベル：頭の上に、字間を空けて小さく。文字の形に沿った影だけを敷く
+        text = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(text)
+        chars = list(label)
+        widths = [d.textlength(c, font=font) for c in chars]
+        gap = 22 * 0.25
+        x = (W - sum(widths) - gap * (len(chars) - 1)) / 2
+        for c, w in zip(chars, widths):
+            d.text((x, 4), c, font=font, fill=(185, 177, 170, 235))   # #b9b1aa
+            x += w + gap
+        halo = text.getchannel("A").filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.GaussianBlur(8))
+        shade = Image.new("RGBA", (W, H), (4, 4, 4, 0))
+        shade.putalpha(halo.point(lambda v: min(255, int(v * 1.4))))
+        img = Image.alpha_composite(Image.alpha_composite(img, shade), text)
+        img.save(OUT / f"{name}{label.split()[1]}.webp", lossless=True)
 
 
 def main():
