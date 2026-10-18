@@ -67,8 +67,9 @@ def main(src, name):
     OUT.mkdir(parents=True, exist_ok=True)
     a = cut_background(Image.open(src))
     lum = a[..., :3] @ np.array([0.299, 0.587, 0.114], np.float32)
-    lo, hi = np.percentile(lum[a[..., 3] > 128], [1, 99.5])
-    lum = np.clip((lum - lo) / max(hi - lo, 1), 0, 1) * 236 + 6   # 真っ白・真っ黒にしない（#eeece8 と #040404 の間）
+    # 明るさは引き伸ばさない（逆光のシルエットのように、わざと暗い絵が明るくなってしまうため）。
+    # 真っ白・真っ黒だけを避ける（#eeece8 と #040404 の間）
+    lum = lum / 255 * 236 + 6
     rgb = lum[..., None] * tone_lut()[lum.astype(int)]
     out = np.dstack([np.clip(rgb, 0, 255), a[..., 3]]).astype(np.uint8)
     img = Image.fromarray(out, "RGBA")
