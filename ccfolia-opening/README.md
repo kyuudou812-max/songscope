@@ -45,6 +45,7 @@ CoCシナリオ「暗闇の向こうに誰も居ない事を証明して下さ�
 - `tools/` … 素材を生成するスクリプト
 - `opening/index.html` … オープニングの画面（文字・動き）を HTML で組んだもの。`tools/render_opening.mjs` で1コマずつ書き出す（`--layer` で層ごとに透明背景でも書き出せる）
 - `STORYBOARD.md` … 絵コンテ・層の分け方・背景画像の指示文
+- `NPC-SETUP.md` … NPCの立ち絵の作り方（人物ごとの一覧と指示文は `npcs.local.md`、git の対象外）
 - `STYLE.md` … 表示物の書体と色（新しく作るものは、ここから選ぶ）
 - `CCFOLIA-SETUP.md` … ココフォリアでのOPのシーンの組み方と流し方
 - `ROOM-SETUP.md` … OPが浮かないための部屋全体の構成（待機・探索・休憩・終了）
