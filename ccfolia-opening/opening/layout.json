@@ -1,5 +1,5 @@
 {
-  "_comment": "背景の絵（opening/bg.png、元は assets/bg_corridor_original.png）に合わせた位置（px、1280×720基準）。gap は元の絵の隙間（タイトルの位置合わせに使う）。doorStages は開き具合の違うドアの絵（assets/door/stageN.png）ごとの隙間の左端。door はドアの絵を元の背景にはめ込む範囲。",
+  "_comment": "背景の絵（opening/bg.png、元は assets/bg_corridor_original.png）に合わせた位置（px、1280×720基準）。gap は元の絵の隙間（タイトルの位置合わせに使う）。doorStages は開き具合の違うドアの絵（assets/door/stageN.png）ごとの隙間の左端。door はドアの絵を元の背景にはめ込む範囲。 ドアの絵は扉の下端が元の絵より約8px上（y440）にあり、その下に二重の敷居が描かれているので、doorStretch で top〜from の行を top〜to へ縦に伸ばし、床は同じ絵のものを使う。",
   "bg": "bg.png",
   "gap": {
     "x0": 664,
@@ -18,12 +18,17 @@
     "x0": 592,
     "y0": 238,
     "x1": 698,
-    "y1": 448
+    "y1": 472
   },
   "doorStages": {
     "1": 679,
     "2": 668,
     "3": 660,
     "4": 645
+  },
+  "doorStretch": {
+    "top": 300,
+    "from": 440.5,
+    "to": 448.5
   }
 }

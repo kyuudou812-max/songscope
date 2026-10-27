@@ -83,6 +83,14 @@ def door(img, ep):
     base = np.asarray(img).astype(np.float32)
     src = np.asarray(Image.open(ROOT / "assets" / "door" / f"stage{stage}.png").convert("RGB")
                      .resize(img.size, Image.LANCZOS)).astype(np.float32)
+    # ドアの絵は扉の下端が元の絵より上で終わり、その下に敷居が二重に描かれている（扉が浮いて見える）。
+    # 扉の下のほうの行だけを縦に伸ばして、下端を元の床の線にそろえる（二重の敷居は押し出されて消える）。床から下はそのまま
+    s = lay["doorStretch"]
+    ys = np.arange(s["top"], int(s["to"]) + 1)
+    sy = s["top"] + (ys - s["top"]) * (s["from"] - s["top"]) / (s["to"] - s["top"])
+    lo = np.floor(sy).astype(int)
+    f = (sy - lo)[:, None, None]
+    src[ys] = src[lo] * (1 - f) + src[lo + 1] * f
     yy, xx = np.mgrid[0:img.size[1], 0:img.size[0]]
     # はめ込む範囲：中は1、外へ6pxかけて0へ
     dist = np.maximum(np.maximum(D["x0"] - xx, xx - D["x1"]), np.maximum(D["y0"] - yy, yy - D["y1"]))
