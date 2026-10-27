@@ -6,7 +6,7 @@
 //   node tools/render_opening.mjs --ep 1 --layout build/bgcand/layout1.json --out cand1   （背景の候補を試す）
 // layer=all 以外は透明背景で書き出す（ココフォリア用の層）。
 import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -25,6 +25,9 @@ const fps = Number(args.fps ?? timing.fps);
 const layout = JSON.parse(readFileSync(join(ROOT, args.layout ?? join("opening", "layout.json")), "utf8"));
 const out = join(ROOT, "build", args.out ?? `frames_${layer}_ep${ep}`);
 
+// 全部入りのプレビューは、その話の背景（ドアの開き具合を焼き込んだもの）があればそれを使う
+const epBg = join(ROOT, "build", "ccfolia", `ep${ep}`, `01_bg_corridor_ep${ep}.jpg`);
+if (layer === "all" && existsSync(epBg)) layout.bg = `../build/ccfolia/ep${ep}/01_bg_corridor_ep${ep}.jpg`;
 const episodes = JSON.parse(readFileSync(join(ROOT, "episodes.local.json"), "utf8"));
 const escalation = JSON.parse(readFileSync(join(ROOT, "opening", "escalation.json"), "utf8")).episodes[ep];
 const flicker = JSON.parse(readFileSync(join(ROOT, "opening", "flicker.json"), "utf8")).episodes[ep].frames;

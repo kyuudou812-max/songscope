@@ -73,24 +73,61 @@ def episode(ep):
     return [(p.relative_to(OUT), p.stat().st_size) for p in sorted(d.iterdir())]
 
 
+def swing_leaf(img, L, e):
+    """ドアの板を、蝶番（左）を軸にこちら側へ開いた形に描き直す（日本の玄関は外開き＝廊下側へ開く）。
+    横に縮めるだけだと「細い板の横に黒い板」に見えたため、開いた角度に合わせて
+      ・自由端（右）がこちらへ近づく分だけ背が高くなる（台形になり、上下の枠からはみ出す）
+      ・自由端に板の厚みの小口が細く見える
+      ・板の面は蛍光灯からの光を斜めに受けて少し暗くなる
+    空いた分は、部屋の中の暗闇にする（上ほど暗い）"""
+    w, h = L["x1"] - L["x0"], L["y1"] - L["y0"]
+    cos = (w - e) / w
+    sin = (1 - cos ** 2) ** 0.5
+    D = 12.0                                                    # カメラまでの距離（板の幅いくつ分か）。遠くのドアなので控えめな遠近
+    grow = h * (D / (D - sin) - 1) / 2                          # 自由端の上下への伸び（px）
+    thick = max(0.0, 3.0 * sin)                                 # 板の厚みの見え幅（px）
+    src = np.asarray(img.crop((L["x0"], L["y0"], L["x1"], L["y1"]))).astype(np.float32)
+    a = np.asarray(img).astype(np.float32)
+    x0, y0 = L["x0"], L["y0"]
+    # 開いた先の暗闇（部屋の中）：上ほど暗く、床の近くだけわずかに廊下の光が差し込む
+    for y in range(h):
+        k = y / h
+        a[y0 + y, x0:x0 + w] = np.array([4, 3, 3]) + np.array([10, 7, 5]) * max(0, k - 0.85) / 0.15
+    fw = w - e                                                  # 板の面の見え幅
+    for x in range(int(np.ceil(fw + thick)) + 1):
+        u = x / max(fw, 1e-6)
+        top = -grow * min(u, 1)
+        bot = h + grow * min(u, 1)
+        if x <= fw:                                             # 板の面：元の板を引き伸ばして写す
+            sx = min(int(u * (w - 1)), w - 1)
+            col = src[:, sx]
+            shade = 1 - 0.35 * sin
+        else:                                                   # 小口（板の厚み）：やや明るい細い面
+            col = src[:, w - 2] * 0 + np.array([62, 48, 40])
+            shade = 1.0
+        ys = np.arange(int(np.floor(top)), int(np.ceil(bot)))
+        vv = np.clip(((ys - top) / (bot - top) * (h - 1)).astype(int), 0, h - 1)
+        X = x0 + x
+        if X >= a.shape[1]:
+            continue
+        for y, v in zip(ys, vv):
+            Y = y0 + y
+            if 0 <= Y < a.shape[0]:
+                a[Y, X] = col[v] * shade
+    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+
+
 def background(ep, path):
     """背景：JPG（画質85）＋細かい粒子で、暗いグラデーションの縞を防ぐ。
-    話が進むほどドアの隙間を広げる：板を蝶番の側へ縮め、空いた分を暗闇にする（opening/index.html の drawLeaf と同じ）"""
+    話が進むほどドアが開いていく（swing_leaf）。動く層ではなく、話ごとの背景に焼き込む"""
     img = Image.open(ROOT / "opening" / "bg.png").convert("RGB")
     lay = json.loads((ROOT / "opening" / "layout.json").read_text(encoding="utf-8"))
     e = json.loads((ROOT / "opening" / "escalation.json").read_text(encoding="utf-8"))["episodes"][str(ep)]["gapExtra"]
-    L = lay.get("leaf")
-    if L and e > 0:
-        w, h = L["x1"] - L["x0"], L["y1"] - L["y0"]
-        leaf = img.crop((L["x0"], L["y0"], L["x1"], L["y1"])).resize((w - e, h), Image.LANCZOS)
-        leaf = Image.eval(leaf, lambda v: int(v * (1 - 0.35 * e / w)))      # 奥へ回り込むほど光が届かない
-        patch = Image.new("RGB", (w, h), (3, 3, 3))
-        patch.paste(leaf, (0, 0))
-        img.paste(patch, (L["x0"], L["y0"]))
+    if lay.get("leaf") and e > 0:
+        img = swing_leaf(img, lay["leaf"], e)
     a = np.asarray(img).astype(np.float32)
     a += np.random.default_rng(1).normal(0, 1.5, a.shape[:2])[..., None]
     Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(path, quality=85)
-
 
 def shared():
     OUT.mkdir(parents=True, exist_ok=True)

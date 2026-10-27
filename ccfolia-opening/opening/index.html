@@ -200,7 +200,7 @@ window.setTime = function (t, frame) {
   // 黒い帯を上から塗るだけだと「板に黒いテープを貼った」ように見えたため（板の縁の光の線や取っ手が消えずに残る）
   // ココフォリアでは、この板は話ごとの背景の絵に焼き込む（tools/export_ccfolia.py）。動く層に入れると、
   // 細かい板の質感が毎コマ記録されて 5MB を超えるため。ここでは全部入りのプレビュー用に描く
-  if (vis("#leaf", show("leaf") && before && ESC.gapExtra > 0 && LEAF)) drawLeaf(lit);
+  // ドアの開き具合は話ごとの背景の絵に焼き込んである（tools/export_ccfolia.py の swing_leaf）。ここでは描かない
 
   // 蛍光灯の明滅：切れかけた蛍光灯のように、長さも暗さも点き直しも毎回ばらばら（tools/make_flicker.py）
   vis("#flicker", show("flicker") && before && dim > 0);
