@@ -33,7 +33,7 @@
   #tagline span { display: inline-block; opacity: 0; }
 
   #slit { position: absolute; width: 2px; background: #d9d3cd; }
-  #gapExtra { position: absolute; background: #030303; }
+  #leaf { position: absolute; }
 
   #title .col { position: absolute; writing-mode: vertical-rl; font-family: "Gothic"; font-size: 58px;
                 letter-spacing: .04em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
@@ -53,7 +53,7 @@
 <div id="reveal" class="layer"></div>
 <canvas id="dust" class="layer" width="1280" height="720"></canvas>
 <canvas id="gap"></canvas>
-<div id="gapExtra"></div>
+<canvas id="leaf"></canvas>
 <div id="flicker" class="layer" style="background:#000"></div>
 <div id="cutblack" class="layer" style="background:#040404"></div>
 <div id="tagline" class="layer"><div></div><div></div></div>
@@ -116,8 +116,21 @@ window.setEscalation = e => { ESC = e; };
 let FLICKER = new Map();   // コマ番号 → 暗さ（opening/flicker.json）
 window.setFlicker = frames => { FLICKER = new Map(frames); };
 
+let LEAF = null;
+function drawLeaf(lit) {
+  const c = $("#leaf"), g = c.getContext("2d"), w = LEAF.x1 - LEAF.x0, h = LEAF.y1 - LEAF.y0, e = ESC.gapExtra;
+  g.fillStyle = "#030303"; g.fillRect(0, 0, w, h);
+  // 板は奥へ回り込むほど蛍光灯の光を受けなくなるので、少し暗くする
+  g.globalAlpha = 1; g.drawImage($("#bg"), LEAF.x0, LEAF.y0, w, h, 0, 0, w - e, h);
+  g.fillStyle = `rgba(0,0,0,${0.35 * e / w})`; g.fillRect(0, 0, w - e, h);
+  // 暗闇から浮かび上がる・明滅で暗くなる分（下の背景と同じ明るさにそろえる）
+  g.fillStyle = `rgba(0,0,0,${1 - lit})`; g.fillRect(0, 0, w, h);
+}
+
 window.setLayout = layout => {
-  GAP = layout.gap; LAMP = layout.lamp;
+  GAP = layout.gap; LAMP = layout.lamp; LEAF = layout.leaf || null;
+  if (LEAF) { const c = $("#leaf"); c.width = LEAF.x1 - LEAF.x0; c.height = LEAF.y1 - LEAF.y0;
+              Object.assign(c.style, { left: LEAF.x0 + "px", top: LEAF.y0 + "px" }); }
   GAP_CX = (GAP.x0 + GAP.x1) / 2; GAP_CY = (GAP.y0 + GAP.y1) / 2;
   TITLE_TOP = Math.round(GAP_CY - TITLE_H / 2);
   // タイトル：中央の列を隙間の真上に置く（マッチカット）
@@ -183,11 +196,11 @@ window.setTime = function (t, frame) {
 
   // 隙間がわずかに広がる（話が進むほど）
   // 隙間が広がる向き：ドアの板がある側（layout.json の gap.grow）へ広げる
-  if (vis("#gapExtra", show("gap") && before && ESC.gapExtra > 0)) {
-    const gx = GAP.grow === "left" ? GAP.x0 - ESC.gapExtra : GAP.x1;
-    Object.assign($("#gapExtra").style, { left: gx + "px", top: GAP.y0 + "px",
-                                          width: ESC.gapExtra + "px", height: (GAP.y1 - GAP.y0) + "px", opacity: rv });
-  }
+  // ドアの板を描き直す：板の幅を蝶番の側へ縮め（向こうへ回り込んで開いたように見える）、空いた分は暗闇にする。
+  // 黒い帯を上から塗るだけだと「板に黒いテープを貼った」ように見えたため（板の縁の光の線や取っ手が消えずに残る）
+  // ココフォリアでは、この板は話ごとの背景の絵に焼き込む（tools/export_ccfolia.py）。動く層に入れると、
+  // 細かい板の質感が毎コマ記録されて 5MB を超えるため。ここでは全部入りのプレビュー用に描く
+  if (vis("#leaf", show("leaf") && before && ESC.gapExtra > 0 && LEAF)) drawLeaf(lit);
 
   // 蛍光灯の明滅：切れかけた蛍光灯のように、長さも暗さも点き直しも毎回ばらばら（tools/make_flicker.py）
   vis("#flicker", show("flicker") && before && dim > 0);

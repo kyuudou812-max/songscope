@@ -9,7 +9,8 @@
 
 出力（build/ccfolia/）:
   00_reset_black.webp      … 「暗転」シーンの前景（真っ黒、ループ）
-  01_bg_corridor.jpg       … 背景（細かい粒子入り）
+  01_bg_corridor.jpg       … 背景（細かい粒子入り、第一話の形）
+  epN/01_bg_corridor_epN.jpg … その話の背景（ドアの隙間がその話の広さ）
   epN/02_dark_epN.webp     … 前景：暗闇が引く・蛍光灯の明滅・カット後の黒（640×360、1回再生）
   epN/03_panel_epN.webp    … マーカーパネル：塵・隙間・一文・タイトル・辞書カード（1280×720、1回再生）
   epN/04_sound_epN.mp3     … BGM：オープニングの音＋無音10分（ループで頭に戻らないように）
@@ -58,6 +59,7 @@ def webp(src, dst, *vf):
 def episode(ep):
     d = OUT / f"ep{ep}"
     d.mkdir(parents=True, exist_ok=True)
+    background(ep, d / f"01_bg_corridor_ep{ep}.jpg")
     render(ep, DARK, f"cc_dark_ep{ep}")
     webp(BUILD / f"cc_dark_ep{ep}", d / f"02_dark_ep{ep}.webp", "-vf", "scale=640:360:flags=area")
     render(ep, PANEL, f"cc_panel_ep{ep}")
@@ -71,12 +73,28 @@ def episode(ep):
     return [(p.relative_to(OUT), p.stat().st_size) for p in sorted(d.iterdir())]
 
 
+def background(ep, path):
+    """背景：JPG（画質85）＋細かい粒子で、暗いグラデーションの縞を防ぐ。
+    話が進むほどドアの隙間を広げる：板を蝶番の側へ縮め、空いた分を暗闇にする（opening/index.html の drawLeaf と同じ）"""
+    img = Image.open(ROOT / "opening" / "bg.png").convert("RGB")
+    lay = json.loads((ROOT / "opening" / "layout.json").read_text(encoding="utf-8"))
+    e = json.loads((ROOT / "opening" / "escalation.json").read_text(encoding="utf-8"))["episodes"][str(ep)]["gapExtra"]
+    L = lay.get("leaf")
+    if L and e > 0:
+        w, h = L["x1"] - L["x0"], L["y1"] - L["y0"]
+        leaf = img.crop((L["x0"], L["y0"], L["x1"], L["y1"])).resize((w - e, h), Image.LANCZOS)
+        leaf = Image.eval(leaf, lambda v: int(v * (1 - 0.35 * e / w)))      # 奥へ回り込むほど光が届かない
+        patch = Image.new("RGB", (w, h), (3, 3, 3))
+        patch.paste(leaf, (0, 0))
+        img.paste(patch, (L["x0"], L["y0"]))
+    a = np.asarray(img).astype(np.float32)
+    a += np.random.default_rng(1).normal(0, 1.5, a.shape[:2])[..., None]
+    Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(path, quality=85)
+
+
 def shared():
     OUT.mkdir(parents=True, exist_ok=True)
-    # 背景：JPG（画質85）＋細かい粒子で、暗いグラデーションの縞を防ぐ
-    a = np.asarray(Image.open(ROOT / "opening" / "bg.png").convert("RGB")).astype(np.float32)
-    a += np.random.default_rng(1).normal(0, 1.5, a.shape[:2])[..., None]
-    Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(OUT / "01_bg_corridor.jpg", quality=85)
+    background(1, OUT / "01_bg_corridor.jpg")                    # 第一話（隙間が広がる前）の背景。部屋の素材にも使う
     # 暗転シーン用：真っ黒の2コマをループ。動く素材のあるシーンを経由すると、1回再生の素材が最初に戻るため
     frames = [Image.new("RGB", (1280, 720), (4, 4, 4)), Image.new("RGB", (1280, 720), (5, 5, 5))]
     frames[0].save(OUT / "00_reset_black.webp", save_all=True, append_images=frames[1:],

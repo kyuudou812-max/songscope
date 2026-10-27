@@ -6,6 +6,8 @@
 各場面のシーンは、その話の「探索第N話」をお手本に背景だけ差し替える（辞書カードのパネルもそのまま）。
 第五話の「夕暮れの団地の廊下」だけは、蛾の羽ばたきの前景を付ける（BGM はココフォリアで設定）。
 
+OP 第N話のシーンは、背景・前景・パネルを build/ccfolia/epN/ の最新のものに差し替える。
+
 使い方: python3 tools/add_scene_backgrounds.py <__data.json> <出力フォルダ>
 """
 import copy
@@ -77,6 +79,16 @@ def main(src, outdir):
             sc["order"] = base["order"] + k / 10                 # 探索第N話 と 終了第N話 の間に並べる
             ent["scenes"]["".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))] = sc
             added.append(name)
+    # OP：ドアの隙間の広がり方を直したので、各話のパネル（と前景）を最新の書き出しに差し替える
+    for sc in ent["scenes"].values():
+        m = re.match(r"OP\s*第\s*([0-9０-９]+)\s*話", sc["name"].translate(str.maketrans("０１２３４５６７８９", "0123456789")))
+        if not m:
+            continue
+        ep = int(m.group(1))
+        sc["backgroundUrl"] = add(CC / f"ep{ep}" / f"01_bg_corridor_ep{ep}.jpg")   # 話ごとに隙間の広さが違う
+        sc["foregroundUrl"] = add(CC / f"ep{ep}" / f"02_dark_ep{ep}.webp")
+        for mk in sc["markers"].values():
+            mk["imageUrl"] = add(CC / f"ep{ep}" / f"03_panel_ep{ep}.webp")
     # 場面の切り替えはクロスフェード（ふわっと重ねる）。第五話の羽ばたきは最初のコマが暗いので、重ねても成り立つ
     ent["room"]["enableCrossfade"] = True
     ent["room"]["crossfadeDuration"] = 1
