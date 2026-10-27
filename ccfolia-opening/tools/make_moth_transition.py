@@ -11,9 +11,10 @@
 出力（build/ccfolia/moth/）:
   52_moth_flap.webp       … 前景（640×360、30fps、約1.6秒、1回再生）
   53_dusk_with_flap.mp3   … BGM（ばさり → 夕暮れの風と遠い踏切。10分）
-  preview_moth.mp4        … 確認用（仮の朝の絵 → 切り替え → 夕暮れの廊下）
+  54_moth_closeup.jpg     … 「蛾のドアップ」シーンの背景（--moth のとき。夕暮れの廊下の手前に蛾が画面いっぱい）
+  preview_moth.mp4        … 確認用（ドアップ → 切り替え → 夕暮れの廊下）
 
-使い方: python3 tools/make_moth_transition.py [朝の絵.jpg]
+使い方: python3 tools/make_moth_transition.py [朝の絵.jpg] [--moth 蛾.png]
 """
 import subprocess
 import sys
@@ -127,6 +128,77 @@ def frames():
     return out
 
 
+MOTH_W = 1.15      # ドアップでの蛾の羽の幅（画面の幅に対して）。転換の最初のコマも同じ大きさ・位置にして、つなぎ目をなくす
+MOTH_CY = 0.52     # 蛾の中心の高さ（画面の高さに対して）
+
+
+def moth_sprite(path):
+    """ChatGPT の蛾（背景は透明）を、部屋と同じ赤茶にそろえる"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from make_npc_portrait import tone_lut
+    a = np.asarray(Image.open(path).convert("RGBA")).astype(np.float32)
+    lum = a[..., :3] @ np.array([0.299, 0.587, 0.114], np.float32)
+    lum = lum / 255 * 200 + 8                                    # 背景より明るくなりすぎないよう、少し沈める
+    rgb = lum[..., None] * tone_lut()[lum.astype(int)]
+    img = Image.fromarray(np.dstack([np.clip(rgb, 0, 255), a[..., 3]]).astype(np.uint8), "RGBA")
+    return img.crop(img.getchannel("A").point(lambda v: 255 if v > 16 else 0).getbbox())
+
+
+def place(sprite, w, h, scale=1.0, sx=1.0, ang=0.0, dx=0.0, dy=0.0):
+    """蛾を画面に置く。scale＝大きさ、sx＝羽の開き具合（1＝全開、0に近いほど閉じる）、dx/dy＝中心のずれ（画面比）"""
+    mw = int(w * MOTH_W * scale * max(sx, 0.05))
+    mh = int(w * MOTH_W * scale * sprite.height / sprite.width)
+    spr = sprite.resize((max(mw, 1), max(mh, 1)), Image.BILINEAR)
+    if ang:
+        spr = spr.rotate(ang, expand=True, resample=Image.BILINEAR)
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    x, y = int(w * (0.5 + dx) - spr.width / 2), int(h * (MOTH_CY + dy) - spr.height / 2)
+    if -spr.width < x < w and -spr.height < y < h:
+        layer.alpha_composite(spr, (x, y))
+    return layer
+
+
+def closeup(sprite, path):
+    """ドアップ：夕暮れの廊下の手前に、蛾が画面いっぱいに止まっている"""
+    dusk = Image.open(ROOT / "build" / "ccfolia" / "scenes" / "ep5_01_corridor.jpg").convert("RGBA").resize((1280, 720))
+    # 背景は「夕暮れの廊下」シーンと同じ明るさのまま：切り替えたときに背景が変わって見えないように
+    dusk.alpha_composite(place(sprite, 1280, 720))
+    dusk.convert("RGB").save(path, quality=88)
+
+
+def frames_moth(sprite):
+    """ドアップと同じ位置から始まり、羽を打ち下ろして（閉じて）目の前に迫り、左上へ抜けていく"""
+    rng = np.random.default_rng(5)
+    dust = [dict(x=rng.uniform(0, W), y=rng.uniform(0, H * 0.8), vx=rng.uniform(-30, 10), vy=rng.uniform(15, 45),
+                 r=rng.uniform(0.6, 1.8), ph=rng.uniform(0, 6.28), born=rng.uniform(0.1, 0.45)) for _ in range(160)]
+    out = []
+    for f in range(int(DUR * FPS)):
+        acc = np.zeros((H, W, 4), np.float32)
+        sub = 6
+        for s in range(sub):
+            t = (f + s / sub) / FPS
+            beat = np.clip((t - 0.07) / 0.16, 0, 1)                # 0.07〜0.23秒：羽を打ち下ろす（閉じる）
+            go = ease_in((t - 0.18) / 0.42)                        # 0.18〜0.6秒：迫りながら左上へ抜ける
+            sx = 1 - 0.8 * np.sin(beat * np.pi / 2) + 0.5 * go     # 閉じて、抜けながら少し開き直す
+            scale = 1 + 0.6 * beat + 1.4 * go
+            layer = place(sprite, W, H, scale, sx, ang=-30 * go, dx=-1.3 * go, dy=-1.2 * go)
+            acc += np.asarray(layer, np.float32)
+        acc /= sub
+        t = f / FPS
+        dl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        dd = ImageDraw.Draw(dl)
+        for p in dust:
+            age = t - p["born"]
+            if age < 0:
+                continue
+            a = max(0.0, 1 - age / 1.1) * (0.5 + 0.5 * np.sin(age * 9 + p["ph"]))
+            x, y = p["x"] + p["vx"] * age, p["y"] + p["vy"] * age
+            dd.ellipse((x - p["r"], y - p["r"], x + p["r"], y + p["r"]), fill=SCALE_LIGHT + (int(200 * a),))
+        out.append(Image.alpha_composite(Image.fromarray(acc.astype(np.uint8), "RGBA"), dl))
+    out[-1] = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    return out
+
+
 def write_wav(path, x):
     pcm = (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
     with wave.open(str(path), "wb") as w:
@@ -184,9 +256,15 @@ def sound(minutes=10):
     return out
 
 
-def main(morning=None):
+def main(morning=None, moth=None):
     OUT.mkdir(parents=True, exist_ok=True)
-    fs = frames()
+    if moth:
+        sprite = moth_sprite(moth)
+        closeup(sprite, OUT / "54_moth_closeup.jpg")
+        fs = frames_moth(sprite)
+        morning = morning or OUT / "54_moth_closeup.jpg"         # 確認用は「ドアップ → 羽ばたき」で見る
+    else:
+        fs = frames()
     tmp = OUT / "frames"
     tmp.mkdir(exist_ok=True)
     for i, im in enumerate(fs):
@@ -224,4 +302,9 @@ def main(morning=None):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else None)
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("morning", nargs="?")
+    ap.add_argument("--moth", help="ChatGPT の蛾（背景は透明）。あれば、この蛾でドアップと羽ばたきを作る")
+    a = ap.parse_args()
+    main(a.morning, a.moth)
