@@ -33,7 +33,6 @@
   #tagline span { display: inline-block; opacity: 0; }
 
   #slit { position: absolute; width: 2px; background: #d9d3cd; }
-  #leaf { position: absolute; }
 
   #title .col { position: absolute; writing-mode: vertical-rl; font-family: "Gothic"; font-size: 58px;
                 letter-spacing: .04em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
@@ -53,7 +52,6 @@
 <div id="reveal" class="layer"></div>
 <canvas id="dust" class="layer" width="1280" height="720"></canvas>
 <canvas id="gap"></canvas>
-<canvas id="leaf"></canvas>
 <div id="flicker" class="layer" style="background:#000"></div>
 <div id="cutblack" class="layer" style="background:#040404"></div>
 <div id="tagline" class="layer"><div></div><div></div></div>
@@ -110,27 +108,16 @@ TAGLINE.forEach((line, r) => { tagRows[r].innerHTML = [...line].map(c => `<span>
 const cols = [...document.querySelectorAll("#title .col")];
 const gapCv = $("#gap");
 let DUST = [];
-let ESC = { gapExtra: 0, flickers: [], breath: 0.12, dust: 120 };
+let ESC = { door: 1, flickers: [], breath: 0.12, dust: 120 };
 const snap = t => Math.floor(t * T.fps + 0.5) / T.fps;   // 音と合わせる時刻はコマの区切りに置く
 window.setEscalation = e => { ESC = e; };
 let FLICKER = new Map();   // コマ番号 → 暗さ（opening/flicker.json）
 window.setFlicker = frames => { FLICKER = new Map(frames); };
 
-let LEAF = null;
-function drawLeaf(lit) {
-  const c = $("#leaf"), g = c.getContext("2d"), w = LEAF.x1 - LEAF.x0, h = LEAF.y1 - LEAF.y0, e = ESC.gapExtra;
-  g.fillStyle = "#030303"; g.fillRect(0, 0, w, h);
-  // 板は奥へ回り込むほど蛍光灯の光を受けなくなるので、少し暗くする
-  g.globalAlpha = 1; g.drawImage($("#bg"), LEAF.x0, LEAF.y0, w, h, 0, 0, w - e, h);
-  g.fillStyle = `rgba(0,0,0,${0.35 * e / w})`; g.fillRect(0, 0, w - e, h);
-  // 暗闇から浮かび上がる・明滅で暗くなる分（下の背景と同じ明るさにそろえる）
-  g.fillStyle = `rgba(0,0,0,${1 - lit})`; g.fillRect(0, 0, w, h);
-}
-
 window.setLayout = layout => {
-  GAP = layout.gap; LAMP = layout.lamp; LEAF = layout.leaf || null;
-  if (LEAF) { const c = $("#leaf"); c.width = LEAF.x1 - LEAF.x0; c.height = LEAF.y1 - LEAF.y0;
-              Object.assign(c.style, { left: LEAF.x0 + "px", top: LEAF.y0 + "px" }); }
+  GAP = { ...layout.gap }; LAMP = layout.lamp;
+  // ドアの開き具合は話ごとに違う絵（assets/door/stageN.png）。隙間のざらつきは、その絵の隙間に合わせる
+  if (layout.doorStages?.[ESC.door] != null) GAP.x0 = layout.doorStages[ESC.door];
   GAP_CX = (GAP.x0 + GAP.x1) / 2; GAP_CY = (GAP.y0 + GAP.y1) / 2;
   TITLE_TOP = Math.round(GAP_CY - TITLE_H / 2);
   // タイトル：中央の列を隙間の真上に置く（マッチカット）
@@ -165,7 +152,9 @@ function drawGap(t, frame, a) {
   const c = gapCv.getContext("2d"), w = gapCv.width, h = gapCv.height;
   const img = c.createImageData(w, h), r = rng(frame * 977 + 13);
   const breath = 1 + ESC.breath * Math.sin(2 * Math.PI * t / 3.4);   // 隙間の呼吸（約3.4秒周期。話が進むほど深くなる）
-  for (let i = 0; i < w * h; i++) { const v = (8 + r() * 22) * breath; img.data.set([v, v * .95, v * .92, 255 * a * (0.25 + r() * 0.35)], i * 4); }
+  // 粒は明るさだけをばらつかせ、濃さは一定にする（重ねたあとの明るさの幅は同じ。乱数が半分になり、隙間が広い話でも 5MB に収まる）
+  const alpha = 255 * a * 0.42;
+  for (let i = 0; i < w * h; i++) { const v = (5 + r() * 35) * breath; img.data.set([v, v * .95, v * .92, alpha], i * 4); }
   c.putImageData(img, 0, 0);
 }
 function drawGrain(frame) {
@@ -194,13 +183,7 @@ window.setTime = function (t, frame) {
   if (vis("#gap", show("gap") && before)) drawGap(t, frame, lit);
   if (vis("#dust", show("dust") && before)) drawDust(t, lit);
 
-  // 隙間がわずかに広がる（話が進むほど）
-  // 隙間が広がる向き：ドアの板がある側（layout.json の gap.grow）へ広げる
-  // ドアの板を描き直す：板の幅を蝶番の側へ縮め（向こうへ回り込んで開いたように見える）、空いた分は暗闇にする。
-  // 黒い帯を上から塗るだけだと「板に黒いテープを貼った」ように見えたため（板の縁の光の線や取っ手が消えずに残る）
-  // ココフォリアでは、この板は話ごとの背景の絵に焼き込む（tools/export_ccfolia.py）。動く層に入れると、
-  // 細かい板の質感が毎コマ記録されて 5MB を超えるため。ここでは全部入りのプレビュー用に描く
-  // ドアの開き具合は話ごとの背景の絵に焼き込んである（tools/export_ccfolia.py の swing_leaf）。ここでは描かない
+  // 隙間が広がる：話ごとの背景の絵に、開き具合の違うドアをはめ込んである（tools/export_ccfolia.py）。ここでは描かない
 
   // 蛍光灯の明滅：切れかけた蛍光灯のように、長さも暗さも点き直しも毎回ばらばら（tools/make_flicker.py）
   vis("#flicker", show("flicker") && before && dim > 0);

@@ -1,14 +1,14 @@
 {
-  "_comment": "話ごとに少しずつ変わるOP（『P.T.』の「同じ廊下が少しずつ変わる」の考え方）。シナリオの中身には触れない、ネタバレにならない変化だけを積み重ねる。flickers は蛍光灯が一瞬暗くなる時刻（秒）。点滅は1秒に3回を超えない。",
+  "_comment": "話ごとに少しずつ変わるOP（『P.T.』の「同じ廊下が少しずつ変わる」の考え方）。シナリオの中身には触れない、ネタバレにならない変化だけを積み重ねる。door は突き当たりのドアの開き具合（assets/door/stageN.png の N）。flickers は蛍光灯が一瞬暗くなる時刻（秒）。点滅は1秒に3回を超えない。",
   "episodes": {
-    "1": { "gapExtra": 0,  "flickers": [],                          "breath": 0.12, "dust": 120, "bpm": [56, 66], "humDetune": 0.0,  "humBuzz": 0.10 },
-    "2": { "gapExtra": 1,  "flickers": [5.9],                       "breath": 0.14, "dust": 130, "bpm": [57, 67], "humDetune": 0.0,  "humBuzz": 0.12 },
-    "3": { "gapExtra": 2,  "flickers": [4.4],                       "breath": 0.16, "dust": 140, "bpm": [58, 69], "humDetune": -0.5, "humBuzz": 0.14 },
-    "4": { "gapExtra": 4,  "flickers": [4.4, 6.2],                  "breath": 0.19, "dust": 155, "bpm": [59, 71], "humDetune": -1.0, "humBuzz": 0.17 },
-    "5": { "gapExtra": 7,  "flickers": [3.6, 5.3],                  "breath": 0.22, "dust": 170, "bpm": [60, 73], "humDetune": -1.5, "humBuzz": 0.20 },
-    "6": { "gapExtra": 11,  "flickers": [3.6, 5.3, 6.6],             "breath": 0.25, "dust": 185, "bpm": [62, 76], "humDetune": -2.0, "humBuzz": 0.24 },
-    "7": { "gapExtra": 16,  "flickers": [3.4, 4.6, 6.0],             "breath": 0.29, "dust": 200, "bpm": [64, 79], "humDetune": -2.5, "humBuzz": 0.28 },
-    "8": { "gapExtra": 22,  "flickers": [3.3, 4.3, 5.4, 6.5],        "breath": 0.33, "dust": 220, "bpm": [66, 83], "humDetune": -3.0, "humBuzz": 0.33 },
-    "9": { "gapExtra": 30,  "flickers": [3.2, 4.0, 4.9, 5.8, 6.7],   "breath": 0.38, "dust": 240, "bpm": [68, 88], "humDetune": -4.0, "humBuzz": 0.40 }
+    "1": { "door": 1, "flickers": [],                          "breath": 0.12, "dust": 120, "bpm": [56, 66], "humDetune": 0.0,  "humBuzz": 0.10 },
+    "2": { "door": 1, "flickers": [5.9],                       "breath": 0.14, "dust": 130, "bpm": [57, 67], "humDetune": 0.0,  "humBuzz": 0.12 },
+    "3": { "door": 2, "flickers": [4.4],                       "breath": 0.16, "dust": 140, "bpm": [58, 69], "humDetune": -0.5, "humBuzz": 0.14 },
+    "4": { "door": 2, "flickers": [4.4, 6.2],                  "breath": 0.19, "dust": 155, "bpm": [59, 71], "humDetune": -1.0, "humBuzz": 0.17 },
+    "5": { "door": 3, "flickers": [3.6, 5.3],                  "breath": 0.22, "dust": 170, "bpm": [60, 73], "humDetune": -1.5, "humBuzz": 0.20 },
+    "6": { "door": 3, "flickers": [3.6, 5.3, 6.6],             "breath": 0.25, "dust": 185, "bpm": [62, 76], "humDetune": -2.0, "humBuzz": 0.24 },
+    "7": { "door": 3, "flickers": [3.4, 4.6, 6.0],             "breath": 0.29, "dust": 200, "bpm": [64, 79], "humDetune": -2.5, "humBuzz": 0.28 },
+    "8": { "door": 4, "flickers": [3.3, 4.3, 5.4, 6.5],        "breath": 0.33, "dust": 220, "bpm": [66, 83], "humDetune": -3.0, "humBuzz": 0.33 },
+    "9": { "door": 4, "flickers": [3.2, 4.0, 4.9, 5.8, 6.7],   "breath": 0.38, "dust": 240, "bpm": [68, 88], "humDetune": -4.0, "humBuzz": 0.40 }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "_comment": "背景の絵（opening/bg.png、元は assets/bg_corridor_original.png）に合わせた位置（px、1280×720基準）。隙間はドアの板と枠の間で、話が進むと板の側（左）へ広がる。 leaf はドアの板（隙間の左）。話が進むと板が蝶番の側へ縮み、隙間が広がる。",
+  "_comment": "背景の絵（opening/bg.png、元は assets/bg_corridor_original.png）に合わせた位置（px、1280×720基準）。gap は元の絵の隙間（タイトルの位置合わせに使う）。doorStages は開き具合の違うドアの絵（assets/door/stageN.png）ごとの隙間の左端。door はドアの絵を元の背景にはめ込む範囲。",
   "bg": "bg.png",
   "gap": {
     "x0": 664,
@@ -14,10 +14,16 @@
     "x1": 440,
     "y1": 120
   },
-  "leaf": {
-    "x0": 601,
-    "x1": 664,
-    "y0": 251,
+  "door": {
+    "x0": 592,
+    "y0": 238,
+    "x1": 698,
     "y1": 448
+  },
+  "doorStages": {
+    "1": 679,
+    "2": 668,
+    "3": 660,
+    "4": 645
   }
 }
