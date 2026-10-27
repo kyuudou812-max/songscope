@@ -14,9 +14,7 @@ import copy
 import hashlib
 import json
 import re
-import secrets
 import shutil
-import string
 import sys
 from pathlib import Path
 
@@ -41,6 +39,10 @@ SCENES = {   # 話 → [(シーン名, 背景, 前景)]
     9: [("廃劇場のロビー", S / "ep9_01_lobby.jpg", None), ("劇場のホール", S / "ep9_02_hall.jpg", None)],
 }
 TYPES = {".jpg": "image/jpeg", ".webp": "image/webp", ".png": "image/png"}
+
+
+def scene_id(name):
+    return hashlib.sha256(name.encode()).hexdigest()[:20]
 
 
 def ep_of(name):
@@ -77,7 +79,9 @@ def main(src, outdir):
             sc["backgroundUrl"] = add(bg)
             sc["foregroundUrl"] = add(fg) if fg else None
             sc["order"] = base["order"] + k / 10                 # 探索第N話 と 終了第N話 の間に並べる
-            ent["scenes"]["".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20))] = sc
+            # ID はシーン名から決める。ココフォリアは読み込んだデータを ID で今の部屋に重ねるので、
+            # 乱数の ID だと読み込むたびに同じシーンが増える（第1話 会議室 が4つになった）
+            ent["scenes"][scene_id(name)] = sc
             added.append(name)
     # OP：ドアの隙間の広がり方を直したので、各話のパネル（と前景）を最新の書き出しに差し替える
     for sc in ent["scenes"].values():
