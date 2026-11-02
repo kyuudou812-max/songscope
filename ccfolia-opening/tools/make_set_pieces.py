@@ -664,7 +664,7 @@ def tarp_rustle(L=60, period=1.4, seed=0):
     t = 0.0
     while t < L:
         for _ in range(int(rg.integers(25, 45))):                 # ぱりぱり：2〜5ms の明るい破裂音
-            g = filt(noise(0.006, int(t * 1e4) + _), 1500, 8000) * env(sec(0.006), 0.0005, 0.002)
+            g = filt(noise(0.006, int(t * 1e4) + _), 1200, 5500) * env(sec(0.006), 0.0005, 0.002)
             place(x, g * rg.uniform(0.2, 1.0), t + abs(rg.normal(0.1, 0.12)))
         place(x, filt(noise(0.5, int(t * 100)), 300, 3000) * env(sec(0.5), 0.05, 0.15) * 0.25, t)   # ばさっ
         t += period * rg.uniform(0.85, 1.15)
