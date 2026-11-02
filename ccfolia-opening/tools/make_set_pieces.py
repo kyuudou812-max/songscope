@@ -8,11 +8,18 @@
 出力（build/ccfolia/fx/）:
   shared/70_blink_open.webp     … まぶたが開く（前景、640×360、1回再生）。第八話の目覚め
   shared/71_blink_reopen.webp   … まばたき（閉じた状態から開く。前景、1回再生）。第四話の「瞬きの間に」
+  ep3/31_edge_figure_1〜6.webp  … 視界の端に立つ人の形（スクリーンパネル。画面の端に置き、1枚ずつ表示）
+  ep3/32_flyer.webp             … わら半紙のチラシ（スクリーンパネル、20×28 マス）
   ep4/41_endless_sheet_loop.webp … シートをかき分けても、奥にまたシート（前景、1280×720、ずっとループ）
   ep4/42_tarp_run_loop.mp3      … シートをかき分けて走る音・息・遠くの大通り（BGM、ループ）
   ep4/43_avenue_loop.mp3        … 人で溢れた大通り（BGM、ループ）。逃げ切った安心
   ep4/44_gusha.mp3              … 背後で何かが落ちた「グシャ」（カットイン）
   ep4/45_tape_voice.mp3         … 上から降ってくる、間延びしたテープのような「あとひとつ」（カットイン、POW 失敗）
+  ep5/51_tadaima_approach.mp3   … 「ただいまー」が一部屋ずつ近づいてくる（カットイン）
+  ep5/52_tadaima_arrive.mp3     … この部屋に帰ってきて、ぎし、沈黙、出ていく（カットイン。押入れに隠れた場合）
+  ep5/53_zapping.mp3            … 終わりのテレビのザッピング（カットイン）
+  ep7/71_oiwai_flood.webp       … 「お祝いですよ」が画面を埋め尽くす（前景、1回再生）
+  ep7/72_reward_mojibake.webp   … 文字化けしたままの報酬のカード（スクリーンパネル、38×18 マス）
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
   ep8/82_bang_gust.mp3          … 窓が開く「バン」→ 突風とカーテンのはためき（BGM。頭の一撃はシーンの切り替えと同時）
   ep8/83_card_1〜4.webp         … 四択のカード（スクリーンパネル、38×10 マス）
@@ -726,7 +733,245 @@ def ep4():
     preview(None, fr * 4, tmp, "ep4_endless_sheet", tail=0)
 
 
-PIECES = {"ep1": ep1, "ep2": ep2, "ep4": ep4, "ep8": ep8}
+# ================================================================ 第三話
+# 立ち去ろうとすると、視界の端に人が増えていく（L1093〜）。目の端に見えるものがいちばん気味が悪い（周辺視野）。
+# 画面の端（フィールドの外、チャット欄のそば）にスクリーンパネルで置き、離れようとするたびに KP が1枚ずつ表示する
+def edge_figures(count=6):
+    """人影の立ち絵を強くぼかし、黒い人の形だけにする（顔も服もわからない。誰か特定の人物に見せない）"""
+    from PIL import ImageFilter
+    src = Image.open(ROOT / "build" / "ccfolia" / "npc" / "npc_figure.webp").convert("RGBA")
+    rg = np.random.default_rng(31)
+    out = []
+    for k in range(count):
+        a = src.getchannel("A")
+        sx = rg.uniform(0.8, 1.15)                                # 体格を変える
+        a = a.resize((int(a.width * sx), a.height), Image.LANCZOS)
+        if k % 2:
+            a = a.transpose(Image.FLIP_LEFT_RIGHT)
+        a = a.filter(ImageFilter.GaussianBlur(rg.uniform(9, 16)))  # 目の端なので、輪郭は合わない
+        a = a.point(lambda v, o=rg.uniform(0.55, 0.8): int(min(255, v * 1.3) * o))
+        pad = 40
+        im = Image.new("RGBA", (a.width + pad * 2, a.height + pad * 2), (10, 8, 8, 0))
+        layer = Image.new("RGBA", a.size, (10, 8, 8, 255))
+        layer.putalpha(a)
+        im.alpha_composite(layer, (pad, pad))
+        im = im.resize((im.width * 600 // im.height, 600), Image.LANCZOS)
+        im.save(OUT / "ep3" / f"31_edge_figure_{k + 1}.webp", lossless=True)
+        out.append(im)
+    return out
+
+
+def paper(w, h, seed=0, lum=205):
+    """わら半紙：少し灰色がかった明るい紙に、細かい繊維とむら。廊下の絵と同じ赤茶の色味をかける"""
+    from PIL import ImageFilter
+    from make_npc_portrait import tone_lut
+    rg = np.random.default_rng(seed)
+    base = np.full((h, w), lum, np.float32)
+    base += np.asarray(Image.fromarray((rg.random((h // 8, w // 8)) * 255).astype(np.uint8)).resize((w, h), Image.BICUBIC),
+                       np.float32) / 255 * 18 - 9                 # 大きなむら
+    fib = rg.normal(0, 1, (h, w)).astype(np.float32)
+    fib = np.asarray(Image.fromarray(((fib - fib.min()) / np.ptp(fib) * 255).astype(np.uint8)).filter(
+        ImageFilter.GaussianBlur(0.6)), np.float32) / 255 * 22 - 11
+    base += fib
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    base *= 1 - 0.18 * (((xx - w / 2) / w) ** 2 + ((yy - h / 2) / h) ** 2) * 2   # 端ほど少し暗く（古び）
+    return base
+
+
+def tone(lum):
+    from make_npc_portrait import tone_lut
+    l = np.clip(lum, 0, 255)
+    return np.clip(l[..., None] * tone_lut()[l.astype(int)], 0, 255).astype(np.uint8)
+
+
+def flyer():
+    """わら半紙のような紙に、少し滲んだインクで大きく印刷された問題（L1110〜）"""
+    from PIL import ImageFilter
+    W, H = 640, 896
+    lum = paper(W, H, 32)
+    ink = Image.new("L", (W, H), 0)
+    d = ImageDraw.Draw(ink)
+    q = TXT["ep3_flyer"]["q"]
+    head, body = q.split("：", 1)
+    f1, f2, f3 = font(44), font(42), font(27)
+    d.text((64, 200), head + "：", font=f1, fill=255)
+    cut = body.index("って") + 2 if "って" in body else len(body) // 2   # 「〜って」で改行
+    for i, s in enumerate([body[:cut], body[cut:]]):
+        w = sum(f2.getlength(c) for c in s) + 42 * 0.06 * (len(s) - 1)
+        assert w < W - 80, s
+        x = (W - w) / 2
+        for c in s:
+            d.text((x, 300 + i * 80), c, font=f2, fill=255)
+            x += f2.getlength(c) + 42 * 0.06
+    hint = TXT["ep3_flyer"]["hint"]
+    w = sum(f3.getlength(c) for c in hint)
+    d.text(((W - w) / 2, 640), hint, font=f3, fill=255)
+    # 滲み：ぼかしてから、紙の繊維に沿ってむらのある濃さにする。版が少しずれて二重になる
+    a = np.asarray(ink.filter(ImageFilter.GaussianBlur(1.3)), np.float32) / 255
+    a = np.clip(a * 1.6, 0, 1) * (0.75 + 0.25 * np.random.default_rng(33).random((H, W)))
+    ghost = np.roll(np.roll(a, 2, 1), 1, 0) * 0.25
+    a = np.maximum(a, ghost)
+    lum = lum * (1 - a * 0.85)
+    img = Image.fromarray(tone(lum)).convert("RGBA")
+    img.save(OUT / "ep3" / "32_flyer.webp", lossless=True)
+    return img
+
+
+def ep3():
+    (OUT / "ep3").mkdir(parents=True, exist_ok=True)
+    edge_figures()
+    flyer()
+
+
+# ================================================================ 第五話
+# 「ただいまー」が一部屋ずつ近づいてくる（L1915〜）。声は「高くも、低くもない淡々とした声」なので、
+# 合成の声の平板さをそのまま使い、毎回まったく同じ抑揚で繰り返す（人ではないものの繰り返し）
+def tadaima_voice():
+    import pyopenjtalk
+    from scipy.signal import resample_poly
+    x, sr = pyopenjtalk.tts(TXT["ep5_tadaima"], half_tone=0, speed=0.95)
+    return resample_poly(np.asarray(x, np.float32) / 32768.0, SR, sr).astype(np.float32)
+
+
+def steel_door(seed=0, close=True):
+    """団地の鉄の玄関ドア：ガチャ（ノブ）と、バタン（重い鉄板が枠に当たる鈍い響き）"""
+    x = np.zeros(sec(1.2), np.float32)
+    place(x, latch(seed), 0.0)
+    if close:
+        slam = mix(thump(75, 0.14, seed + 1, 0.8), resonate(noise(0.8, seed + 2) * env(sec(0.8), 0.001, 0.12), [190, 430, 960], q=18) * 0.7)
+        place(x, slam, 0.55)
+    return x
+
+
+def at_distance(x, k):
+    """k 部屋むこう（0 ならこの部屋のドアのすぐ外）。遠いほど小さく、こもり、外廊下に響く"""
+    hi = [3800, 2400, 1500, 1000, 700][k]
+    g = [1.0, 0.55, 0.32, 0.18, 0.1][k]
+    wet = [0.15, 0.3, 0.45, 0.6, 0.7][k]
+    return reverb(filt(x, hi=hi), 0.9, wet, 2500) * g
+
+
+def tadaima_approach():
+    """ただいまー → ガチャ、バタン。ガチャ、→ ただいまー …（4部屋むこうから、隣の部屋まで）"""
+    v = tadaima_voice()
+    x = np.zeros(sec(24), np.float32)
+    t = 0.5
+    for k in (4, 3, 2, 1):
+        place(x, at_distance(v, k), t)
+        t += len(v) / SR + 1.0
+        if k > 1:
+            place(x, at_distance(steel_door(500 + k), k), t)                 # その部屋を出る
+            t += 1.6
+            place(x, at_distance(steel_door(510 + k, close=False), k - 1), t)   # 次の部屋を開ける
+            t += 0.7
+    return x[: sec(t + 1.5)]
+
+
+def tadaima_arrive():
+    """（押入れに隠れた場合）この部屋のドアが開き「ただいまー」、ぎし、と床を踏む音、数秒の沈黙、そして出ていく"""
+    v = tadaima_voice()
+    x = np.zeros(sec(11), np.float32)
+    place(x, reverb(filt(steel_door(520, close=False), hi=3000), 0.5, 0.2) * 0.8, 0.3)
+    place(x, reverb(filt(v, hi=2800), 0.5, 0.25) * 0.9, 1.0)          # 押入れの襖越し
+    place(x, filt(creak(0.5, 521), hi=2500) * 0.35, 2.4)              # ぎし
+    t = 2.4 + 0.5 + 3.5                                                # 沈黙
+    place(x, reverb(filt(steel_door(522), hi=2500), 0.5, 0.2) * 0.6, t)
+    return x
+
+
+def zapping(seed=0):
+    """第五話の終わり：テレビのザッピングの音（砂嵐の切れ目に、番組の断片）。第六話の広告・動画へつながる"""
+    import pyopenjtalk
+    from scipy.signal import resample_poly
+    bits = ["続いてのニュースです", "今ならなんと", "明日の天気は", "あははは"]
+    x = np.zeros(sec(5.5), np.float32)
+    t = 0.2
+    for i, s in enumerate(bits):
+        place(x, mix(filt(noise(0.12, seed + i), 300, 6000) * 0.25, click(800, 4000, 0.003, seed + 10 + i) * 0.6), t)
+        v, sr = pyopenjtalk.tts(s, half_tone=[2, 5, 0, 7][i], speed=1.3)
+        v = resample_poly(np.asarray(v, np.float32) / 32768.0, SR, sr).astype(np.float32)
+        v = v[: sec(np.random.default_rng(seed + i).uniform(0.45, 0.8))]
+        v = np.tanh(filt(v, 350, 4000) * 2) / 2                  # テレビの小さなスピーカー
+        place(x, v * 0.8, t + 0.12)
+        t += 0.12 + len(v) / SR + 0.05
+    place(x, filt(noise(0.25, seed + 20), 300, 6000) * 0.25, t)
+    return reverb(x[: sec(t + 0.6)], 0.5, 0.2)
+
+
+def ep5():
+    d = OUT / "ep5"
+    write_mp3(d / "51_tadaima_approach.mp3", norm(tadaima_approach(), 0.8))
+    write_mp3(d / "52_tadaima_arrive.mp3", norm(tadaima_arrive(), 0.75))
+    write_mp3(d / "53_zapping.mp3", norm(zapping(530), 0.7))
+
+
+# ================================================================ 第七話
+def oiwai_flood():
+    """「お祝いですよ」が四方から重なり、画面を埋め尽くす（DEX 失敗、L2580〜）。最後のコマで止まる。
+    1コマで増える文字は、画面の1か所のまわりにまとめる（毎コマ画面全体が変わると、1回再生の素材が 20MB を超えるため）"""
+    W, H = 1280, 720
+    phrase = "「" + TXT["ep7_oiwai"] + "」"
+    rg = np.random.default_rng(71)
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    frames, placed, acc, t = [], 0, 0.0, 0
+    total = 420
+    while placed < total:
+        rate = 0.12 * np.exp(t / 40)
+        acc += rate * 2
+        cx, cy = rg.uniform(0, W - 200), rg.uniform(0, H - 40)
+        spread = 60 + 160 * min(1, placed / total)
+        while acc >= 1 and placed < total:
+            size = int(rg.uniform(18, 36))
+            f = font(size)
+            x = np.clip(cx + rg.normal(0, spread), -60, W - 120)
+            y = np.clip(cy + rg.normal(0, spread * 0.5), -10, H - 30)
+            d.text((x, y), phrase, font=f, fill=TEXT + (int(rg.uniform(120, 255)),))
+            placed += 1
+            acc -= 1
+        dim = Image.new("RGBA", (W, H), BLACK + (int(140 * min(1, (t // 6 + 1) / 5)),))   # 背景を5段で沈める
+        frame = Image.alpha_composite(dim, halo(layer, 5, 6, 1.2))
+        frames += [frame, frame]                                 # 1秒に15回だけ変える（同じコマが続くと容量をほとんど食わない）
+        t += 2
+    frames += [frames[-1]] * int(0.5 * FPS)
+    save_webp_anim(frames, OUT / "ep7" / "71_oiwai_flood.webp", lossless=False, quality=80)   # 可逆だと 6MB。暗い地の文字なので非可逆でも崩れにくい
+    return frames
+
+
+def reward_card():
+    """第七話の報酬：《どんな恩恵が欲しい？》が文字化けしたまま出る（辞書カードと同じ文字・大きさ）"""
+    W, H = 760, 360
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    f1, f2 = font(30), font(28)
+    g1 = font(30, gothic=True)
+    title = TXT["ep7_reward_title"]
+    # しっぽり明朝にない半角カナなどは、タイトルの書体（Zen Kaku Gothic）で補う。書体が混ざるのも本物の文字化けらしい
+    notdef = bytes(f1.getmask("\U000F0000"))
+    fonts = [g1 if bytes(f1.getmask(c)) == notdef else f1 for c in title]
+    w = sum(f.getlength(c) for f, c in zip(fonts, title))
+    x = (W - w) / 2
+    for f, c in zip(fonts, title):
+        d.text((x, 110), c, font=f, fill=TEXT + (255,))
+        x += f.getlength(c)
+    ch = "　　".join(TXT["ep7_reward_choices"])
+    w = f2.getlength(ch)
+    d.text(((W - w) / 2, 200), ch, font=f2, fill=TEXT + (255,))
+    im = halo(im)
+    im.save(OUT / "ep7" / "72_reward_mojibake.webp", lossless=True)
+    return im
+
+
+def ep7():
+    (OUT / "ep7").mkdir(parents=True, exist_ok=True)
+    fr = oiwai_flood()
+    reward_card()
+    tmp = OUT / "preview" / "silence.mp3"
+    write_mp3(tmp, silence(len(fr) / FPS + 1))
+    preview(SCENES / "ep7_04_junction.jpg", fr, tmp, "ep7_oiwai", tail=1)
+
+
+PIECES = {"ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
