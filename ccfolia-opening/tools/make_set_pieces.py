@@ -8,6 +8,11 @@
 出力（build/ccfolia/fx/）:
   shared/70_blink_open.webp     … まぶたが開く（前景、640×360、1回再生）。第八話の目覚め
   shared/71_blink_reopen.webp   … まばたき（閉じた状態から開く。前景、1回再生）。第四話の「瞬きの間に」
+  ep4/41_endless_sheet_loop.webp … シートをかき分けても、奥にまたシート（前景、1280×720、ずっとループ）
+  ep4/42_tarp_run_loop.mp3      … シートをかき分けて走る音・息・遠くの大通り（BGM、ループ）
+  ep4/43_avenue_loop.mp3        … 人で溢れた大通り（BGM、ループ）。逃げ切った安心
+  ep4/44_gusha.mp3              … 背後で何かが落ちた「グシャ」（カットイン）
+  ep4/45_tape_voice.mp3         … 上から降ってくる、間延びしたテープのような「あとひとつ」（カットイン、POW 失敗）
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
   ep8/82_bang_gust.mp3          … 窓が開く「バン」→ 突風とカーテンのはためき（BGM。頭の一撃はシーンの切り替えと同時）
   ep8/83_card_1〜4.webp         … 四択のカード（スクリーンパネル、38×10 マス）
@@ -594,7 +599,134 @@ def ep1():
     write_mp3(d / "14_handle_rattle.mp3", norm(handle_rattle(140), 0.8))
 
 
-PIECES = {"ep1": ep1, "ep2": ep2, "ep8": ep8}
+# ================================================================ 第四話
+# どこまでも続くブルーシート（L1367〜・L1440〜）：めくっても、めくっても、その向こうにまたシート。
+# → 急に明るい大通りの雑踏（ほっとさせる）→ 背後で「グシャ」
+def sheet_texture():
+    """ブルーシートの現場の絵から、奥のシートだけを切り出して画面いっぱいの布にする"""
+    im = Image.open(SCENES / "ep4_02_bluesheet.jpg").convert("RGB")
+    return im.crop((285, 40, 755, 330)).resize((1280, 720), Image.LANCZOS)
+
+
+def sheet_loop(period=1.4, size=(1280, 720)):
+    """シートを左右にかき分けると、すぐ奥にまた同じシートがある。1周ごとに、奥のシートが手前のシートの位置まで来るのでつながる"""
+    W, H = size
+    tex = sheet_texture().resize(size, Image.LANCZOS)
+    n = int(round(period * FPS))
+    big = Image.new("RGB", (W * 3, H * 3))
+    for i in range(3):
+        for j in range(3):
+            tile = tex.transpose(Image.FLIP_LEFT_RIGHT) if i % 2 != 1 else tex
+            tile = tile.transpose(Image.FLIP_TOP_BOTTOM) if j % 2 != 1 else tile
+            big.paste(tile, (i * W, j * H))
+    frames = []
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    for i in range(n):
+        p = i / n
+        # 奥のシート：小さく暗いところから、手前の大きさ・明るさまで近づいてくる
+        # （縮めたときに黒い縁が出ないよう、裏返してつないだ大きな布から切り出す）
+        sb = 0.62 + 0.38 * ease_out(p)
+        bw, bh = int(big.width * sb), int(big.height * sb)
+        back = big.resize((bw, bh), Image.LANCZOS).crop(((bw - W) // 2, (bh - H) // 2, (bw - W) // 2 + W, (bh - H) // 2 + H))
+        c = np.asarray(back).astype(np.float32) * (0.45 + 0.55 * p)
+        # 手前のシート：真ん中から左右に分かれて押しのけられ、少し大きくなりながら画面の外へ
+        k = p ** 1.6
+        sf = 1 + 0.35 * k
+        front = np.asarray(tex.resize((int(W * sf), int(H * sf)), Image.LANCZOS)).astype(np.float32)
+        fy0, fx0 = (front.shape[0] - H) // 2, (front.shape[1] - W) // 2
+        front = front[fy0:fy0 + H, fx0:fx0 + W]
+        gap = W * 1.25 * k                                       # かき分けた幅（1周の終わりには画面の外まで）
+        wave = 18 * np.sin(yy / H * np.pi * 2.3 + 0.7) * (0.3 + k)   # 布の縁は波打つ
+        left = xx < W / 2 - gap / 2 + wave
+        right = xx > W / 2 + gap / 2 + wave
+        # 左右の布：縁に向かって暗くなる（めくれて光が当たらない）
+        edge = np.minimum(np.abs(xx - (W / 2 - gap / 2 + wave)), np.abs(xx - (W / 2 + gap / 2 + wave)))
+        shade = (1 - 0.45 * min(1, k * 6) * (1 - np.clip(edge / 140, 0, 1)))[..., None]   # 分け始めは影なし（ループの継ぎ目をなくす）
+        sx_l = np.clip(xx + gap / 2, 0, W - 1).astype(int)       # 左の布は左へずれる
+        sx_r = np.clip(xx - gap / 2, 0, W - 1).astype(int)
+        yi = yy.astype(int)
+        mask_l, mask_r = left[..., None], right[..., None]
+        moved = np.where(mask_l, front[yi, sx_l], np.where(mask_r, front[yi, sx_r], 0))
+        c = np.where(mask_l | mask_r, moved * shade * (1 - 0.25 * k), c)
+        # 走っている揺れ
+        dy = int(6 * np.sin(2 * np.pi * p * 2))
+        img = Image.fromarray(np.clip(c, 0, 255).astype(np.uint8)).transform(size, Image.AFFINE, (1, 0, 0, 0, 1, dy))
+        frames.append(img.convert("RGBA"))
+    save_webp_anim(frames, OUT / "ep4" / "41_endless_sheet_loop.webp", lossless=False, quality=72, loop=0)
+    return frames
+
+
+def tarp_rustle(L=60, period=1.4, seed=0):
+    """ビニールシートをかき分ける音：くしゃっとした細かい破裂音の束を、1.4秒ごとに。遠くに大通りのざわめき"""
+    n = sec(L)
+    x = np.zeros(n, np.float32)
+    rg = np.random.default_rng(seed)
+    t = 0.0
+    while t < L:
+        for _ in range(int(rg.integers(25, 45))):                 # ぱりぱり：2〜5ms の明るい破裂音
+            g = filt(noise(0.006, int(t * 1e4) + _), 1500, 8000) * env(sec(0.006), 0.0005, 0.002)
+            place(x, g * rg.uniform(0.2, 1.0), t + abs(rg.normal(0.1, 0.12)))
+        place(x, filt(noise(0.5, int(t * 100)), 300, 3000) * env(sec(0.5), 0.05, 0.15) * 0.25, t)   # ばさっ
+        t += period * rg.uniform(0.85, 1.15)
+    breath = filt(noise(L, seed + 1), 400, 1800) * (0.5 + 0.5 * np.sin(2 * np.pi * np.arange(n) / SR / 0.9)) ** 3 * 0.12
+    from make_ep6_audio import babble
+    far = filt(fit(babble(L, density=5, muffle=900), n), hi=700) * 0.6
+    return x + breath + far
+
+
+def avenue(L=60):
+    """人で溢れた昼の大通り：近くて明るい雑踏と、車の行き交う音"""
+    from make_ep6_audio import babble
+    n = sec(L)
+    crowd = fit(babble(L, density=10, muffle=3200), n)
+    traffic = filt(noise(L, 401), 80, 1200) * (0.4 + 0.6 * smooth_random(L, 0.25, 402))
+    steps = np.zeros(n, np.float32)
+    rg = np.random.default_rng(403)
+    for t0 in rg.uniform(0, L, int(L * 6)):
+        place(steps, click(1500, 6000, 0.006, int(t0 * 100)) * rg.uniform(0.05, 0.15), t0)
+    return norm(crowd) * 0.7 + norm(traffic) * 0.35 + steps
+
+
+def gusha(seed=0):
+    """背後で何かが落ちた「グシャ」：重く湿った低い衝撃と、潰れる細かい音の束（明るすぎない）"""
+    x = np.zeros(sec(2.0), np.float32)
+    place(x, thump(60, 0.22, seed, 1.0) * 1.0, 0.05)
+    rg = np.random.default_rng(seed)
+    for k in range(70):                                           # 潰れる：1〜4kHz の細かい割れ、20ms の間に集中
+        g = filt(noise(0.008, seed + k), 700, 3500) * env(sec(0.008), 0.0005, 0.003)
+        place(x, g * rg.uniform(0.2, 0.8), 0.05 + abs(rg.normal(0, 0.025)))
+    place(x, filt(noise(0.4, seed + 99), 200, 1200) * env(sec(0.4), 0.01, 0.12) * 0.35, 0.07)   # 湿った重さ
+    return reverb(x, 0.9, 0.3, 3000)
+
+
+def tape_voice(text="あとひとつ", seed=0):
+    """上から降ってくる、酷く間延びしたテープのような声（POW 失敗）：合成の声を半分の速さに伸ばし、回転のむらで揺らす"""
+    import pyopenjtalk
+    from scipy.signal import resample_poly
+    x, sr = pyopenjtalk.tts(text, half_tone=-2, speed=0.9)
+    x = resample_poly(np.asarray(x, np.float32) / 32768.0, SR, sr).astype(np.float32)
+    n = len(x) * 2                                                # 2倍に伸ばす（高さも下がる＝伸びたテープ）
+    t = np.arange(n) / SR
+    pos = np.arange(n) / 2.0 + 0.012 * SR * np.sin(2 * np.pi * 0.7 * t)   # 回転のむら
+    y = np.interp(pos, np.arange(len(x)), x).astype(np.float32)
+    y = filt(y, 250, 3000) + filt(noise(len(y) / SR, seed), 2000, 6000) * 0.01   # こもり＋テープの擦れ
+    y = reverb(y, 1.4, 0.6, 2500)                                 # ビルの上から、壁に響いて降ってくる
+    return np.concatenate([silence(0.3), y, silence(1.0)])
+
+
+def ep4():
+    d = OUT / "ep4"
+    fr = sheet_loop()
+    write_mp3(d / "42_tarp_run_loop.mp3", norm(loop_seam(tarp_rustle(62, seed=420), 2.0), 0.6))
+    write_mp3(d / "43_avenue_loop.mp3", norm(loop_seam(avenue(62), 2.0), 0.6))
+    write_mp3(d / "44_gusha.mp3", norm(gusha(440), 0.85))
+    write_mp3(d / "45_tape_voice.mp3", norm(tape_voice(seed=450), 0.7))
+    tmp = OUT / "preview" / "tmp4.mp3"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(d / "42_tarp_run_loop.mp3"), "-t", "6", str(tmp)], check=True)
+    preview(None, fr * 4, tmp, "ep4_endless_sheet", tail=0)
+
+
+PIECES = {"ep1": ep1, "ep2": ep2, "ep4": ep4, "ep8": ep8}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
