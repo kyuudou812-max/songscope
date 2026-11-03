@@ -18,6 +18,12 @@
   ep5/52_tadaima_arrive.mp3     … この部屋のドアが開き、ぎし、沈黙、出ていく（カットイン。押入れに隠れた場合）
   ep5/53_zapping.mp3            … 終わりのテレビのザッピング（カットイン）
   ep6/60_restaurant_ambience_loop.mp3 … ファミレスのざわめき（BGM、ループ。声の高さを持たない雑音で作る）
+  ep5/54_obituary.webp          … 新聞の訃報の切り抜き（縦書き。スクリーンパネル）
+  ep5/55_kamisama.webp          … 剥がれた記事の下の、震えた文字（スクリーンパネル。目星成功）
+  ep5/56_phone_news.webp        … 朝のスマホのニュース（スクリーンパネル）
+  ep5/57_window_slap.mp3        … スクラップブックが窓に叩きつけられる「バン！」（カットイン）
+  ep6/62_beep_short/long.mp3    … 放送禁止音（カットイン。声は使わず、伏せ字の位置で鳴らす）
+  ep9/96_knob_held.mp3          … 非常口のノブが、向こうから引き戻される（カットイン）
   ep7/71_oiwai_flood.webp       … 「お祝いですよ」が画面を埋め尽くす（前景、1回再生）
   ep7/72_reward_mojibake.webp   … 文字化けしたままの報酬のカード（スクリーンパネル、38×18 マス）
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
@@ -53,7 +59,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageSequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fxlib import (BLACK, QUIET, ROOT, SR, TEXT, click, env, filt, font, halo, loop_seam, noise, norm, place,  # noqa: E402
+from fxlib import (BLACK, QUIET, QUIETEST, ROOT, SR, TEXT, click, env, filt, font, halo, loop_seam, noise, norm, place,  # noqa: E402
                    resonate, reverb, save_webp_anim, sec, silence, smooth_random, thump, vchar, write_mp3)
 
 OUT = ROOT / "build" / "ccfolia" / "fx"
@@ -1250,7 +1256,156 @@ def rewards():
     print("fx/reward/ と ep8/83_card_* を書き出し")
 
 
-PIECES = {"reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+
+# ================================================================ 小物（文字の物）
+VERT = str.maketrans({"『": "﹃", "』": "﹄", "「": "﹁", "」": "﹂", "（": "︵", "）": "︶", "ー": "｜", "《": "︽", "》": "︾"})
+
+
+def vtext(d, x, y, s, f, fill, pitch=None, max_rows=None):
+    """縦書き：x の列に上から。句読点はマスの右上、括弧は縦用の字形。max_rows で折り返し（次の列は左へ）。最後の列の x を返す"""
+    pitch = pitch or f.size * 1.05
+    row = 0
+    for c in s.translate(VERT):
+        if max_rows and row >= max_rows:
+            x -= f.size * 1.35
+            row = 0
+        cy = y + row * pitch
+        if c in "、。":
+            d.text((x + f.size * 0.55, cy - f.size * 0.45), c, font=f, fill=fill)
+        else:
+            draw_text(d, (x + (f.size - font(f.size).getlength(c)) / 2, cy), c, f, fill)
+        row += 1
+    return x
+
+
+def newspaper():
+    """第五話：スクラップブックの、剥がれずに残った新聞記事（L1831〜）。縦書きの訃報の切り抜き。写真の欄は空白"""
+    from PIL import ImageFilter
+    o = TXT["ep5_obit"]
+    W, H = 560, 720
+    lum = paper(W, H, 51, lum=196)
+    img = Image.fromarray(tone(lum)).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    ink = (38, 30, 28, 255)
+    fh, fk, fs, fb, fm = font(40), font(22), font(19), font(14), font(13)
+    x = W - 70
+    vtext(d, x, 40, o["kicker"], fk, ink)
+    x -= 52
+    vtext(d, x, 40, o["head"], fh, ink)
+    x -= 40
+    vtext(d, x, 60, o["sub"], fs, ink)
+    d.line([(x - 14, 30), (x - 14, H - 40)], fill=ink, width=1)
+    # 写真の欄（空白。本文に写真はないので、灰色の四角に「写真」とも書かない）
+    d.rectangle([64, 40, x - 34, 220], outline=(90, 78, 72, 255), width=1)
+    x = x - 46
+    last = vtext(d, x, 250, o["body"], fb, ink, pitch=15, max_rows=29)
+    assert last > 50, last
+    vtext(d, 30, 40, o["masthead"], fm, (90, 78, 72, 255))
+    # 切り抜きの縁（少し斜め・不揃い）と古び
+    mask = Image.new("L", (W, H), 0)
+    rg = np.random.default_rng(52)
+    ImageDraw.Draw(mask).polygon([(rg.uniform(4, 12), rg.uniform(4, 12)), (W - rg.uniform(4, 12), rg.uniform(4, 12)),
+                                  (W - rg.uniform(4, 12), H - rg.uniform(4, 12)), (rg.uniform(4, 12), H - rg.uniform(4, 12))], fill=255)
+    img.putalpha(mask.filter(ImageFilter.GaussianBlur(0.6)))
+    img = img.rotate(-2.0, resample=Image.BICUBIC, expand=True)
+    img.save(OUT / "ep5" / "54_obituary.webp", lossless=True)
+    return img
+
+
+def kamisama():
+    """第五話：剥がれた記事の下の、酷く震えた文字（目星成功、L1860〜）。明朝を一字ずつ揺らし、筆圧のむらを付ける"""
+    from PIL import ImageFilter
+    lines = TXT["ep5_kamisama"]
+    W, H = 940, 460
+    lum = paper(W, H, 55, lum=150)                                 # 記事が剥がれた跡：少し暗い台紙
+    img = Image.fromarray(tone(lum)).convert("RGBA")
+    rg = np.random.default_rng(56)
+    layer = Image.new("L", (W * 2, H * 2), 0)                      # 2倍で書いて縮める（線のがたつきを細かく）
+    y = 90
+    for li, s in enumerate(lines):
+        size = [54, 54, 64][li]
+        x = 60 + rg.uniform(-10, 30)
+        for c in s:
+            f = font(int(size * rg.uniform(0.85, 1.18)))
+            g = Image.new("L", (size * 2, size * 2), 0)
+            ImageDraw.Draw(g).text((size * 0.4, size * 0.3), c, font=f, fill=int(rg.uniform(170, 255)))
+            g = g.rotate(rg.normal(0, 8), resample=Image.BICUBIC)
+            # 震え：字の形を、細かくずらした2枚を重ねる
+            g2 = g.transform(g.size, Image.AFFINE, (1, rg.normal(0, .03), rg.normal(0, 1.2), rg.normal(0, .03), 1, rg.normal(0, 1.2)))
+            g = Image.fromarray(np.maximum(np.asarray(g), (np.asarray(g2) * 0.7).astype(np.uint8)))
+            layer.paste(255, (int(x * 2), int((y + rg.normal(0, 7)) * 2)), g.resize((g.width * 2, g.height * 2)))
+            x += f.getlength(c) * rg.uniform(0.95, 1.15)
+        y += [110, 110, 150][li] + rg.uniform(-6, 6)
+    layer = layer.resize((W, H), Image.LANCZOS).filter(ImageFilter.GaussianBlur(0.5))
+    a = np.asarray(layer, np.float32) / 255 * (0.65 + 0.35 * rg.random((H, W)))   # 鉛筆の濃淡
+    lum2 = lum * (1 - a * 0.8)
+    out = Image.fromarray(tone(lum2)).convert("RGBA")
+    out.save(OUT / "ep5" / "55_kamisama.webp", lossless=True)
+    return out
+
+
+def phone_news():
+    """第五話の朝：手元のスマホに流れてくるニュースの見出し（L1543）。一つだけ「失踪」。色は部屋の色だけ（青は使わない）"""
+    W, H = 360, 700
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, W - 1, H - 1], 44, fill=(14, 11, 10, 255), outline=(60, 50, 46, 255), width=3)
+    d.rounded_rectangle([14, 14, W - 15, H - 15], 34, fill=(24, 19, 17, 255))
+    f0, f1, f2 = font(15), font(17), font(12)
+    d.text((34, 32), "7:12", font=f0, fill=QUIET + (255,))
+    d.text((34, 70), "ニュース", font=font(20), fill=TEXT + (255,))
+    y = 120
+    for i, s in enumerate(TXT["ep5_phone_news"]):
+        d.line([(30, y - 12), (W - 30, y - 12)], fill=(48, 40, 37, 255), width=1)
+        draw_text(d, (34, y), s, f1, (TEXT if "失踪" in s else QUIET) + (255,))
+        d.text((34, y + 30), ["エンタメ", "天気", "地域", "社会", "グルメ", "話題"][i % 6] + "　・　" + f"{(i + 1) * 7}分前", font=f2,
+               fill=QUIETEST + (255,))
+        y += 82
+    img.save(OUT / "ep5" / "56_phone_news.webp", lossless=True)
+    return img
+
+
+# ================================================================ 効果音（声なし）
+def window_slap(seed=0):
+    """第五話：強風で、開いたスクラップブックが窓に叩きつけられる「バン！」（聞き耳 全員失敗）"""
+    x = np.zeros(sec(1.6), np.float32)
+    place(x, mix(filt(noise(0.12, seed), 300, 4000) * env(sec(0.12), 0.001, 0.03), thump(140, 0.05, seed + 1, 0.3) * 0.6), 0.05)
+    place(x, resonate(noise(0.5, seed + 2) * env(sec(0.5), 0.001, 0.08), [1900, 2800, 4200], q=50) * 0.5, 0.055)   # 窓ガラスの震え
+    for k in range(6):                                                                                 # 紙がばたつく
+        place(x, filt(noise(0.05, seed + 10 + k), 600, 4000) * env(sec(0.05), 0.002, 0.015) * (0.5 - k * 0.07), 0.25 + k * 0.09)
+    return reverb(x, 0.5, 0.2)
+
+
+def beep(sec_=0.6):
+    """第六話：犯罪考察チャンネルの放送禁止音（声ではないので使う）。テレビの小さなスピーカー越し"""
+    t = np.arange(sec(sec_)) / SR
+    x = np.sin(2 * np.pi * 1000 * t) * np.minimum(1, np.minimum(t, sec_ - t) / 0.008)
+    return reverb(np.tanh(filt(x.astype(np.float32), 350, 4000) * 1.5) / 1.5, 0.3, 0.2)
+
+
+def knob_held(seed=0):
+    """最終話の非常口：ノブを回そうとしても、途中で止まり、向こうから引き戻される（第一話の「ガチャン」の逆）"""
+    x = np.zeros(sec(3.2), np.float32)
+    for i, t0 in enumerate((0.2, 1.5)):
+        place(x, click(1800, 7000, 0.004, seed + i) * 0.4, t0)                       # 回しはじめ
+        strain = resonate(noise(0.6, seed + 5 + i) * env(sec(0.6), 0.05, 0.3), [1300, 2100, 3300], q=30) * 0.25
+        place(x, strain * (np.linspace(0.3, 1, sec(0.6)) ** 2), t0 + 0.05)          # 金具がきしむ（力がかかっている）
+        place(x, latch(seed + 20 + i, 1.4) * 0.8, t0 + 0.7)                          # がちり、と戻される
+    return reverb(x, 0.8, 0.3)
+
+
+def props():
+    (OUT / "ep5").mkdir(parents=True, exist_ok=True)
+    newspaper()
+    kamisama()
+    phone_news()
+    write_mp3(OUT / "ep5" / "57_window_slap.mp3", norm(window_slap(570), 0.8))
+    write_mp3(OUT / "ep6" / "62_beep_short.mp3", norm(beep(0.5), 0.6))
+    write_mp3(OUT / "ep6" / "62_beep_long.mp3", norm(beep(1.1), 0.6))
+    write_mp3(OUT / "ep9" / "96_knob_held.mp3", norm(knob_held(960), 0.8))
+
+
+PIECES = {"props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
