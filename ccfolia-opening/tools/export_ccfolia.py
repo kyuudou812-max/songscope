@@ -102,10 +102,54 @@ def door(img, ep, src_path=None):
     return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
+def traces(img, names):
+    """OP の廊下に、前の話の痕跡を描き足す（気づいた人だけが嫌な気分になる。すでに起きた話のものだけ）。
+    flyer＝ドアの横の壁に白い紙が一枚（第三話のチラシ）、nameplate＝郵便受けの名札が黒く塗りつぶされる（第五話の表札）、
+    footprints＝ドアの前の床に濡れた足あと（第七話の水路）"""
+    from PIL import ImageDraw, ImageFilter
+    a = np.asarray(img).astype(np.float32)
+    rg = np.random.default_rng(8)
+    if "flyer" in names:                                         # 壁の紙：少し傾いた、くすんだ白い紙（廊下の明るさに合わせて暗め）
+        m = Image.new("L", img.size, 0)
+        cx, cy, w, h, ang = 718, 378, 15, 21, np.radians(4)
+        pts = [(cx + dx * np.cos(ang) - dy * np.sin(ang), cy + dx * np.sin(ang) + dy * np.cos(ang))
+               for dx, dy in ((-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2))]
+        ImageDraw.Draw(m).polygon(pts, fill=255)
+        m = np.asarray(m.filter(ImageFilter.GaussianBlur(0.6)), np.float32)[..., None] / 255
+        paper = a[int(cy), int(cx)] * 1.9 + 4                    # まわりの壁の 2 倍くらいの明るさ
+        lines = np.zeros(a.shape[:2], np.float32)                # 小さな字の並び（読めない）
+        for k in range(4):
+            lines[int(cy - 6 + k * 4), int(cx - 5):int(cx + 5)] = 0.35
+        a = a * (1 - m) + (paper * (1 - lines[..., None])) * m
+    if "nameplate" in names:                                     # 名札を、黒いマジックで塗りつぶす（筆の跡がわかる程度のむら）
+        x0, x1, y0, y1 = 532, 566, 325, 333
+        ink = np.array([6, 5, 5], np.float32) + rg.normal(0, 1.2, (y1 - y0, x1 - x0, 1))
+        a[y0:y1, x0:x1] = ink
+    if "footprints" in names:                                    # ドアの前から手前へ、濡れた足あと（暗く、縁に蛍光灯の小さな光）
+        m = Image.new("L", img.size, 0)
+        hl = Image.new("L", img.size, 0)
+        d, dh = ImageDraw.Draw(m), ImageDraw.Draw(hl)
+        for k in range(6):
+            t = k / 5
+            y = 462 + 70 * t ** 1.3
+            s = 1.0 + 1.4 * t                                     # 手前ほど大きい
+            x = 668 + (-7 if k % 2 else 7) * s - 12 * t
+            f = int(230 - 60 * t)                                 # 足の形：つま先側の大きな楕円と、かかとの小さな楕円（床なので縦につぶす）
+            d.ellipse([x - 2.6 * s, y - 6.0 * s, x + 2.6 * s, y - 1.2 * s], fill=f)
+            d.ellipse([x - 1.9 * s, y + 0.2 * s, x + 1.9 * s, y + 3.0 * s], fill=f)
+            dh.point((x + s, y - 4.5 * s), fill=255)
+        m = np.asarray(m.filter(ImageFilter.GaussianBlur(1.0)), np.float32)[..., None] / 255
+        hl = np.asarray(hl.filter(ImageFilter.GaussianBlur(0.7)), np.float32)[..., None] / 255
+        a = a * (1 - 0.8 * m) + 70 * hl
+    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+
+
 def background(ep, path):
     """背景：JPG（画質85）＋細かい粒子で、暗いグラデーションの縞を防ぐ。
     話が進むほどドアが開いていく（door）。動く層ではなく、話ごとの背景に焼き込む"""
     img = door(Image.open(ROOT / "opening" / "bg.png").convert("RGB"), ep)
+    esc = json.loads((ROOT / "opening" / "escalation.json").read_text(encoding="utf-8"))["episodes"][str(ep)]
+    img = traces(img, esc.get("traces", []))
     a = np.asarray(img).astype(np.float32)
     a += np.random.default_rng(1).normal(0, 1.5, a.shape[:2])[..., None]
     Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(path, quality=85)
