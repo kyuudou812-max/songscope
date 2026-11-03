@@ -38,6 +38,7 @@
   ep9/93_film_cut.webp          … 振り返りはじめた瞬間に途切れて真っ黒（前景、1回再生）
   ep9/94_projector_loop.mp3     … 映写機の音（BGM、ループ）
   ep9/95_projector_stop_then_silence.mp3 … フィルムが外れて映写機が止まる → 無音（BGM。途切れる前景と同時に始まる）
+  recap/recap_epN.webp          … 前回のあらすじ（スクリーンパネル、38×24 マス。第2話〜最終話の冒頭）
   preview/*.mp4                 … 確認用（背景に重ねて、音付き）
 
 使い方: python3 tools/make_set_pieces.py [ep8 ep2 ...]   （省略時は全部）
@@ -51,7 +52,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageSequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fxlib import (BLACK, ROOT, SR, TEXT, click, env, filt, font, halo, loop_seam, noise, norm, place,  # noqa: E402
+from fxlib import (BLACK, QUIET, ROOT, SR, TEXT, click, env, filt, font, halo, loop_seam, noise, norm, place,  # noqa: E402
                    resonate, reverb, save_webp_anim, sec, silence, smooth_random, thump, vchar, write_mp3)
 
 OUT = ROOT / "build" / "ccfolia" / "fx"
@@ -1151,7 +1152,30 @@ def ep9():
     preview(None, loop * 2 + cut, t2, "ep9_old_film", tail=2)
 
 
-PIECES = {"ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+
+# ================================================================ 前回のあらすじ
+def recap():
+    """各話の冒頭に出す「前回のあらすじ」のカード（辞書カードと同じ文字・色。38×24 マス）。文は recaps.local.json"""
+    data = json.loads((ROOT / "recaps.local.json").read_text(encoding="utf-8"))
+    W, H = 760, 480
+    for ep, lines in data.items():
+        if not ep.isdigit():
+            continue
+        im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        head, body = font(20), font(24)
+        d.text((50, 52), "前回のあらすじ", font=head, fill=QUIET + (255,))
+        y = 110
+        for s in lines:
+            assert body.getlength(s) < W - 100, s
+            d.text((50, y), s, font=body, fill=TEXT + (255,))
+            y += 52
+        assert y < H - 20, ep
+        halo(im).save(OUT / "recap" / f"recap_ep{ep}.webp", lossless=True)
+    print(f"fx/recap/ に {sum(k.isdigit() for k in data)} 枚")
+
+
+PIECES = {"recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
