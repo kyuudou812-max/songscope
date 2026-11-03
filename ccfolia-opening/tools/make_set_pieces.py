@@ -34,6 +34,9 @@
                                   絵が届くまでは _draft（高架下に仮の目）
   ep7/71_oiwai_flood.webp       … 「お祝いですよ」が画面を埋め尽くす（前景、1回再生）
   ep7/72_reward_mojibake.webp   … 文字化けしたままの報酬のカード（スクリーンパネル、38×18 マス）
+  shared/79_presence_projector.mp3 … 全話を通す「気配の音」：映写機が一瞬だけ回る、ごく小さな音（カットイン。各話で1回だけ）
+  ep5/55b_kamisama_under.webp   … 新聞の切り抜きの裏面（めくると、その下に書かれていた震えた文字）
+  ep7/77_phone_news.webp        … 第七話の朝のスマホのニュース（第五話と同じ画面で、今度は自分たちのこと）
   shared/72_blink_close.webp    … まぶたがとろんと重くなり、ストンと閉じて真っ暗のまま（前景、1回再生。第一話の居眠り）
   ep7/73_queue_panel.webp       … PC の置き場の後ろに出す、行列の後ろ姿（スクリーンパネル 128×54 マス）
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
@@ -610,12 +613,28 @@ def handle_rattle(seed=0):
     return reverb(x, 0.6, 0.25)
 
 
+def pan(x, p):
+    """左右の位置（p：-1＝左、0＝正面、1＝右。時間で変える配列でもよい）。等パワーで振り分ける"""
+    a = (np.asarray(p, np.float32) + 1) * np.pi / 4
+    return (x * np.cos(a)).astype(np.float32), (x * np.sin(a)).astype(np.float32)
+
+
+def write_stereo(path, l, r, peak=0.8, q=4):
+    m = max(np.abs(l).max(), np.abs(r).max(), 1e-6)
+    write_mp3(path, l / m * peak, q=q, stereo=r / m * peak)
+
+
 def ep1():
     d = OUT / "ep1"
-    write_mp3(d / "11_footsteps_stop.mp3", norm(footsteps(seed=110), 0.6))
+    # 音の位置（ラジオドラマの考え方）：足音は右から近づいて、ドアの前（正面）で止まる。引っ掻く音は左右に散らばる
+    fs = footsteps(seed=110)
+    write_stereo(d / "11_footsteps_stop.mp3", *pan(fs, np.clip(np.linspace(0.85, -0.2, len(fs)), 0, 1)), peak=0.6)
     write_mp3(d / "12_door_open_close.mp3", norm(door_open_close(120), 0.8))
     xf = 2.0
-    write_mp3(d / "13_scratching_loop.mp3", norm(loop_seam(scratching(62, 130), xf), 0.55))
+    l = loop_seam(scratching(62, 130), xf)
+    r = loop_seam(scratching(62, 131), xf)
+    n = min(len(l), len(r))
+    write_stereo(d / "13_scratching_loop.mp3", l[:n] * 0.8 + r[:n] * 0.2, r[:n] * 0.8 + l[:n] * 0.2, peak=0.55)
     write_mp3(d / "14_handle_rattle.mp3", norm(handle_rattle(140), 0.8))
 
 
@@ -885,7 +904,8 @@ def zapping(seed=0):
 
 def ep5():
     d = OUT / "ep5"
-    write_mp3(d / "51_tadaima_approach.mp3", norm(tadaima_approach(), 0.8))
+    ta = tadaima_approach()                                          # 左の遠くの部屋から、だんだん正面へ
+    write_stereo(d / "51_tadaima_approach.mp3", *pan(ta, np.linspace(-0.85, -0.15, len(ta))), peak=0.8)
     write_mp3(d / "52_tadaima_arrive.mp3", norm(tadaima_arrive(), 0.75))
     write_mp3(d / "53_zapping.mp3", norm(zapping(530), 0.7))
 
@@ -1324,19 +1344,22 @@ def newspaper():
     return img
 
 
-def kamisama():
-    """第五話：剥がれた記事の下の、酷く震えた文字（目星成功、L1860〜）。明朝を一字ずつ揺らし、筆圧のむらを付ける"""
+def kamisama(W=940, H=460, sizes=(54, 54, 64), steps=(110, 110, 150), x0=60, y0=90, name="55_kamisama", lum0=150, glue=False):
+    """第五話：剥がれた記事の下の、酷く震えた文字（目星成功、L1860〜）。明朝を一字ずつ揺らし、筆圧のむらを付ける。
+    glue=True は、新聞の切り抜きの裏面用（切り抜きを PL がめくると、その下に書かれていた文字が出る。糊の跡つき）"""
     from PIL import ImageFilter
     lines = TXT["ep5_kamisama"]
-    W, H = 940, 460
-    lum = paper(W, H, 55, lum=150)                                 # 記事が剥がれた跡：少し暗い台紙
-    img = Image.fromarray(tone(lum)).convert("RGBA")
+    lum = paper(W, H, 55, lum=lum0)                                 # 記事が剥がれた跡：少し暗い台紙
+    if glue:                                                        # 切り抜きが貼ってあった跡：縁に沿った糊のむら
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        edge = np.minimum(np.minimum(xx, W - xx), np.minimum(yy, H - yy))
+        lum = lum * (1 - 0.18 * np.exp(-edge / 22)) - 10 * (np.random.default_rng(57).random((H, W)) < 0.002)
     rg = np.random.default_rng(56)
     layer = Image.new("L", (W * 2, H * 2), 0)                      # 2倍で書いて縮める（線のがたつきを細かく）
-    y = 90
+    y = y0
     for li, s in enumerate(lines):
-        size = [54, 54, 64][li]
-        x = 60 + rg.uniform(-10, 30)
+        size = sizes[li]
+        x = x0 + rg.uniform(-10, 30)
         for c in s:
             f = font(int(size * rg.uniform(0.85, 1.18)))
             g = Image.new("L", (size * 2, size * 2), 0)
@@ -1347,16 +1370,28 @@ def kamisama():
             g = Image.fromarray(np.maximum(np.asarray(g), (np.asarray(g2) * 0.7).astype(np.uint8)))
             layer.paste(255, (int(x * 2), int((y + rg.normal(0, 7)) * 2)), g.resize((g.width * 2, g.height * 2)))
             x += f.getlength(c) * rg.uniform(0.95, 1.15)
-        y += [110, 110, 150][li] + rg.uniform(-6, 6)
+        assert x < W + 20, (s, x)
+        y += steps[li] + rg.uniform(-6, 6)
     layer = layer.resize((W, H), Image.LANCZOS).filter(ImageFilter.GaussianBlur(0.5))
     a = np.asarray(layer, np.float32) / 255 * (0.65 + 0.35 * rg.random((H, W)))   # 鉛筆の濃淡
     lum2 = lum * (1 - a * 0.8)
     out = Image.fromarray(tone(lum2)).convert("RGBA")
-    out.save(OUT / "ep5" / "55_kamisama.webp", lossless=True)
+    out.save(OUT / "ep5" / f"{name}.webp", lossless=True)
     return out
 
 
-def phone_news():
+def kamisama_under():
+    """新聞の切り抜き（54_obituary）と同じ大きさの、切り抜きの下の台紙。スクリーンパネルの裏面に入れ、PL にめくらせる（漫画のめくり）"""
+    ob = Image.open(OUT / "ep5" / "54_obituary.webp")
+    W, H = ob.size
+    img = kamisama(W, H, sizes=(34, 34, 44), steps=(90, 90, 120), x0=40, y0=int(H * 0.28), name="55b_kamisama_under",
+                   lum0=140, glue=True)
+    img.putalpha(ob.getchannel("A"))                                # 切り抜きと同じ外形
+    img.save(OUT / "ep5" / "55b_kamisama_under.webp", lossless=True)
+    return img
+
+
+def phone_news(key="ep5_phone_news", clock="7:12", name="ep5/56_phone_news.webp"):
     """第五話の朝：手元のスマホに流れてくるニュースの見出し（L1543）。一つだけ「失踪」。色は部屋の色だけ（青は使わない）"""
     W, H = 360, 700
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -1364,16 +1399,17 @@ def phone_news():
     d.rounded_rectangle([0, 0, W - 1, H - 1], 44, fill=(14, 11, 10, 255), outline=(60, 50, 46, 255), width=3)
     d.rounded_rectangle([14, 14, W - 15, H - 15], 34, fill=(24, 19, 17, 255))
     f0, f1, f2 = font(15), font(17), font(12)
-    d.text((34, 32), "7:12", font=f0, fill=QUIET + (255,))
+    d.text((34, 32), clock, font=f0, fill=QUIET + (255,))
     d.text((34, 70), "ニュース", font=font(20), fill=TEXT + (255,))
     y = 120
-    for i, s in enumerate(TXT["ep5_phone_news"]):
+    for i, s in enumerate(TXT[key]):
         d.line([(30, y - 12), (W - 30, y - 12)], fill=(48, 40, 37, 255), width=1)
+        assert draw_text(None, (0, 0), s, f1, None) < W - 68, s       # 画面からはみ出さない
         draw_text(d, (34, y), s, f1, (TEXT if "失踪" in s else QUIET) + (255,))
-        d.text((34, y + 30), ["エンタメ", "天気", "地域", "社会", "グルメ", "話題"][i % 6] + "　・　" + f"{(i + 1) * 7}分前", font=f2,
+        d.text((34, y + 30), TXT["phone_cats"][key][i] + "　・　" + f"{(i + 1) * 7}分前", font=f2,
                fill=QUIETEST + (255,))
         y += 82
-    img.save(OUT / "ep5" / "56_phone_news.webp", lossless=True)
+    img.save(OUT / name, lossless=True)
     return img
 
 
@@ -1411,6 +1447,8 @@ def props():
     newspaper()
     kamisama()
     phone_news()
+    phone_news("ep7_phone_news", "8:40", "ep7/77_phone_news.webp")   # 第七話：同じスマホの画面が、今度は自分たちのこと
+    kamisama_under()
     write_mp3(OUT / "ep5" / "57_window_slap.mp3", norm(window_slap(570), 0.8))
     write_mp3(OUT / "ep6" / "62_beep_short.mp3", norm(beep(0.5), 0.6))
     write_mp3(OUT / "ep6" / "62_beep_long.mp3", norm(beep(1.1), 0.6))
@@ -1704,12 +1742,13 @@ def balcony_loop():
             mosaic[..., :3] = np.clip(big * lut()[np.clip(big.mean(-1), 0, 255).astype(int)] / np.maximum(lut()[200], 1e-3) * 0.8, 0, 255)
             mosaic[..., 3] = (outside * 255).astype(np.uint8)
         fr.alpha_composite(Image.fromarray(mosaic, "RGBA"))
-        if tt < 2.4:                                               # 手を振って立っている（わずかに揺れる）
-            fr.alpha_composite(sa, (int(round(np.sin(tt * 2.2))), 0))
-        elif tt < 2.9:                                             # のけぞる
+        tw = np.floor(tt * 8) / 8                                  # 女の動きは1秒8コマ（パラパラ漫画のようにカクつかせる。人ではないものの動き）
+        if tw < 2.4:                                               # 手を振って立っている（わずかに揺れる）
+            fr.alpha_composite(sa, (int(round(np.sin(tw * 2.2))), 0))
+        elif tw < 2.9:                                             # のけぞる
             fr.alpha_composite(sb)
-        elif tt < 3.5:                                             # 手すりの向こうへ沈む（加速して落ちる）
-            k = (tt - 2.9) / 0.6
+        elif tw < 3.5:                                             # 手すりの向こうへ沈む（加速して落ちる）
+            k = (tw - 2.9) / 0.6
             dy = int((ys.max() - ys.min()) * 1.1 * k * k)
             moved = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
             moved.alpha_composite(sb.rotate(-25 * k, resample=Image.BICUBIC, center=(int(np.where(mb)[1].mean()), rail)), (0, dy))
@@ -1777,7 +1816,14 @@ def vulture_eyes():
     for i in range(int(2.5 * fps)):                                 # 目だけ。忙しなく動く（小さく跳ねるように）
         sh = (int(rg.normal(0, 2)), int(rg.normal(0, 1))) if i % 4 == 0 else (0, 0)
         frames.append(frame(a, 0.9, 0.0, sh))
-    frames += [frame(b, 1.0, 0.0)] * int(3.0 * fps)                # ぴたり。こちらを見据えて3秒
+    ys_, xs_ = np.where(eyes)
+    cx, cy = xs_.mean(), ys_.mean()
+    for z in (1.4, 2.0, 2.8):                                       # ぴたり。目のアップを3回、だんだん近く（出崎統の繰り返しのショット）
+        f0 = frame(b, 1.0, 0.0)
+        w, h = int(1280 / z), int(720 / z)
+        x0, y0 = int(np.clip(cx - w / 2, 0, 1280 - w)), int(np.clip(cy - h / 2, 0, 720 - h))
+        frames += [f0.crop((x0, y0, x0 + w, y0 + h)).resize((1280, 720), Image.LANCZOS)] * int(0.3 * fps)
+    frames += [frame(b, 1.0, 0.0)] * int(2.1 * fps)                # 引いて、こちらを見据えたまま
     for i in range(int(1.8 * fps)):                                 # 全体がゆっくり浮かぶ
         k = (i + 1) / int(1.8 * fps)
         frames.append(frame(b, 1.0, k * k))
@@ -1793,7 +1839,21 @@ def vulture():
     preview(bg, fr, OUT / "preview" / "silence.mp3", "ep7_vulture_eyes", tail=1)
 
 
-PIECES = {"vulture": vulture, "balcony": balcony, "ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+# ================================================================ 全話：気配の音
+def presence():
+    """全話を通す「気配の音」（怪談の「カラン、コロン」の考え方）：映写機が一瞬だけカタカタと回る、ごく小さな音。
+    化身がそばにいる瞬間に、各話で1回だけ鳴らす。説明はしない。最終話の劇場で映写機が回り出したとき、正体がわかる"""
+    n = sec(1.4)
+    x = np.zeros(n, np.float32)
+    for k in range(22):                                             # 1秒24回の送り。回り始めて、すぐ止まる
+        t0 = 0.15 + k / 24 * (1 + 0.6 * (k / 22) ** 2)
+        place(x, click(1200, 4500, 0.004, 790 + k % 7) * 0.4 * np.sin(np.pi * k / 22) ** 0.7, t0)
+    motor = filt(noise(1.4, 791), 90, 300, order=4) * np.sin(np.pi * np.arange(n) / n) ** 2 * 0.5
+    x = reverb(filt(x + motor, hi=3500), 1.6, 0.6, 2500)            # 遠く、広いところで鳴っているように
+    write_mp3(OUT / "shared" / "79_presence_projector.mp3", norm(x, 0.35))
+
+
+PIECES = {"presence": presence, "vulture": vulture, "balcony": balcony, "ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
