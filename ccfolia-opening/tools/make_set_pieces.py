@@ -27,6 +27,9 @@
   ep9/99_proof_0〜3,reach.webp  … 【暗闇証明】：女の形の輪郭がほどけていく4段階と、近づく形（前景）
   ep9/97_hall_Npc.jpg           … 劇場のホール：空席を遊ぶ人数（1〜3人）にそろえた背景（4人は元の絵のまま）
   ep9/96_knob_held.mp3          … 非常口のノブが、向こうから引き戻される（カットイン）
+  ep5/58_dusk_loop.mp3          … 夕暮れの団地（風と遠くの踏切。羽ばたきなし）。玄関・台所・奥の部屋のシーン用
+  ep7/74_rain_loop.mp3          … 雨の町（BGM、ループ）
+  ep7/75_channel_loop.mp3       … 地下水路の濁流（BGM、ループ）
   ep7/71_oiwai_flood.webp       … 「お祝いですよ」が画面を埋め尽くす（前景、1回再生）
   ep7/72_reward_mojibake.webp   … 文字化けしたままの報酬のカード（スクリーンパネル、38×18 マス）
   shared/72_blink_close.webp    … まぶたがとろんと重くなり、ストンと閉じて真っ暗のまま（前景、1回再生。第一話の居眠り）
@@ -1577,7 +1580,42 @@ def moving():
     queue_panel()
 
 
-PIECES = {"moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+
+# ================================================================ 環境音（BGM の穴埋め。声なし）
+def rain(L=62, seed=0):
+    """第七話：厚い雲の雨の町。屋根や路面を打つ細かい雨粒と、低いざあという音、ときどき雨どいの滴り"""
+    n = sec(L)
+    wash = filt(noise(L, seed), 300, 6000) * (0.8 + 0.2 * smooth_random(L, 0.3, seed + 1))
+    drops = np.zeros(n, np.float32)
+    rg = np.random.default_rng(seed + 2)
+    for t0 in rg.uniform(0, L, int(L * 60)):
+        place(drops, click(1500, 6000, 0.004, int(t0 * 1000) % 997) * rg.uniform(0.03, 0.12), t0)
+    gutter = np.zeros(n, np.float32)
+    for t0 in np.arange(rg.uniform(0, 1), L, 0.9) + rg.normal(0, 0.08, int(L / 0.9) + 1)[: len(np.arange(0, L, 0.9))]:
+        place(gutter, resonate(noise(0.1, int(t0 * 100)) * env(sec(0.1), 0.001, 0.02), [900, 1400], q=30) * 0.15, max(0, t0))
+    low = filt(noise(L, seed + 3), 60, 300) * 0.6
+    return loop_seam(norm(wash) * 0.5 + drops + gutter + norm(low) * 0.2, 2.0)
+
+
+def channel(L=62, seed=0):
+    """第七話：地下水路。増水した濁流の低いうなりと、コンクリートに響く水音"""
+    flow = filt(noise(L, seed), 80, 1200) * (0.7 + 0.3 * smooth_random(L, 0.5, seed + 1))
+    splash = filt(noise(L, seed + 2), 1200, 5000) * smooth_random(L, 2.0, seed + 3) ** 3 * 0.6
+    return loop_seam(reverb(norm(flow) * 0.8 + splash, 2.0, 0.5, 2500), 2.0)
+
+
+def ambience():
+    write_mp3(OUT / "ep7" / "74_rain_loop.mp3", norm(rain(seed=740), 0.5))
+    write_mp3(OUT / "ep7" / "75_channel_loop.mp3", norm(channel(seed=750), 0.55))
+    dusk = ROOT / "build" / "ccfolia" / "moth" / "dusk.wav"
+    if dusk.exists():                                               # 第五話の夕暮れ（羽ばたきの音なし）。部屋の中のシーン用
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", "0.6", "-i", str(dusk), "-af", "afade=t=in:d=2",   # 頭の羽ばたきを切る
+                        "-c:a", "libmp3lame", "-q:a", "5",
+                        str(OUT / "ep5" / "58_dusk_loop.mp3")], check=True)
+        print("ep5/58_dusk_loop.mp3")
+
+
+PIECES = {"ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
