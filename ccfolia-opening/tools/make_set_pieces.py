@@ -37,6 +37,8 @@
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
   ep8/82_bang_gust.mp3          … 窓が開く「バン」→ 突風とカーテンのはためき（BGM。頭の一撃はシーンの切り替えと同時）
   ep8/83_card_1〜4.webp         … 四択のカード（スクリーンパネル、38×10 マス）
+  ep8/86_balcony_bg.jpg / 86_balcony_loop.webp … ベランダ（背景）と、手を振る → のけぞる → 沈んで消える女＋白いモザイクのループ（前景）。
+                                  絵が届くまでは _draft（家具のない部屋に仮の影）
   ep8/84_nandomo.webp           … 「何度も」が画面を埋めて真っ黒になる（前景、1280×720、1回再生）
   ep8/85_shepard_then_silence.mp3 … 上がり続ける音 → 真っ黒になるコマで無音（BGM。前景と同時に始まる）
   ep1/11_footsteps_stop.mp3     … コツ、コツと廊下を近づき、ドアの前で止まる（カットイン）
@@ -1615,7 +1617,118 @@ def ambience():
         print("ep5/58_dusk_loop.mp3")
 
 
-PIECES = {"ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+
+# ================================================================ 第八話：ベランダのループ（絵が届いたら本番）
+# ChatGPT の3枚（人なし／手を振る女／のけぞる女。同じ構図）の差から女の形だけを切り出し、
+# 手を振って立つ → のけぞる → 手すりの向こうへ沈んで消える → 誰もいない、を6秒でループさせる（『回路』のように、遠くから淡々と）。
+# 窓の外の白くぼやけた景色は、こちらで白いモザイク（画素の粗いブロック）にして揺らす（本文「白いモザイクをかけていた」）
+BALCONY = [ROOT / "assets" / f"ep8_balcony_{k}.png" for k in range(3)]   # 届いたらここに置く（0=人なし、1=手を振る、2=のけぞる）
+WINDOW = (205, 30, 505, 445)                                           # 窓の範囲（家具のない部屋の構図。届いた絵で測り直す）
+
+
+def toned(src):
+    """届いた絵を、部屋と同じ赤茶にそろえる（make_scene_bg と同じ物差し）"""
+    from PIL import ImageOps
+    img = ImageOps.fit(Image.open(src).convert("RGB"), (1280, 720), Image.LANCZOS)
+    a = np.asarray(img).astype(np.float32)
+    lum = (a @ np.array([0.299, 0.587, 0.114], np.float32)) / 255 * 236 + 6
+    yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
+    lum = lum * 0.62 * np.clip(1 - 0.55 * (((xx - 640) / 760) ** 2 + ((yy - 340) / 470) ** 2), 0.35, 1)
+    return np.clip(lum[..., None] * lut()[np.clip(lum, 0, 255).astype(int)], 0, 255).astype(np.uint8)
+
+
+def balcony_inputs():
+    """本番は届いた3枚。届くまでは、家具のない部屋の窓の向こうに、女の立ち絵の影を置いた仮の3枚で動きを作る"""
+    if all(p.exists() for p in BALCONY):
+        return [toned(p) for p in BALCONY], False
+    from PIL import ImageFilter
+    e = np.asarray(Image.open(SCENES / "ep8_01_room.jpg").convert("RGB"))
+    w_src = Image.open(ROOT / "build" / "ccfolia" / "npc" / "npc_woman.webp").getchannel("A")
+    out = [e]
+    for lean in (0, 22):
+        h = 230
+        a = w_src.resize((int(w_src.width * h / w_src.height), h), Image.LANCZOS)
+        a = a.rotate(lean, resample=Image.BICUBIC, expand=True, center=(a.width / 2, h * 0.55))
+        m = Image.new("L", (1280, 720), 0)
+        m.paste(a, (360 - a.width // 2, 432 - a.height))
+        m = np.asarray(m.filter(ImageFilter.GaussianBlur(0.8)), np.float32)[..., None] / 255
+        out.append((e * (1 - m) + np.array([8, 6, 6]) * m).astype(np.uint8))
+    return out, True
+
+
+def figure_mask(base, other):
+    """2枚の差から、女の形だけを取り出す（いちばん大きくつながった部分）"""
+    from scipy.ndimage import binary_closing, binary_opening, label
+    d = np.abs(other.astype(np.float32) - base.astype(np.float32)).mean(-1)
+    m = binary_opening(binary_closing(d > 18, iterations=3), iterations=1)
+    lab, n = label(m)
+    if n == 0:
+        raise SystemExit("女の形が見つからない（3枚の構図がずれていないか確認）")
+    keep = lab == (np.argmax(np.bincount(lab.ravel())[1:]) + 1)
+    return keep
+
+
+def balcony_loop():
+    from PIL import ImageFilter
+    (e, a, b), draft = balcony_inputs()
+    ma, mb = figure_mask(e, a), figure_mask(e, b)
+    x0, y0, x1, y1 = WINDOW
+    # 手すりの高さ：窓の中で、横に強い線がいちばん目立つ行（下半分）
+    # 手すりの高さ：窓の高さの 45〜80% の範囲で、横に強い線がいちばん目立つ行（窓の下枠を拾わないように範囲を絞る）
+    g = np.abs(np.diff(e[y0:y1, x0:x1].astype(np.float32).mean(-1), axis=0)).mean(1)
+    lo, hi = int(len(g) * 0.45), int(len(g) * 0.8)
+    rail = y0 + lo + int(np.argmax(g[lo:hi]))
+    # 窓の外（白くぼやけるところ）：窓の範囲で、手すりより上の明るいところ
+    lum = e.astype(np.float32).mean(-1)
+    outside = np.zeros(lum.shape, bool)
+    outside[y0:rail, x0:x1] = lum[y0:rail, x0:x1] > np.percentile(lum[y0:rail, x0:x1], 35)
+    sa = Image.fromarray(np.dstack([a, (ma * 255).astype(np.uint8)]), "RGBA")
+    sb = Image.fromarray(np.dstack([b, (mb * 255).astype(np.uint8)]), "RGBA")
+    ys = np.where(mb)[0]
+    fps, L = FPS, 6.0
+    frames, mosaic = [], None
+    rg = np.random.default_rng(86)
+    for i in range(int(L * fps)):
+        tt = i / fps
+        fr = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
+        if i % 3 == 0:                                            # モザイクは1秒に10回だけ変える（容量のため）
+            blk = int(rg.uniform(14, 30))
+            sx = int(rg.normal(0, 6))
+            src = np.roll(e, sx, axis=1).astype(np.float32)
+            small = Image.fromarray(src.astype(np.uint8)).resize((1280 // blk, 720 // blk), Image.BILINEAR)
+            big = np.asarray(small.resize((1280, 720), Image.NEAREST)).astype(np.float32)
+            big = big * 0.4 + 210 * 0.6                            # 白っぽく飛ばす
+            mosaic = np.zeros((720, 1280, 4), np.uint8)
+            mosaic[..., :3] = np.clip(big * lut()[np.clip(big.mean(-1), 0, 255).astype(int)] / np.maximum(lut()[200], 1e-3) * 0.8, 0, 255)
+            mosaic[..., 3] = (outside * 255).astype(np.uint8)
+        fr.alpha_composite(Image.fromarray(mosaic, "RGBA"))
+        if tt < 2.4:                                               # 手を振って立っている（わずかに揺れる）
+            fr.alpha_composite(sa, (int(round(np.sin(tt * 2.2))), 0))
+        elif tt < 2.9:                                             # のけぞる
+            fr.alpha_composite(sb)
+        elif tt < 3.5:                                             # 手すりの向こうへ沈む（加速して落ちる）
+            k = (tt - 2.9) / 0.6
+            dy = int((ys.max() - ys.min()) * 1.1 * k * k)
+            moved = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
+            moved.alpha_composite(sb.rotate(-25 * k, resample=Image.BICUBIC, center=(int(np.where(mb)[1].mean()), rail)), (0, dy))
+            arr = np.asarray(moved).copy()
+            arr[rail:, :, 3] = 0                                   # 手すりより下（外）は見えない
+            fr.alpha_composite(Image.fromarray(arr, "RGBA"))
+        frames.append(fr)
+    print("手すりの高さ", rail)
+    sfx = "_draft" if draft else ""
+    save_webp_anim(frames, OUT / "ep8" / f"86_balcony_loop{sfx}.webp", lossless=False, quality=80, loop=0)
+    Image.fromarray(e).save(OUT / "ep8" / f"86_balcony_bg{sfx}.jpg", quality=88)
+    return frames, OUT / "ep8" / f"86_balcony_bg{sfx}.jpg"
+
+
+def balcony():
+    fr, bg = balcony_loop()
+    write_mp3(OUT / "preview" / "silence.mp3", silence(13))
+    preview(bg, fr * 2, OUT / "preview" / "silence.mp3", "ep8_balcony_loop", tail=0)
+
+
+PIECES = {"balcony": balcony, "ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
