@@ -66,7 +66,8 @@ PANELS = [(f"第3話 人影{k}", FX / "ep3" / f"31_edge_figure_{k}.webp", x, -34
 PANELS += [
     ("第3話 チラシ", FX / "ep3" / "32_flyer.webp", -10, -14, 20, 28, None),
     ("第5話 スマホのニュース", FX / "ep5" / "56_phone_news.webp", -7, -14, 14, 27, None),
-    ("第5話 新聞の訃報", FX / "ep5" / "54_obituary.webp", -12, -15, 24, 30, None),
+    ("第5話 新聞の訃報（PL がめくる）", FX / "ep5" / "54_obituary.webp", -12, -15, 24, 30, FX / "ep5" / "55b_kamisama_under.webp"),
+    ("第7話 スマホのニュース", FX / "ep7" / "77_phone_news.webp", -7, -14, 14, 27, None),
     ("第5話 震えた文字", FX / "ep5" / "55_kamisama.webp", -19, -9, 38, 19, None),
     ("第7話 行列（PC の後ろ）", FX / "ep7" / "73_queue_panel.webp", -64, 36, 128, 54, None),
 ]
@@ -111,7 +112,8 @@ def main(src, outdir):
     for k, (memo, img, x, y, w, h, cover) in enumerate(PANELS, 1):
         it = copy.deepcopy(template)
         it.update(x=x, y=y, z=0 if "行列" in memo else 50, width=w, height=h, memo=memo, imageUrl=add(img),
-                  coverImageUrl=add(cover) if cover else None, closed=False, active=False, locked=True,
+                  coverImageUrl=add(cover) if cover else None, closed=False, active=False,
+                  locked="めくる" not in memo,                       # PL 自身にめくらせる札だけ、ロックを外す（漫画の「めくり」）
                   visible=True, freezed=False, type="object", order=top + k)
         ent["items"][make_id("panel:" + memo)] = it
 
