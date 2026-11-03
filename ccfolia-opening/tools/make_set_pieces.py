@@ -23,9 +23,14 @@
   ep5/56_phone_news.webp        … 朝のスマホのニュース（スクリーンパネル）
   ep5/57_window_slap.mp3        … スクラップブックが窓に叩きつけられる「バン！」（カットイン）
   ep6/62_beep_short/long.mp3    … 放送禁止音（カットイン。声は使わず、伏せ字の位置で鳴らす）
+  ep9/98_lobby_flicker_loop.webp … ロビーの照明の明滅（前景、640×360、ずっとループ）
+  ep9/99_proof_0〜3,reach.webp  … 【暗闇証明】：女の形の輪郭がほどけていく4段階と、近づく形（前景）
+  ep9/97_hall_Npc.jpg           … 劇場のホール：空席を遊ぶ人数（1〜3人）にそろえた背景（4人は元の絵のまま）
   ep9/96_knob_held.mp3          … 非常口のノブが、向こうから引き戻される（カットイン）
   ep7/71_oiwai_flood.webp       … 「お祝いですよ」が画面を埋め尽くす（前景、1回再生）
   ep7/72_reward_mojibake.webp   … 文字化けしたままの報酬のカード（スクリーンパネル、38×18 マス）
+  shared/72_blink_close.webp    … まぶたがとろんと重くなり、ストンと閉じて真っ暗のまま（前景、1回再生。第一話の居眠り）
+  ep7/73_queue_panel.webp       … PC の置き場の後ろに出す、行列の後ろ姿（スクリーンパネル 128×54 マス）
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
   ep8/82_bang_gust.mp3          … 窓が開く「バン」→ 突風とカーテンのはためき（BGM。頭の一撃はシーンの切り替えと同時）
   ep8/83_card_1〜4.webp         … 四択のカード（スクリーンパネル、38×10 マス）
@@ -1405,7 +1410,174 @@ def props():
     write_mp3(OUT / "ep9" / "96_knob_held.mp3", norm(knob_held(960), 0.8))
 
 
-PIECES = {"props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+
+# ================================================================ 最終話：人数分の空席
+# 劇場のホールは、いちばん後ろの列に空席が4つ。遊ぶ人数が少ないときは、余った空席に同じ列の観客を写して埋め、
+# 空席の数を PC の人数にそろえる（「空いているのは、ちょうどあなたたちの分」）
+SEATS = [(352, 492), (497, 636), (641, 778), (782, 920)]          # 空席の左右（1280×720。背もたれの上端 y≈545）
+DONORS = [(190, 345), (932, 1092)]                                  # 同じ列の、座っている観客（左・右）
+
+
+def hall_for(players):
+    from PIL import ImageFilter
+    src = Image.open(SCENES / "ep9_02_hall.jpg").convert("RGB")
+    fill = {1: [0, 2, 3], 2: [0, 3], 3: [3], 4: []}[players]          # 残す空席が真ん中に寄るように埋める
+    out = src.copy()
+    for i, s in enumerate(fill):
+        dx0, dx1 = DONORS[i % 2]
+        patch = src.crop((dx0, 425, dx1, 610))
+        if i % 2 == 0:
+            patch = patch.transpose(Image.FLIP_LEFT_RIGHT)              # 同じ人が並ばないよう、左右を返す
+        x0, x1 = SEATS[s]
+        w = x1 - x0 + 16
+        patch = patch.resize((w, int(patch.height * w / patch.width)), Image.LANCZOS)
+        m = Image.new("L", patch.size, 0)
+        ImageDraw.Draw(m).rounded_rectangle([10, 0, patch.width - 10, patch.height], 30, fill=255)
+        m = m.filter(ImageFilter.GaussianBlur(8))
+        out.paste(patch, (x0 - 8, 610 - patch.height), m)
+    out.save(OUT / "ep9" / f"97_hall_{players}pc.jpg", quality=88)
+    return out
+
+
+def ep9_seats():
+    for n in (1, 2, 3):
+        hall_for(n)
+
+
+
+# ================================================================ 動く素材（追加）
+def blink_close():
+    """第一話の講演：POW 失敗で「目蓋がストンと落ちて開かない」。とろんと重くなり、一度持ち直し、ストンと閉じて真っ暗のまま"""
+    keys = [(0.0, 1.35), (0.4, 1.35), (1.6, 0.38), (1.9, 0.6), (2.8, 0.16), (2.92, 0.0)]
+    frames = []
+    for i in range(int(keys[-1][0] * FPS) + 1):
+        tt = i / FPS
+        for (t0, v0), (t1, v1) in zip(keys, keys[1:]):
+            if t0 <= tt <= t1:
+                k = (tt - t0) / max(t1 - t0, 1e-6)
+                v = v0 + (v1 - v0) * (k * k * (3 - 2 * k))
+                break
+        else:
+            v = 0.0
+        frames.append(lids(v, feather=0.12 + 0.35 * (1 - min(v, 1))))
+    frames += [lids(0.0)] * int(0.5 * FPS)
+    save_webp_anim(frames, OUT / "shared" / "72_blink_close.webp")
+    return frames
+
+
+def lobby_flicker(L=10.0):
+    """最終話のロビー：入口の照明が「ちか、ちか」と明滅する（前景、ループ）。暗くなる回数は1秒に3回まで"""
+    rg = np.random.default_rng(97)
+    n = int(L * FPS)
+    dim = np.zeros(n)
+    f = int(rg.uniform(10, 30))
+    while f < n - 8:
+        length = int(rg.integers(2, 6))
+        depth = rg.uniform(0.35, 0.75)
+        dim[f:f + length] = depth
+        if rg.random() < 0.4:                                     # 点き直しに失敗して、もう一度
+            dim[f + length + 1:f + length + 3] = depth * 0.8
+        f += int(rg.uniform(0.6, 2.8) * FPS)                       # 次まで 0.6〜2.8 秒（1秒に3回を超えない）
+    cache = {}
+    frames = []
+    for v in dim:
+        key = round(v, 2)
+        if key not in cache:
+            cache[key] = Image.new("RGBA", (640, 360), BLACK + (int(255 * key),))
+        frames.append(cache[key])
+    save_webp_anim(frames, OUT / "ep9" / "98_lobby_flicker_loop.webp", loop=0)
+    return frames
+
+
+def darkness_proof():
+    """【暗闇証明】（L3240〜）：POW*5・*4・*3 に成功するたびに、女の形の輪郭がほどけていく。
+    0＝完全、1＝少しほどける、2＝大きくほどける、3＝何もない戸口。reach＝《女》が判定するとき（女の形が少し近づく）"""
+    from PIL import ImageFilter
+    from scipy.ndimage import distance_transform_edt
+    sys.path.insert(0, str(ROOT / "tools"))
+    from export_ccfolia import door
+    draft = not FULL_DOOR.exists()
+    base = Image.open(ROOT / "opening" / "bg.png").convert("RGB")
+    bg = door(base, 9) if draft else door(base, 9, FULL_DOOR)
+    m = doorway_mask(bg)
+    ys, xs = np.where(m)
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    w_src = Image.open(ROOT / "build" / "ccfolia" / "npc" / "npc_woman.webp").getchannel("A")
+    H, W = m.shape
+    rg = np.random.default_rng(91)
+    streak = np.asarray(Image.fromarray((rg.random((H // 24 + 1, W // 3 + 1)) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC),
+                        np.float32) / 255
+    lum = 30 + 16 * streak
+    rgb = np.clip(lum[..., None] * lut()[np.clip(lum, 0, 255).astype(int)], 0, 255)
+
+    def shape_at(scale):
+        h = int((y1 - y0) * 0.9 * scale)
+        w = int(w_src.width * h / w_src.height)
+        s = Image.new("L", (W, H), 0)
+        s.paste(w_src.resize((w, h), Image.LANCZOS), (int((x0 + x1) / 2 - w / 2), int(y1 - h - 1)))
+        return np.asarray(s.filter(ImageFilter.GaussianBlur(0.8)), np.float32) / 255
+
+    noise = np.asarray(Image.fromarray((np.random.default_rng(92).random((H // 2, W // 2)) * 255).astype(np.uint8)).resize(
+        (W, H), Image.BICUBIC), np.float32) / 255
+    sfx = "_draft" if draft else ""
+
+    def save(shape, name):
+        a = (m * (1 - shape) * 255).astype(np.uint8)
+        im = np.zeros((H, W, 4), np.uint8)
+        im[..., :3] = (rgb * m[..., None]).astype(np.uint8)
+        im[..., 3] = a
+        Image.fromarray(im, "RGBA").save(OUT / "ep9" / f"99_proof_{name}{sfx}.webp", lossless=True)
+
+    full = shape_at(1.0)
+    inside = distance_transform_edt(full > 0.5)                     # 輪郭からの距離（内側ほど大きい）
+    for k, depth in enumerate((0, 4, 10)):                           # ほどける深さ（px）
+        if depth == 0:
+            s = full
+        else:
+            # 輪郭の近くから、むらのある形で欠けていく（糸がほどけるように、縦に流れるむら）
+            erode = (inside < depth * (0.4 + 1.2 * noise)) & (full > 0)
+            s = full * (1 - erode) * (0.85 if k == 2 else 1.0)
+        save(s, str(k))
+    save(np.zeros_like(full), "3")
+    save(shape_at(1.12), "reach")
+    bg.save(OUT / "ep9" / f"90_full_door_bg{sfx}.jpg", quality=88)
+
+
+def queue_panel():
+    """第七話：「町中だろうが、家の中に居ようが、ふと見れば行列」（L2290〜）。PC の置き場の後ろに出す、
+    楽しげに並ぶ人々の後ろ姿の列（顔は見せない）。スクリーンパネル 128×54 マス（PC の置き場と同じ範囲）"""
+    from PIL import ImageFilter
+    src = Image.open(ROOT / "build" / "ccfolia" / "npc" / "npc_figure.webp").getchannel("A")
+    W, H = 1280, 540
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    rg = np.random.default_rng(73)
+    n = 22
+    for i in range(n):                                             # 右手前から左奥へ、だんだん小さく
+        k = i / (n - 1)
+        scale = 1.0 - 0.72 * k
+        h = int(H * 0.95 * scale)
+        a = src.resize((int(src.width * h / src.height * rg.uniform(0.85, 1.1)), h), Image.LANCZOS)
+        if rg.random() < 0.5:
+            a = a.transpose(Image.FLIP_LEFT_RIGHT)
+        a = a.filter(ImageFilter.GaussianBlur(4 + 6 * k))
+        a = a.point(lambda v, o=0.7 - 0.35 * k: int(min(255, v * 1.3) * o))
+        layer = Image.new("RGBA", a.size, (12, 9, 9, 255))
+        layer.putalpha(a)
+        x = int(W * (0.92 - 0.82 * k) - a.width / 2 + rg.normal(0, 12))
+        y = int(H - h - k * H * 0.28)
+        img.alpha_composite(layer, (x, y)) if x + a.width > 0 else None
+    img.save(OUT / "ep7" / "73_queue_panel.webp", lossless=True)
+    return img
+
+
+def moving():
+    blink_close()
+    lobby_flicker()
+    darkness_proof()
+    queue_panel()
+
+
+PIECES = {"moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
