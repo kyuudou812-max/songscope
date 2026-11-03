@@ -35,12 +35,14 @@ E9 = FX / "ep9"
 DRAFT = "_draft" if not (E9 / "90_full_door_bg.jpg").exists() else ""      # 開ききったドアの絵が届くまでは試作版
 FILM = "_draft" if not (E9 / "92_film_loop.webp").exists() else ""
 BAL = "_draft" if not (FX / "ep8" / "86_balcony_loop.webp").exists() else ""
+VUL = "_draft" if not (FX / "ep7" / "76_vulture_eyes.webp").exists() else ""
 SCENES = [
     ("第1話 居眠り", "第1話 会議室", S / "ep1_01_conference.jpg", FX / "shared" / "72_blink_close.webp"),
     ("第1話 目を覚ます", "第1話 会議室", S / "ep1_01_conference.jpg", FX / "shared" / "71_blink_reopen.webp"),
     ("第4話 逃走（シート）", "第4話 ブルーシートの現場", S / "ep4_02_bluesheet.jpg", FX / "ep4" / "41_endless_sheet_loop.webp"),
     ("第4話 大通り（仮）", "第4話 ブルーシートの現場", S / "ep3_01_street.jpg", None),
     ("第7話 お祝いですよ", "第7話 水路の合流地点", S / "ep7_04_junction.jpg", FX / "ep7" / "71_oiwai_flood.webp"),
+    ("第7話 ハゲタカ", "第7話 高架下と階段", FX / "ep7" / f"76_vulture_bg{VUL}.jpg", FX / "ep7" / f"76_vulture_eyes{VUL}.webp"),
     ("第8話 目覚め", "第8話 家具のない部屋", S / "ep8_01_room.jpg", FX / "shared" / "70_blink_open.webp"),
     ("第8話 ベランダ", "第8話 家具のない部屋", FX / "ep8" / f"86_balcony_bg{BAL}.jpg", FX / "ep8" / f"86_balcony_loop{BAL}.webp"),
     ("第8話 何度も", "第8話 家具のない部屋", FX / "ep8" / f"86_balcony_bg{BAL}.jpg", FX / "ep8" / "84_nandomo.webp"),

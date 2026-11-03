@@ -30,6 +30,8 @@
   ep5/58_dusk_loop.mp3          … 夕暮れの団地（風と遠くの踏切。羽ばたきなし）。玄関・台所・奥の部屋のシーン用
   ep7/74_rain_loop.mp3          … 雨の町（BGM、ループ）
   ep7/75_channel_loop.mp3       … 地下水路の濁流（BGM、ループ）
+  ep7/76_vulture_bg.jpg / 76_vulture_eyes.webp … 高架下のハゲタカ（背景）と、目だけ → 見据える → 全体が浮かぶ（前景、1回再生）。
+                                  絵が届くまでは _draft（高架下に仮の目）
   ep7/71_oiwai_flood.webp       … 「お祝いですよ」が画面を埋め尽くす（前景、1回再生）
   ep7/72_reward_mojibake.webp   … 文字化けしたままの報酬のカード（スクリーンパネル、38×18 マス）
   shared/72_blink_close.webp    … まぶたがとろんと重くなり、ストンと閉じて真っ暗のまま（前景、1回再生。第一話の居眠り）
@@ -1728,7 +1730,70 @@ def balcony():
     preview(bg, fr * 2, OUT / "preview" / "silence.mp3", "ep8_balcony_loop", tail=0)
 
 
-PIECES = {"balcony": balcony, "ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+
+# ================================================================ 第七話：ハゲタカの目（絵が届いたら本番）
+# ChatGPT の2枚（目が左右ばらばら／目がこちらを見据える。ほかは同じ）の差から目のところだけを見つけ、
+# 暗闇の中で目だけが忙しなく動く → ぴたりとこちらで止まる → 3秒 → 全体がゆっくり浮かび上がる、の1回再生の前景にする
+VULTURE = [ROOT / "assets" / f"ep7_vulture_{k}.png" for k in (1, 2)]   # 届いたらここに置く（1=ばらばら、2=こちら）
+
+
+def vulture_inputs():
+    if all(p.exists() for p in VULTURE):
+        return [toned(p) for p in VULTURE], False
+    base = np.asarray(Image.open(SCENES / "ep7_02_underpass.jpg").convert("RGB")).copy()   # 仮：高架下に、目を2つ描くだけ
+    out = []
+    for look in (((-6, -2), (5, 3)), ((0, 2), (0, 2))):
+        im = Image.fromarray(base.copy())
+        d = ImageDraw.Draw(im)
+        for (cx, cy), (px, py) in zip(((600, 250), (690, 255)), look):
+            d.ellipse([cx - 18, cy - 12, cx + 18, cy + 12], fill=(205, 180, 150))
+            d.ellipse([cx + px - 6, cy + py - 6, cx + px + 6, cy + py + 6], fill=(10, 8, 8))
+        out.append(np.asarray(im))
+    return out, True
+
+
+def vulture_eyes():
+    from PIL import ImageFilter
+    from scipy.ndimage import binary_dilation, label
+    (a, b), draft = vulture_inputs()
+    diff = np.abs(a.astype(np.float32) - b.astype(np.float32)).mean(-1) > 20
+    lab, n = label(binary_dilation(diff, iterations=6))
+    sizes = np.bincount(lab.ravel())[1:]
+    eyes = np.isin(lab, np.argsort(sizes)[-2:] + 1)                 # いちばん大きい2か所＝二つの目
+    eyes = binary_dilation(eyes, iterations=10)
+    glow = np.asarray(Image.fromarray((eyes * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(8)), np.float32) / 255
+    fps = FPS
+    rg = np.random.default_rng(77)
+    frames = []
+    dark = np.zeros((720, 1280, 3), np.float32) + np.array(BLACK, np.float32)
+
+    def frame(img, eye_gain, light, shift=(0, 0)):
+        src = np.roll(np.roll(img.astype(np.float32), shift[1], 0), shift[0], 1) if shift != (0, 0) else img.astype(np.float32)
+        e = src * glow[..., None] * eye_gain
+        full = img.astype(np.float32) * light
+        out = np.maximum(dark * (1 - light) + full, e)
+        return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).convert("RGBA")
+
+    for i in range(int(2.5 * fps)):                                 # 目だけ。忙しなく動く（小さく跳ねるように）
+        sh = (int(rg.normal(0, 2)), int(rg.normal(0, 1))) if i % 4 == 0 else (0, 0)
+        frames.append(frame(a, 0.9, 0.0, sh))
+    frames += [frame(b, 1.0, 0.0)] * int(3.0 * fps)                # ぴたり。こちらを見据えて3秒
+    for i in range(int(1.8 * fps)):                                 # 全体がゆっくり浮かぶ
+        k = (i + 1) / int(1.8 * fps)
+        frames.append(frame(b, 1.0, k * k))
+    sfx = "_draft" if draft else ""
+    save_webp_anim(frames, OUT / "ep7" / f"76_vulture_eyes{sfx}.webp", lossless=False, quality=80)
+    Image.fromarray(b).save(OUT / "ep7" / f"76_vulture_bg{sfx}.jpg", quality=88)
+    return frames, OUT / "ep7" / f"76_vulture_bg{sfx}.jpg"
+
+
+def vulture():
+    fr, bg = vulture_eyes()
+    write_mp3(OUT / "preview" / "silence.mp3", silence(13))
+    preview(bg, fr, OUT / "preview" / "silence.mp3", "ep7_vulture_eyes", tail=1)
+
+
+PIECES = {"vulture": vulture, "balcony": balcony, "ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
