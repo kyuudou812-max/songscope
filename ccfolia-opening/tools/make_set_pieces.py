@@ -14,10 +14,10 @@
   ep4/42_tarp_run_loop.mp3      … シートをかき分けて走る音・息・遠くの大通り（BGM、ループ）
   ep4/43_avenue_loop.mp3        … 人で溢れた大通り（BGM、ループ）。逃げ切った安心
   ep4/44_gusha.mp3              … 背後で何かが落ちた「グシャ」（カットイン）
-  ep4/45_tape_voice.mp3         … 上から降ってくる、間延びしたテープのような「あとひとつ」（カットイン、POW 失敗）
-  ep5/51_tadaima_approach.mp3   … 「ただいまー」が一部屋ずつ近づいてくる（カットイン）
-  ep5/52_tadaima_arrive.mp3     … この部屋に帰ってきて、ぎし、沈黙、出ていく（カットイン。押入れに隠れた場合）
+  ep5/51_tadaima_approach.mp3   … ドアの開け閉めが一部屋ずつ近づいてくる（カットイン）。「ただいまー」は KP がチャットで
+  ep5/52_tadaima_arrive.mp3     … この部屋のドアが開き、ぎし、沈黙、出ていく（カットイン。押入れに隠れた場合）
   ep5/53_zapping.mp3            … 終わりのテレビのザッピング（カットイン）
+  ep6/60_restaurant_ambience_loop.mp3 … ファミレスのざわめき（BGM、ループ。声の高さを持たない雑音で作る）
   ep7/71_oiwai_flood.webp       … 「お祝いですよ」が画面を埋め尽くす（前景、1回再生）
   ep7/72_reward_mojibake.webp   … 文字化けしたままの報酬のカード（スクリーンパネル、38×18 マス）
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
@@ -29,9 +29,9 @@
   ep1/12_door_open_close.mp3    … ガチャ、ぎい、バタン（カットイン）。誰も入ってこない
   ep1/13_scratching_loop.mp3    … ドアの向こうで、何人もが引っ掻き、額を擦り付ける（BGM、ループ）
   ep1/14_handle_rattle.mp3      … ガチャン×3（カットイン）。開く前にずるりと手が落ちて、もう一度
-  ep2/21_event_bgm_loop.mp3     … 会場の BGM（ループ）。陽気な音楽の下に、潮騒と歌をごく小さく混ぜてある
-  ep2/22_tent_bgm.mp3           … 休憩所の BGM（10分）。遠くの音楽と扇風機 → 2〜5分かけて楽器が抜け、言葉のない歌と潮騒だけになる
-  ep2/23_insect_tide_loop.mp3   … 資材置き場・玉虫色の地面の BGM（ループ）。潮騒が羽音のつぶでできている＋すぐそばの歌
+  ep2/21_event_bgm_loop.mp3     … 会場の BGM（ループ）。陽気な音楽の下に、潮騒をごく小さく混ぜてある
+  ep2/22_tent_bgm.mp3           … 休憩所の BGM（10分）。遠くの音楽と扇風機 → 2〜5分かけて楽器が抜け、伸びたテープのように揺れる旋律と潮騒だけになる
+  ep2/23_insect_tide_loop.mp3   … 資材置き場・玉虫色の地面の BGM（ループ）。潮騒が羽音のつぶでできている
   ep9/90_full_door_bg.jpg       … 開ききったドアの廊下（背景）。絵が届くまでは _draft（第9話のドアで代用）
   ep9/91_woman_darkness.webp    … 戸口の暗闇に、女の形の「さらに暗い暗闇」が浮かび、OP のタイトルが重なる（前景、1回再生）
   ep9/92_film_loop.webp         … 舞台の古い映画（前景、ループ）。絵が届くまでは _draft
@@ -332,19 +332,19 @@ def additive(f, dur, partials, decay, attack=0.004, vib=0.0, seed=0):
     return (x * np.minimum(1, t / attack)).astype(np.float32)
 
 
-def event_music(beats=LOOP_BEATS, detune=0.0):
+def event_music(beats=LOOP_BEATS, detune=0.0, parts=("melody", "bass", "drums")):
     """遠くの会場スピーカーから流れる、陽気な BGM（木琴の旋律・ベース・軽い太鼓）"""
     L = beats * BEAT
     x = np.zeros(sec(L + 2), np.float32)
-    for b, d, m in MELODY:
+    for b, d, m in MELODY if "melody" in parts else []:
         if b < beats:
             place(x, additive(midi(m + detune), d * BEAT + 0.6, [(1, 1), (2, .35), (3, .5), (4, .12), (6, .08)], 3.2) * 0.5,
                   b * BEAT)
-    for i, root in enumerate(CHORDS[: beats // 8 * 2]):
+    for i, root in enumerate(CHORDS[: beats // 8 * 2] if "bass" in parts else []):
         for k in range(4):                                       # 2拍ごとにベース
             place(x, additive(midi(root - 12 + detune) * (1.5 if k % 2 else 1), 2 * BEAT, [(1, 1), (2, .5), (3, .2)], 2.0) * 0.45,
                   (i * 8 + k * 2) * BEAT)
-    for b in range(beats):                                       # 表拍にバスドラム、裏に軽い打ち物
+    for b in range(beats if "drums" in parts else 0):            # 表拍にバスドラム、裏に軽い打ち物
         place(x, thump(110, 0.09, 200 + b, 0.3) * 0.5, b * BEAT)
         place(x, click(4000, 9000, 0.02, 300 + b) * 0.12, (b + 0.5) * BEAT)
         if b % 2 == 1:
@@ -364,59 +364,8 @@ def wrap(x, n):
     return y
 
 
-def glottal(f0, seed=0):
-    """声の元の音：f0 の動きに沿った、倍音の多いのこぎり波（帯域を制限して耳に痛くしない）"""
-    ph = np.cumsum(2 * np.pi * f0 / SR)
-    x = np.zeros(len(f0), np.float32)
-    for k in range(1, 28):
-        x += (np.sin(k * ph) / k * (k * f0 < 5000)).astype(np.float32)
-    x += filt(rng_noise(len(f0), seed), 1500, 6000) * 0.05      # 息
-    return x
-
-
 def rng_noise(n, seed):
     return np.random.default_rng(seed).normal(0, 1, n).astype(np.float32)
-
-
-VOWELS = {"u": (325, 700, 2530), "o": (450, 800, 2830), "a": (730, 1090, 2440), "e": (530, 1840, 2480)}
-
-
-def formant(x, vowel, shift=1.0):
-    f1, f2, f3 = (v * shift for v in VOWELS[vowel])
-    return filt(x, f1 * .8, f1 * 1.2) * 1.0 + filt(x, f2 * .85, f2 * 1.15) * 0.6 + filt(x, f3 * .9, f3 * 1.1) * 0.3
-
-
-def voices(L, instability, seed=0, beats_offset=0.0):
-    """会場の旋律をなぞる、言葉のない歌。子供のような高い声と、老人のような低い声が重なり、
-    instability（時間 → 0〜1）が大きいほど、音程がうねり・外れ・遅れる（獣が人の声を真似ているように）"""
-    n = sec(L)
-    t = np.arange(n) / SR
-    out = np.zeros(n, np.float32)
-    rg = np.random.default_rng(seed)
-    for vi, (oct_, shift, vowel, gain) in enumerate([(12, 1.25, "u", 0.6), (0, 1.0, "o", 0.7), (-12, 0.85, "a", 0.55)]):
-        # 旋律から、その声の高さの線（f0）を作る：音と音の間は滑らかにつなぐ
-        target = np.full(n, np.nan, np.float32)
-        loops = int(np.ceil(L / (LOOP_BEATS * BEAT))) + 1
-        for lp in range(loops):
-            for b, d, m in MELODY:
-                s = (lp * LOOP_BEATS + b) * BEAT + beats_offset + vi * 0.03
-                a, e = sec(s), sec(s + d * BEAT)
-                if a >= n:
-                    break
-                target[a:min(e, n)] = m + oct_
-        idx = np.where(~np.isnan(target))[0]
-        target = np.interp(np.arange(n), idx, target[idx]).astype(np.float32)
-        glide = sec(0.06)
-        target = np.convolve(target, np.ones(glide) / glide, "same")
-        ins = instability(t)
-        wob = (np.interp(t, np.arange(0, L + 2, 0.7), rg.normal(0, 1, len(np.arange(0, L + 2, 0.7)))) * 1.6 * ins
-               + np.sin(2 * np.pi * 5.2 * t + vi) * (0.15 + 0.5 * ins))
-        jump = np.interp(t, np.arange(0, L + 9, 9.0), rg.choice([0, 0, 0, 12, -12, 7], len(np.arange(0, L + 9, 9.0)))) * ins ** 2
-        f0 = midi(target + wob + jump).astype(np.float32)
-        src = glottal(f0, seed + vi)
-        amp = (0.6 + 0.4 * np.sin(2 * np.pi * t / (2.5 + vi))) * (1 + ins * 0.6 * np.sin(2 * np.pi * 0.37 * t + vi))
-        out += formant(src, vowel, shift) * amp.astype(np.float32) * gain
-    return out
 
 
 def tide(L, seed=0, insect=0.0):
@@ -452,10 +401,37 @@ def tide(L, seed=0, insect=0.0):
     return x
 
 
+def murmur(L, people=24, muffle=1400, seed=0):
+    """人のざわめき：声の高さ（音程）を持たない雑音で作る。合成の声は笑えてしまうので使わない（README「わかったこと」）。
+    1人分＝話す区切り（1〜3秒話して、0.5〜2秒黙る）と、1秒に4〜6回の音節の強弱を、話し声くらいの帯域の雑音に乗せる。
+    何人分も重ねてこもらせると、言葉は聞き取れないが「人がいる」とわかる"""
+    n = sec(L)
+    out = np.zeros(n, np.float32)
+    rg = np.random.default_rng(seed)
+    t = np.arange(n) / SR
+    for p in range(people):
+        talk = np.zeros(n, np.float32)
+        s = rg.uniform(0, 2)
+        while s < L:
+            d = rg.uniform(1.0, 3.0)
+            a, b = sec(s), min(n, sec(s + d))
+            talk[a:b] = 1
+            s += d + rg.uniform(0.5, 2.0)
+        w = sec(0.08)                                            # 話し始め・終わりをなめらかに（移動平均。畳み込みだと10分の音で遅すぎる）
+        c = np.concatenate([[0], np.cumsum(talk)])
+        sm = (c[w:] - c[:-w]) / w
+        talk = np.pad(sm, (w // 2, n - len(sm) - w // 2)).astype(np.float32)
+        rate = rg.uniform(4, 6)
+        syl = (0.5 + 0.5 * np.sin(2 * np.pi * rate * t + rg.uniform(0, 6) + 0.8 * np.sin(2 * np.pi * 0.7 * t))) ** 2
+        lo = rg.uniform(250, 450)
+        body = filt(noise(L, seed * 100 + p), lo, lo * 5)
+        out += body[:n] * talk * syl * rg.uniform(0.4, 1.0)
+    return filt(out, hi=muffle)
+
+
 def crowd(L, seed=0):
-    """屋外のにぎわい：聞き取れない話し声（第六話のざわめきと同じ作り方を、屋外向けに薄く・明るく）"""
-    from make_ep6_audio import babble
-    return babble(L, density=4, muffle=2200)
+    """屋外のにぎわい（声の高さを持たないざわめき）"""
+    return murmur(L, people=20, muffle=2200, seed=seed + 7)
 
 
 def fan(L, seed=0):
@@ -482,35 +458,35 @@ def ep2():
     n = len(music)
     cr = fit(loop_seam(norm(crowd(LL + xf)), xf), n)
     td = fit(loop_seam(norm(tide(LL + xf, 21)), xf), n)
-    vo = fit(norm(filt(voices(LL, lambda t: np.zeros_like(t) + 0.05, seed=22), 250, 5000)), n)
-    # 会場：音楽が主役。潮騒と歌は、気づかないくらい小さく（音楽の約 -30dB）
-    a = norm(music) * 0.8 + cr * 0.35 + td * 0.03 + vo * 0.025
+    # 会場：音楽が主役。潮騒は、気づかないくらい小さく（音楽の約 -30dB）
+    a = norm(music) * 0.8 + cr * 0.35 + td * 0.03
     write_mp3(OUT / "ep2" / "21_event_bgm_loop.mp3", norm(a, 0.6))
 
-    # 休憩所：遠くの音楽と扇風機。数分かけて、楽器が抜け、歌と潮騒だけが残る（10分）
+    # 休憩所：遠くの音楽と扇風機。数分かけて、太鼓とベースが抜け、旋律だけが伸びたテープのように揺れながら残り、
+    # 潮騒が大きくなる（10分）。「歌」は KP の描写に任せる（合成の声は使わない）
     T = 600
-    t = np.arange(sec(T)) / SR
-    k = lambda a0, a1: np.clip((t - a0) / (a1 - a0), 0, 1).astype(np.float32)
-    far = filt(np.tile(event_music(), int(np.ceil(T / L)))[: sec(T)], 300, 3500)
-    # テープが伸びたように、音楽の高さがだんだん揺れる（ゆっくり変わる遅れで読み出す）
-    wow = (0.004 + 0.02 * k(120, 260)) * np.sin(2 * np.pi * t / 3.1) + 0.03 * k(150, 280) * t / T
-    far = np.interp(np.arange(sec(T)) - wow * SR, np.arange(sec(T)), far).astype(np.float32)
     N = sec(T)
-    vo = fit(norm(filt(voices(T, lambda tt: np.clip((tt - 90) / 220, 0, 1) * 0.9 + 0.05, seed=23), 200, 5000)), N)
+    t = np.arange(N) / SR
+    k = lambda a0, a1: np.clip((t - a0) / (a1 - a0), 0, 1).astype(np.float32)
+    reps = int(np.ceil(T / L))
+    full = filt(np.tile(event_music(), reps)[:N], 300, 3500)
+    mel = filt(np.tile(event_music(parts=("melody",)), reps)[:N], 300, 3500)
+    # テープが伸びたように、音楽の高さがだんだん揺れ、遅れていく（ゆっくり変わる遅れで読み出す）
+    wow = (0.004 + 0.03 * k(120, 300)) * np.sin(2 * np.pi * t / 3.1) + 0.05 * k(150, 400) * t / T
+    rd = lambda x: np.interp(np.arange(N) - wow * SR, np.arange(N), x).astype(np.float32)
+    full, mel = rd(full), rd(mel)
     td = fit(norm(tide(T, 24)), N)
     cr = fit(norm(crowd(T)), N)
-    b = (norm(far) * 0.55 * (1 - k(140, 290))
-         + vo * (0.02 + 0.5 * k(80, 300))
-         + td * (0.06 + 0.4 * k(100, 320))
+    b = (norm(full) * 0.55 * (1 - k(140, 290))
+         + norm(mel) * 0.45 * k(140, 290) * (1 - 0.6 * k(320, 600))
+         + td * (0.06 + 0.45 * k(100, 320))
          + cr * 0.25 * (1 - 0.8 * k(30, 240))
          + fit(norm(fan(T, 25)), N) * 0.12)
     write_mp3(OUT / "ep2" / "22_tent_bgm.mp3", norm(b, 0.6), q=6)
 
-    # 資材置き場・玉虫色の地面：潮騒は羽音でできている。歌はすぐそばまで来ている（ループ）
+    # 資材置き場・玉虫色の地面：潮騒は羽音でできている（ループ）
     L3 = 90
-    td = tide(L3 + xf, 26, insect=1.0)
-    vo = fit(voices(L3 + xf, lambda tt: np.zeros_like(tt) + 1.0, seed=27), len(td))
-    c = loop_seam(norm(td) * 0.7 + norm(filt(vo, 150, 6000)) * 0.45, xf)
+    c = loop_seam(norm(tide(L3 + xf, 26, insect=1.0)), xf)
     write_mp3(OUT / "ep2" / "23_insect_tide_loop.mp3", norm(c, 0.65), q=5)
 
 
@@ -694,16 +670,14 @@ def tarp_rustle(L=60, period=1.4, seed=0):
         place(x, filt(noise(0.5, int(t * 100)), 300, 3000) * env(sec(0.5), 0.05, 0.15) * 0.25, t)   # ばさっ
         t += period * rg.uniform(0.85, 1.15)
     breath = filt(noise(L, seed + 1), 400, 1800) * (0.5 + 0.5 * np.sin(2 * np.pi * np.arange(n) / SR / 0.9)) ** 3 * 0.12
-    from make_ep6_audio import babble
-    far = filt(fit(babble(L, density=5, muffle=900), n), hi=700) * 0.6
+    far = filt(fit(murmur(L, people=16, muffle=900, seed=seed + 2), n), hi=700) * 1.2
     return x + breath + far
 
 
 def avenue(L=60):
     """人で溢れた昼の大通り：近くて明るい雑踏と、車の行き交う音"""
-    from make_ep6_audio import babble
     n = sec(L)
-    crowd = fit(babble(L, density=10, muffle=3200), n)
+    crowd = fit(murmur(L, people=40, muffle=3000, seed=404), n)
     traffic = filt(noise(L, 401), 80, 1200) * (0.4 + 0.6 * smooth_random(L, 0.25, 402))
     steps = np.zeros(n, np.float32)
     rg = np.random.default_rng(403)
@@ -724,28 +698,12 @@ def gusha(seed=0):
     return reverb(x, 0.9, 0.3, 3000)
 
 
-def tape_voice(text="あとひとつ", seed=0):
-    """上から降ってくる、酷く間延びしたテープのような声（POW 失敗）：合成の声を半分の速さに伸ばし、回転のむらで揺らす"""
-    import pyopenjtalk
-    from scipy.signal import resample_poly
-    x, sr = pyopenjtalk.tts(text, half_tone=-2, speed=0.9)
-    x = resample_poly(np.asarray(x, np.float32) / 32768.0, SR, sr).astype(np.float32)
-    n = len(x) * 2                                                # 2倍に伸ばす（高さも下がる＝伸びたテープ）
-    t = np.arange(n) / SR
-    pos = np.arange(n) / 2.0 + 0.012 * SR * np.sin(2 * np.pi * 0.7 * t)   # 回転のむら
-    y = np.interp(pos, np.arange(len(x)), x).astype(np.float32)
-    y = filt(y, 250, 3000) + filt(noise(len(y) / SR, seed), 2000, 6000) * 0.01   # こもり＋テープの擦れ
-    y = reverb(y, 1.4, 0.6, 2500)                                 # ビルの上から、壁に響いて降ってくる
-    return np.concatenate([silence(0.3), y, silence(1.0)])
-
-
 def ep4():
     d = OUT / "ep4"
     fr = sheet_loop()
     write_mp3(d / "42_tarp_run_loop.mp3", norm(loop_seam(tarp_rustle(62, seed=420), 2.0), 0.6))
     write_mp3(d / "43_avenue_loop.mp3", norm(loop_seam(avenue(62), 2.0), 0.6))
     write_mp3(d / "44_gusha.mp3", norm(gusha(440), 0.85))
-    write_mp3(d / "45_tape_voice.mp3", norm(tape_voice(seed=450), 0.7))
     tmp = OUT / "preview" / "tmp4.mp3"
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(d / "42_tarp_run_loop.mp3"), "-t", "6", str(tmp)], check=True)
     preview(None, fr * 4, tmp, "ep4_endless_sheet", tail=0)
@@ -842,15 +800,8 @@ def ep3():
 
 
 # ================================================================ 第五話
-# 「ただいまー」が一部屋ずつ近づいてくる（L1915〜）。声は「高くも、低くもない淡々とした声」なので、
-# 合成の声の平板さをそのまま使い、毎回まったく同じ抑揚で繰り返す（人ではないものの繰り返し）
-def tadaima_voice():
-    import pyopenjtalk
-    from scipy.signal import resample_poly
-    x, sr = pyopenjtalk.tts(TXT["ep5_tadaima"], half_tone=0, speed=0.95)
-    return resample_poly(np.asarray(x, np.float32) / 32768.0, SR, sr).astype(np.float32)
-
-
+# 「ただいまー」が一部屋ずつ近づいてくる（L1915〜）。声は合成すると笑えてしまうので入れない。
+# 音はドアの開け閉めだけにし、「ただいまー」は KP がチャットで、ドアの音の合間に送る（時刻は DIRECTION.local.md）
 def steel_door(seed=0, close=True):
     """団地の鉄の玄関ドア：ガチャ（ノブ）と、バタン（重い鉄板が枠に当たる鈍い響き）"""
     x = np.zeros(sec(1.2), np.float32)
@@ -870,27 +821,23 @@ def at_distance(x, k):
 
 
 def tadaima_approach():
-    """ただいまー → ガチャ、バタン。ガチャ、→ ただいまー …（4部屋むこうから、隣の部屋まで）"""
-    v = tadaima_voice()
+    """ガチャ、バタン。ガチャ、…（4部屋むこうから、隣の部屋まで）。声が入る「間」は無音で空けてある"""
     x = np.zeros(sec(24), np.float32)
     t = 0.5
     for k in (4, 3, 2, 1):
-        place(x, at_distance(v, k), t)
-        t += len(v) / SR + 1.0
+        t += 2.34                                                        # 「ただいまー」の間（KP がチャットで送る）
         if k > 1:
             place(x, at_distance(steel_door(500 + k), k), t)                 # その部屋を出る
             t += 1.6
             place(x, at_distance(steel_door(510 + k, close=False), k - 1), t)   # 次の部屋を開ける
             t += 0.7
-    return x[: sec(t + 1.5)]
+    return x[: sec(t + 1.0)]
 
 
 def tadaima_arrive():
-    """（押入れに隠れた場合）この部屋のドアが開き「ただいまー」、ぎし、と床を踏む音、数秒の沈黙、そして出ていく"""
-    v = tadaima_voice()
+    """（押入れに隠れた場合）この部屋のドアが開き、（KP が「ただいまー」）、ぎし、と床を踏む音、数秒の沈黙、そして出ていく"""
     x = np.zeros(sec(11), np.float32)
     place(x, reverb(filt(steel_door(520, close=False), hi=3000), 0.5, 0.2) * 0.8, 0.3)
-    place(x, reverb(filt(v, hi=2800), 0.5, 0.25) * 0.9, 1.0)          # 押入れの襖越し
     place(x, filt(creak(0.5, 521), hi=2500) * 0.35, 2.4)              # ぎし
     t = 2.4 + 0.5 + 3.5                                                # 沈黙
     place(x, reverb(filt(steel_door(522), hi=2500), 0.5, 0.2) * 0.6, t)
@@ -898,19 +845,20 @@ def tadaima_arrive():
 
 
 def zapping(seed=0):
-    """第五話の終わり：テレビのザッピングの音（砂嵐の切れ目に、番組の断片）。第六話の広告・動画へつながる"""
-    import pyopenjtalk
-    from scipy.signal import resample_poly
-    bits = ["続いてのニュースです", "今ならなんと", "明日の天気は", "あははは"]
-    x = np.zeros(sec(5.5), np.float32)
+    """第五話の終わり：テレビのザッピングの音。砂嵐の切れ目に、番組の断片（明るい和音・笑い声のような拍手のざわめき・ジングル）。
+    人の声は入れない"""
+    x = np.zeros(sec(5.0), np.float32)
     t = 0.2
-    for i, s in enumerate(bits):
+    bits = [
+        additive(midi(72), 0.5, [(1, 1), (2, .4), (3, .3)], 4) + additive(midi(76), 0.5, [(1, 1), (2, .4)], 4),   # 明るい和音
+        filt(noise(0.6, seed + 1), 800, 5000) * (0.5 + 0.5 * np.sin(2 * np.pi * 13 * np.arange(sec(0.6)) / SR)) ** 2,  # 拍手のざわめき
+        np.concatenate([additive(midi(m), 0.13, [(1, 1), (2, .3)], 12) for m in (84, 88, 91)]),                  # ジングル
+        filt(noise(0.5, seed + 2), 100, 900) * 0.8,                                                            # こもった低い音（ドラマの効果音）
+    ]
+    for i, v in enumerate(bits):
         place(x, mix(filt(noise(0.12, seed + i), 300, 6000) * 0.25, click(800, 4000, 0.003, seed + 10 + i) * 0.6), t)
-        v, sr = pyopenjtalk.tts(s, half_tone=[2, 5, 0, 7][i], speed=1.3)
-        v = resample_poly(np.asarray(v, np.float32) / 32768.0, SR, sr).astype(np.float32)
-        v = v[: sec(np.random.default_rng(seed + i).uniform(0.45, 0.8))]
-        v = np.tanh(filt(v, 350, 4000) * 2) / 2                  # テレビの小さなスピーカー
-        place(x, v * 0.8, t + 0.12)
+        v = np.tanh(filt(v.astype(np.float32), 350, 4000) * 2) / 2      # テレビの小さなスピーカー
+        place(x, norm(v, 0.6), t + 0.12)
         t += 0.12 + len(v) / SR + 0.05
     place(x, filt(noise(0.25, seed + 20), 300, 6000) * 0.25, t)
     return reverb(x[: sec(t + 0.6)], 0.5, 0.2)
@@ -1175,7 +1123,23 @@ def recap():
     print(f"fx/recap/ に {sum(k.isdigit() for k in data)} 枚")
 
 
-PIECES = {"recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+# ================================================================ 第六話
+def ep6():
+    """昼のファミレスの空気：声の高さを持たないざわめきと、食器の音。第六話の声（パッチワーク）は、チャットだけで見せる"""
+    L = 62
+    n = sec(L)
+    mur = murmur(L, people=36, muffle=1600, seed=601)
+    dishes = np.zeros(n, np.float32)
+    rg = np.random.default_rng(602)
+    for t0 in rg.uniform(0, L, int(L * 1.2)):                       # 食器が触れ合う：短い明るい鳴り
+        g = resonate(noise(0.15, int(t0 * 100)) * env(sec(0.15), 0.0005, 0.03), [2600, 3900, 5200], q=40)
+        place(dishes, g * rg.uniform(0.05, 0.2), t0)
+    hum = filt(noise(L, 603), 60, 160, order=4) * 0.5                 # 空調と厨房の低い音
+    x = norm(fit(mur, n)) * 0.7 + dishes + norm(hum) * 0.12
+    write_mp3(OUT / "ep6" / "60_restaurant_ambience_loop.mp3", norm(reverb(loop_seam(x, 2.0), 0.8, 0.3), 0.5))
+
+
+PIECES = {"ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
