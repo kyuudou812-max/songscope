@@ -32,6 +32,12 @@
   ep2/21_event_bgm_loop.mp3     … 会場の BGM（ループ）。陽気な音楽の下に、潮騒と歌をごく小さく混ぜてある
   ep2/22_tent_bgm.mp3           … 休憩所の BGM（10分）。遠くの音楽と扇風機 → 2〜5分かけて楽器が抜け、言葉のない歌と潮騒だけになる
   ep2/23_insect_tide_loop.mp3   … 資材置き場・玉虫色の地面の BGM（ループ）。潮騒が羽音のつぶでできている＋すぐそばの歌
+  ep9/90_full_door_bg.jpg       … 開ききったドアの廊下（背景）。絵が届くまでは _draft（第9話のドアで代用）
+  ep9/91_woman_darkness.webp    … 戸口の暗闇に、女の形の「さらに暗い暗闇」が浮かび、OP のタイトルが重なる（前景、1回再生）
+  ep9/92_film_loop.webp         … 舞台の古い映画（前景、ループ）。絵が届くまでは _draft
+  ep9/93_film_cut.webp          … 振り返りはじめた瞬間に途切れて真っ黒（前景、1回再生）
+  ep9/94_projector_loop.mp3     … 映写機の音（BGM、ループ）
+  ep9/95_projector_stop_then_silence.mp3 … フィルムが外れて映写機が止まる → 無音（BGM。途切れる前景と同時に始まる）
   preview/*.mp4                 … 確認用（背景に重ねて、音付き）
 
 使い方: python3 tools/make_set_pieces.py [ep8 ep2 ...]   （省略時は全部）
@@ -52,6 +58,17 @@ OUT = ROOT / "build" / "ccfolia" / "fx"
 SCENES = ROOT / "build" / "ccfolia" / "scenes"
 FPS = json.loads((ROOT / "opening" / "timing.json").read_text(encoding="utf-8"))["fps"]
 TXT = json.loads((ROOT / "set-pieces.local.json").read_text(encoding="utf-8"))
+
+
+_LUT = []
+
+
+def lut():
+    """廊下の絵の「明るさ → 色」の対応（make_npc_portrait.tone_lut）。毎コマ作り直すと遅いので一度だけ作る"""
+    if not _LUT:
+        from make_npc_portrait import tone_lut
+        _LUT.append(tone_lut())
+    return _LUT[0]
 
 
 def smoothstep(e0, e1, x):
@@ -971,7 +988,170 @@ def ep7():
     preview(SCENES / "ep7_04_junction.jpg", fr, tmp, "ep7_oiwai", tail=1)
 
 
-PIECES = {"ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8}
+# ================================================================ 最終話
+# 暗闇の形をした女（L3100〜）：9話かけて開いてきた OP の廊下のドアが開ききり、戸口の暗闇の中で、
+# 女の形をしたところだけが、まわりの暗闇よりさらに暗い。そこへ OP と同じタイトルが重なる（題の回収）
+FULL_DOOR = ROOT / "assets" / "door" / "stage5_full.png"         # ChatGPT の「開ききったドア」（届いたらここに置く）
+
+
+def doorway_mask(img):
+    """戸口の中の真っ暗なところ（ドアのまわりで、いちばん大きくつながった暗い部分）"""
+    from scipy.ndimage import binary_closing, label
+    lay = json.loads((ROOT / "opening" / "layout.json").read_text(encoding="utf-8"))["door"]
+    a = np.asarray(img.convert("L")).astype(np.float32)
+    m = np.zeros(a.shape, bool)
+    box = (slice(lay["y0"], lay["y1"]), slice(lay["x0"] - 40, lay["x1"] + 10))
+    m[box] = a[box] < 5                                         # 戸口の中はほぼ真っ黒（扉の板は 10〜20 くらいなので入らない）
+    m = binary_closing(m, iterations=2)
+    lab, n = label(m)
+    if n == 0:
+        raise SystemExit("戸口の暗いところが見つからない")
+    sizes = np.bincount(lab.ravel())[1:]
+    return lab == (np.argmax(sizes) + 1)
+
+
+def woman_in_darkness():
+    """戸口の暗闇が、ゆっくりわずかに明るい「濁った暗がり」に変わっていき、女の形のところだけが真っ黒のまま残る。
+    最後に OP のタイトルが、同じ書体・同じ位置の決め方（戸口の真上）で浮かぶ。前景（1回再生）"""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from export_ccfolia import door
+    from PIL import ImageFilter
+    draft = not FULL_DOOR.exists()
+    base = Image.open(ROOT / "opening" / "bg.png").convert("RGB")
+    bg = door(base, 9) if draft else door(base, 9, FULL_DOOR)    # 絵が届くまでは、第9話のドア（4段階目）で試す
+    m = doorway_mask(bg)
+    ys, xs = np.where(m)
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    # 女の形：立ち絵の輪郭だけ。戸口の高さの 9 割、足もとは戸口の下端
+    w_src = Image.open(ROOT / "build" / "ccfolia" / "npc" / "npc_woman.webp").getchannel("A")
+    h = int((y1 - y0) * 0.9)
+    w = int(w_src.width * h / w_src.height)
+    shape = Image.new("L", bg.size, 0)
+    shape.paste(w_src.resize((w, h), Image.LANCZOS), (int((x0 + x1) / 2 - w / 2), int(y1 - h - 1)))
+    shape = np.asarray(shape.filter(ImageFilter.GaussianBlur(0.8)), np.float32) / 255 * m
+    # 濁った暗がり：ほんの少しだけ明るい赤茶。縦に流れるむらがあり、ゆっくり揺れる
+    H, W = m.shape
+    rg = np.random.default_rng(91)
+    streak = np.asarray(Image.fromarray((rg.random((H // 24 + 1, W // 3 + 1)) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC),
+                        np.float32) / 255
+    title = Image.open(ROOT / "build" / "ep9_title_still" / "f0000.png").convert("RGBA")
+    tb = title.getbbox()
+    title = title.crop(tb)
+    tx = int((x0 + x1) / 2 - (tb[2] - tb[0]) / 2) - (tb[0] - int((x0 + x1) / 2 - (tb[2] - tb[0]) / 2)) * 0  # 戸口の真上にそろえる
+    frames = []
+    T = 9.0
+    for i in range(int(T * FPS)):
+        tt = i / FPS
+        k = smoothstep(1.0, 5.5, tt)                              # 暗がりが浮かび上がる
+        lum = (30 + 16 * streak + 5 * np.sin(2 * np.pi * (tt / 3.0) + streak * 6)) * k
+        rgb = np.clip(lum[..., None] * lut()[np.clip(lum, 0, 255).astype(int)], 0, 255)
+        alpha = (m * (1 - shape) * k * 255).astype(np.uint8)
+        im = np.zeros((H, W, 4), np.uint8)
+        im[..., :3] = (rgb * m[..., None]).astype(np.uint8)       # 透明なところの色は 0 に（毎コマ変わる色が残ると 30MB になる）
+        im[..., 3] = alpha
+        frame = Image.fromarray(im, "RGBA")
+        ta = smoothstep(6.0, 7.5, tt)
+        if ta > 0:
+            t2 = title.copy()
+            t2.putalpha(t2.getchannel("A").point(lambda v, a=ta: int(v * a)))
+            frame.alpha_composite(t2, (tx, tb[1]))
+        frames.append(frame)
+    name = "91_woman_darkness" + ("_draft" if draft else "")
+    save_webp_anim(frames, OUT / "ep9" / f"{name}.webp")
+    bg_path = OUT / "ep9" / f"90_full_door_bg{'_draft' if draft else ''}.jpg"
+    bg.save(bg_path, quality=88)
+    return frames, bg_path
+
+
+# 古い映画（L3030〜）：傷・揺れ・明滅のある古いフィルム。女の後ろ姿。振り返りはじめた瞬間に途切れる
+FILM = (ROOT / "assets" / "ep9_film_1.png", ROOT / "assets" / "ep9_film_2.png")   # ChatGPT の2枚（届いたらここに置く）
+
+
+def film_frame(src, i, rg, size=(960, 720)):
+    """1コマ分の古いフィルム：上下左右の揺れ・明るさのちらつき・縦の傷・塵・粒子・周辺の暗さ"""
+    from PIL import ImageFilter
+    W, H = size
+    dx, dy = rg.normal(0, 1.2), rg.normal(0, 2.0)                   # フィルムの送りの揺れ
+    im = src.transform(size, Image.AFFINE, (1, 0, dx, 0, 1, dy), Image.BILINEAR)
+    lum = np.asarray(im.convert("L"), np.float32)
+    lum = lum * (0.92 + 0.1 * rg.random())                         # 明るさのちらつき
+    lum += rg.normal(0, 9, (H, W))                                 # 粒子
+    for _ in range(rg.integers(0, 3)):                             # 縦の傷（明るい細い線）
+        x = rg.integers(0, W)
+        lum[:, x:x + 1] += rg.uniform(30, 70)
+    for _ in range(rg.integers(2, 7)):                             # 塵（黒い点やけば）
+        x, y, r = rg.integers(0, W), rg.integers(0, H), rg.integers(1, 4)
+        lum[max(0, y - r):y + r, max(0, x - r):x + r] *= 0.2
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    lum *= np.clip(1 - 0.7 * (((xx - W / 2) / W) ** 2 + ((yy - H / 2) / H) ** 2) * 2.2, 0.2, 1)
+    lum = np.clip(lum * 0.85, 0, 255)
+    rgb = np.clip(lum[..., None] * lut()[lum.astype(int)], 0, 255).astype(np.uint8)
+    out = Image.new("RGBA", (1280, 720), BLACK + (255,))           # 4:3 の古い映画。左右は黒
+    out.paste(Image.fromarray(rgb).filter(ImageFilter.GaussianBlur(0.6)), ((1280 - W) // 2, 0))
+    return out
+
+
+def old_film():
+    """上映中（ループ）と、途切れる（1回再生：1枚目 → 振り返りはじめの2枚目に変わって 5 コマで真っ黒）の2つ"""
+    draft = not FILM[0].exists()
+    if draft:                                                       # 絵が届くまでは、第五話の玄関で試す
+        a = b = Image.open(SCENES / "ep5_02_entrance.jpg").convert("RGB")
+    else:
+        a, b = (Image.open(p).convert("RGB") for p in FILM)
+    fit_ = lambda im: im.resize((int(im.width * 720 / im.height), 720), Image.LANCZOS).crop(
+        ((int(im.width * 720 / im.height) - 960) // 2, 0, (int(im.width * 720 / im.height) - 960) // 2 + 960, 720))
+    a, b = fit_(a), fit_(b)
+    rg = np.random.default_rng(93)
+    loop = [film_frame(a, i, rg) for i in range(int(2.0 * FPS))]   # 2秒のループ（ばらつきなので、つなぎ目は見えない）
+    sfx = "_draft" if draft else ""
+    save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", lossless=False, quality=78, loop=0)
+    cut = [film_frame(a, i, rg) for i in range(int(1.0 * FPS))] + [film_frame(b, i, rg) for i in range(5)]
+    cut.append(Image.new("RGBA", (1280, 720), BLACK + (255,)))
+    save_webp_anim(cut, OUT / "ep9" / f"93_film_cut{sfx}.webp", lossless=False, quality=78)
+    return loop, cut
+
+
+def projector(L=60, seed=0):
+    """映写機の回る音：送りの規則正しいカタカタ（1秒24回）と、モーターの唸り、フィルムのぱちぱち"""
+    n = sec(L)
+    x = np.zeros(n, np.float32)
+    for k in range(int(L * 24)):
+        place(x, click(1500, 5000, 0.004, seed + k % 50) * 0.25, k / 24)
+    motor = filt(noise(L, seed + 1), 90, 300, order=4) * 0.6
+    crackle = np.zeros(n, np.float32)
+    rg = np.random.default_rng(seed + 2)
+    for t0 in rg.uniform(0, L, int(L * 8)):
+        place(crackle, click(600, 4000, 0.002, int(t0 * 1000)) * rg.uniform(0.1, 0.5), t0)
+    return reverb(x + motor + crackle, 1.6, 0.4, 3000)             # 劇場の大きな響き
+
+
+def projector_stop(seed=0):
+    """途切れる：フィルムが外れてばたばたと空回りし、映写機が止まる。そのあとは無音（10分）"""
+    x = np.zeros(sec(3.0), np.float32)
+    for k in range(30):                                            # フィルムの端が回転に当たって、ばたばた（だんだん遅く）
+        place(x, click(400, 3000, 0.01, seed + k) * 0.6 * (1 - k / 30), 0.03 + k * 0.035 * (1 + k / 20))
+    motor = filt(noise(2.5, seed + 1), 90, 300, order=4) * np.linspace(0.6, 0, sec(2.5)) ** 2
+    place(x, motor, 0)
+    return np.concatenate([reverb(x, 1.6, 0.4, 3000), silence(600)])
+
+
+def ep9():
+    (OUT / "ep9").mkdir(parents=True, exist_ok=True)
+    fr, bg = woman_in_darkness()
+    tmp = OUT / "preview" / "silence.mp3"
+    write_mp3(tmp, silence(10))
+    preview(bg, fr, tmp, "ep9_woman_darkness", tail=1)
+    loop, cut = old_film()
+    write_mp3(OUT / "ep9" / "94_projector_loop.mp3", norm(loop_seam(projector(62, 940), 2.0), 0.5))
+    write_mp3(OUT / "ep9" / "95_projector_stop_then_silence.mp3", norm(projector_stop(950), 0.6), q=6)
+    t2 = OUT / "preview" / "tmp9.mp3"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "ep9" / "94_projector_loop.mp3"), "-t", "4",
+                    "-i", str(OUT / "ep9" / "95_projector_stop_then_silence.mp3"), "-filter_complex",
+                    "[0:a]atrim=0:4[a];[1:a]atrim=0:4[b];[a][b]concat=n=2:v=0:a=1", str(t2)], check=True)
+    preview(None, loop * 2 + cut, t2, "ep9_old_film", tail=2)
+
+
+PIECES = {"ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:

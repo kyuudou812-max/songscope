@@ -73,7 +73,7 @@ def episode(ep):
     return [(p.relative_to(OUT), p.stat().st_size) for p in sorted(d.iterdir())]
 
 
-def door(img, ep):
+def door(img, ep, src_path=None):
     """突き当たりのドアだけを、その話の開き具合の絵（assets/door/stageN.png、ChatGPT でドアだけ描き直したもの）から
     切り取って、元の背景にはめ込む。計算で板を回す方法（板を縮める・遠近で回す）は、黒の継ぎ目や床の光が合わず不自然だった。
     ChatGPT の絵は全体の色味がわずかにずれるので、ドアのまわりの壁で色をそろえてから、境目をぼかして重ねる"""
@@ -81,7 +81,8 @@ def door(img, ep):
     stage = json.loads((ROOT / "opening" / "escalation.json").read_text(encoding="utf-8"))["episodes"][str(ep)]["door"]
     D = lay["door"]
     base = np.asarray(img).astype(np.float32)
-    src = np.asarray(Image.open(ROOT / "assets" / "door" / f"stage{stage}.png").convert("RGB")
+    src_path = src_path or ROOT / "assets" / "door" / f"stage{stage}.png"   # 最終話の「開ききったドア」など、別の絵も渡せる
+    src = np.asarray(Image.open(src_path).convert("RGB")
                      .resize(img.size, Image.LANCZOS)).astype(np.float32)
     # ドアの絵は扉の下端が元の絵より上で終わり、その下に敷居が二重に描かれている（扉が浮いて見える）。
     # 扉の下のほうの行だけを縦に伸ばして、下端を元の床の線にそろえる（二重の敷居は押し出されて消える）。床から下はそのまま
