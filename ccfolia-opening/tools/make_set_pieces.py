@@ -38,6 +38,7 @@
   ep9/93_film_cut.webp          … 振り返りはじめた瞬間に途切れて真っ黒（前景、1回再生）
   ep9/94_projector_loop.mp3     … 映写機の音（BGM、ループ）
   ep9/95_projector_stop_then_silence.mp3 … フィルムが外れて映写機が止まる → 無音（BGM。途切れる前景と同時に始まる）
+  reward/epN_rewardK(_cut).webp … 報酬の札（第1〜7話、各3枚。_cut は切り抜かれた裏。スクリーンパネルの裏面に入れる）
   recap/recap_epN.webp          … 前回のあらすじ（スクリーンパネル、38×24 マス。第2話〜最終話の冒頭）
   preview/*.mp4                 … 確認用（背景に重ねて、音付き）
 
@@ -1139,7 +1140,117 @@ def ep6():
     write_mp3(OUT / "ep6" / "60_restaurant_ambience_loop.mp3", norm(reverb(loop_seam(x, 2.0), 0.8, 0.3), 0.5))
 
 
-PIECES = {"ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+
+# ================================================================ 報酬の儀式（全話）
+# 各話の終わりの報酬（L233〜）を、毎回同じ形で出す：3枚のカード → PL が選ぶ → 選ばれなかったカードは、
+# ハサミで切り抜かれて中身がなくなる（第五話の、顔を切り抜かれたポスターと同じ切り口）→「選ばなかったものはいらないね」。
+# カードは古い紙の札。表＝選択肢、裏＝切り抜かれた札。ココフォリアのスクリーンパネルの「裏面」に切り抜き版を入れておけば、
+# KP は札を裏返すだけで切り抜ける。第六・七話は、見出しが文字化けしていく（本文のとおり）
+def draw_text(d, xy, s, f, fill, fallback=None, spacing=0.0):
+    """1字ずつ組む。しっぽり明朝にない字（半角カナなど）は、タイトルの書体で補う。幅を返す"""
+    fallback = fallback or font(f.size, gothic=True)
+    notdef = bytes(f.getmask("\U000F0000"))
+    x, y = xy
+    for c in s:
+        ff = fallback if bytes(f.getmask(c)) == notdef else f
+        if d is not None:
+            d.text((x, y), c, font=ff, fill=fill)
+        x += ff.getlength(c) + f.size * spacing
+    return x - xy[0] - (f.size * spacing if s else 0)
+
+
+def card_paper(w, h, seed):
+    """暗く古びた紙の札（廊下の赤茶）。縁は少し不揃いで、下に柔らかい影"""
+    from PIL import ImageFilter
+    pad = 28
+    rg0 = np.random.default_rng(seed + 7)
+    fine = np.asarray(Image.fromarray((rg0.random((h, w)) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.8)),
+                      np.float32) / 255
+    soft = np.asarray(Image.fromarray((rg0.random((h // 40 + 2, w // 40 + 2)) * 255).astype(np.uint8)).resize((w, h), Image.BICUBIC),
+                      np.float32) / 255
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    edge = np.minimum(np.minimum(xx, w - xx), np.minimum(yy, h - yy))
+    lum = 44 + 8 * (fine - 0.5) + 5 * (soft - 0.5) - 10 * np.exp(-edge / 18)   # 細かい繊維・ゆるいむら・縁の汚れ
+    rgb = tone(lum)
+    mask = Image.new("L", (w, h), 0)
+    md = ImageDraw.Draw(mask)
+    rg = np.random.default_rng(seed)
+    pts = [(rg.uniform(0, 3), rg.uniform(0, 3)), (w - rg.uniform(0, 3), rg.uniform(0, 3)),
+           (w - rg.uniform(0, 3), h - rg.uniform(0, 3)), (rg.uniform(0, 3), h - rg.uniform(0, 3))]
+    md.polygon(pts, fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(0.7))
+    card = Image.fromarray(rgb).convert("RGBA")
+    card.putalpha(mask)
+    out = Image.new("RGBA", (w + pad * 2, h + pad * 2), (0, 0, 0, 0))
+    sh = Image.new("RGBA", out.size, BLACK + (0,))
+    sm = Image.new("L", out.size, 0)
+    sm.paste(mask.point(lambda v: int(v * 0.75)), (pad + 4, pad + 8))
+    sh.putalpha(sm.filter(ImageFilter.GaussianBlur(10)))
+    out.alpha_composite(sh)
+    out.alpha_composite(card, (pad, pad))
+    return out, pad
+
+
+def scissor_hole(img, box, seed):
+    """box のまわりを、ハサミで何度か切ったように不揃いな直線でくり抜く（穴は透明）。切り口は紙の地が白っぽく見える"""
+    from PIL import ImageFilter
+    x0, y0, x1, y1 = box
+    rg = np.random.default_rng(seed)
+    pts = []
+    for (ax, ay), (bx, by) in zip([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]):
+        for k in range(int(rg.integers(2, 4))):                 # 1辺を2〜3回のハサミで切る
+            f = k / 3 + rg.uniform(0, 0.1)
+            pts.append((ax + (bx - ax) * f + rg.normal(0, 5), ay + (by - ay) * f + rg.normal(0, 5)))
+    hole = Image.new("L", img.size, 0)
+    ImageDraw.Draw(hole).polygon(pts, fill=255)
+    edge = Image.new("L", img.size, 0)
+    ImageDraw.Draw(edge).line(pts + [pts[0]], fill=255, width=3)
+    edge = edge.filter(ImageFilter.GaussianBlur(0.8))
+    out = img.copy()
+    lit = Image.new("RGBA", img.size, (150, 128, 112, 0))           # 切り口：紙の繊維が明るく見える
+    lit.putalpha(Image.fromarray((np.asarray(edge, np.float32) * (np.asarray(img.getchannel("A")) > 0) * 0.7).astype(np.uint8)))
+    out.alpha_composite(lit)
+    a = np.asarray(out.getchannel("A")).astype(np.float32) * (1 - np.asarray(hole, np.float32) / 255)
+    out.putalpha(Image.fromarray(a.astype(np.uint8)))
+    return out
+
+
+def reward_card(title, choice, seed, size=(720, 380)):
+    """報酬の札：上に小さく見出し、真ん中に選択肢。表と、切り抜かれた裏の2枚を返す"""
+    w, h = size
+    img, pad = card_paper(w, h, seed)
+    d = ImageDraw.Draw(img)
+    if title:
+        f1 = font(20)
+        tw = draw_text(None, (0, 0), title, f1, None, spacing=0.12)
+        draw_text(d, (pad + (w - tw) / 2, pad + 34), title, f1, QUIET + (255,), spacing=0.12)
+    f2 = font(34 if len(choice) < 14 else 30)
+    cw = draw_text(None, (0, 0), choice, f2, None, spacing=0.08)
+    assert cw < w - 60, choice
+    cy = pad + (h - f2.size) / 2 + (14 if title else 0)
+    draw_text(d, (pad + (w - cw) / 2, cy), choice, f2, TEXT + (255,), spacing=0.08)
+    m = 26
+    cut = scissor_hole(img, (pad + (w - cw) / 2 - m, cy - m, pad + (w + cw) / 2 + m, cy + f2.size * 1.2 + m), seed + 1)
+    return img, cut
+
+
+def rewards():
+    """第1〜7話の報酬の札（各話3枚）と、第八話の四択の札（4枚）。表と切り抜き"""
+    d = OUT / "reward"
+    d.mkdir(parents=True, exist_ok=True)
+    for ep, r in TXT["rewards"].items():
+        for k, ch in enumerate(r["choices"], 1):
+            img, cut = reward_card(r["title"], ch, int(ep) * 10 + k)
+            img.save(d / f"ep{ep}_reward{k}.webp", lossless=True)
+            cut.save(d / f"ep{ep}_reward{k}_cut.webp", lossless=True)
+    for k, q in enumerate(TXT["ep8_questions"], 1):                  # 第八話：ドアの向こうの問い。見出しはない
+        img, cut = reward_card("", q, 80 + k, size=(760, 170))
+        img.save(OUT / "ep8" / f"83_card_{k}.webp", lossless=True)
+        cut.save(OUT / "ep8" / f"83_card_{k}_cut.webp", lossless=True)
+    print("fx/reward/ と ep8/83_card_* を書き出し")
+
+
+PIECES = {"reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
