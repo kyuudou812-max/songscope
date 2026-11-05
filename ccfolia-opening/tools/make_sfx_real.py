@@ -28,6 +28,7 @@ OUT = ROOT / "build" / "ccfolia" / "fx_real"
 RPG = LIB / "kenney_rpg" / "addons" / "kenney rpg audio"
 IMP = LIB / "kenney_impact" / "addons" / "kenney impact sounds"
 CASINO = LIB / "kenney_more" / "Casino sounds (50 sounds)"
+JINGLE = LIB / "kenney_more" / "Jingle sounds (85 sounds)"
 ESC = LIB / "esc50" / "audio"
 USED_ESC = set()
 
@@ -132,6 +133,32 @@ def ambience(clips, L=62, xf=1.5, seed=0):
         out[t:e] += p[: e - t]
         t += len(p) - n_x
     return loop_seam(out[: sec(L + 2)], 2.0)
+
+
+def scatter(clips, L, gap, gain, seed, cut=None):
+    """短い音を L 秒にまばらに散らし（間隔は gap=(最短, 最長) 秒）、つなぎ目のないループにする"""
+    rg = np.random.default_rng(seed)
+    x = np.zeros(sec(L + 2), np.float32)
+    t = rg.uniform(0, gap[0])
+    while t < L + 1:
+        c = clips[rg.integers(len(clips))]
+        if cut and len(c) > sec(cut):
+            c = c[: sec(rg.uniform(cut * 0.5, cut))]
+            c = c * env(len(c), 0.005, 0.3)
+        place(x, c * rg.uniform(gain[0], gain[1]), t)
+        t += rg.uniform(*gap)
+    return loop_seam(x, 2.0)
+
+
+def mix(*layers):
+    """長さをそろえて足す"""
+    n = min(len(a) for a in layers)
+    return sum(a[:n] for a in layers).astype(np.float32)
+
+
+def tv(x):
+    """テレビの小さなスピーカー：低音と高音が削れ、少し歪む"""
+    return np.tanh(filt(x, 350, 4500, order=3) * 1.6) / 1.6
 
 
 # ---------------------------------------------------------------- 第一話
@@ -347,6 +374,84 @@ def ambiences():
     mono(OUT / "ep2" / "23_insect_tide_loop_A.mp3", waves[:n] * 0.7 + filt(bugs[:n], 1500, 9000) * 0.35, peak=0.6, q=4, steady=True)
 
 
+# ---------------------------------------------------------------- 町と部屋の環境音（第四・五・六・八話）
+def avenue():
+    """第四話 昼の大通り：遠い車の流れ、たくさんの軽い足音、まれに遠くのクラクション。人の声は入れない"""
+    engines = {"A": ("4-186940-A-44.wav", "4-186938-A-44.wav", "4-186935-A-44.wav"),
+               "B": ("1-50455-A-44.wav", "1-50454-A-44.wav", "4-186935-A-44.wav"),
+               "C": ("4-186940-A-44.wav", "1-50454-A-44.wav", "3-141240-A-44.wav")}
+    horns = {"A": ("4-175845-A-43.wav", "1-26177-A-43.wav"), "B": ("2-144137-A-43.wav", "1-19026-A-43.wav"),
+             "C": ("4-175845-A-43.wav", "2-54086-A-43.wav", "1-26176-A-43.wav")}
+    far = {"A": ("3-143560-A-47.wav",), "B": ("2-135649-C-45.wav", "1-54065-B-45.wav"), "C": ("3-143560-A-47.wav", "2-98866-A-47.wav")}
+    steps = [s for f in ("5-51149-A-25.wav", "5-234263-A-25.wav", "1-51147-A-25.wav") for s in events(esc(f))]
+    steps = [filt(trim(s), 150, 5000) for s in steps if len(s) > sec(0.03)]
+    for i, v in enumerate("ABC"):
+        L = 62
+        traffic = filt(ambience([esc(f) for f in engines[v]], L, 1.5, 20 + i), 60, 1800)
+        hum = filt(ambience([esc(f) for f in far[v]], L, 2.0, 30 + i), hi=900)          # 電車・飛行機：ごく薄く
+        walk = sum(scatter(steps, L, (0.12, 0.45), (0.15, 0.5), 40 + i + k * 7) for k in range(3))   # 何人もが行き交う
+        honks = [trim(esc(f))[: sec(1.2)] for f in horns[v]]
+        honk = scatter([distance(h * env(len(h), 0.01, 0.3), 3) for h in honks], L, (7, 16), (0.4, 1.0), 50 + i)
+        x = mix(norm(traffic) * 0.5, norm(hum) * 0.12, norm(walk) * 0.35, norm(honk) * 0.18)
+        mono(OUT / "ep4" / f"43_avenue_loop_{v}.mp3", reverb(x, 1.2, 0.2, 3500), peak=0.6, q=4, steady=True)
+
+
+def restaurant():
+    """第六話 ファミレス：皿とカトラリーの触れ合い、グラス、すする音、低い空調。
+    ざわめきは本物の録音がないので、音程のないこもった雑音をごく薄く（声の合成はしない）。C はざわめきなし"""
+    dish = [trim(load(IMP / f"impact_{k}_light_{i:03d}.ogg")) for k in ("plate", "glass", "metal") for i in range(5)]
+    sips = [filt(trim(s), hi=4000) for f in ("1-17295-A-29.wav", "2-102581-A-29.wav") for s in events(esc(f), 0.3)]
+    pours = [trim(esc(f)) for f in ("1-61221-A-17.wav", "5-215634-A-17.wav")]
+    for i, (v, murmur) in enumerate((("A", 0.12), ("B", 0.07), ("C", 0.0))):
+        L = 62
+        near = scatter(dish, L, (0.4, 2.2), (0.15, 0.6), 60 + i)
+        far = scatter([filt(c, hi=2500) for c in dish], L, (0.2, 1.0), (0.05, 0.25), 70 + i)
+        sip = scatter(sips, L, (4, 11), (0.2, 0.5), 80 + i, cut=0.5)
+        pour = scatter([filt(p, hi=3000) for p in pours], L, (14, 25), (0.3, 0.6), 90 + i, cut=2.5)
+        room = loop_seam(filt(noise(L + 2, 100 + i), 40, 220, order=3), 2.0)                # 空調の低い鳴り
+        buzz = loop_seam(filt(noise(L + 2, 110 + i), 250, 1400) * (0.6 + 0.4 * smooth_random(L + 2, 0.7, 120 + i)[: sec(L + 2)]), 2.0)
+        x = mix(norm(near) * 0.5, norm(far) * 0.3, norm(sip) * 0.15, norm(pour) * 0.1, norm(room) * 0.25, norm(buzz) * murmur)
+        mono(OUT / "ep6" / f"60_restaurant_ambience_loop_{v}.mp3", reverb(x, 0.9, 0.3, 4000), peak=0.55, q=4, steady=True)
+
+
+def zapping():
+    """第五話 チャンネルを次々に替える：短い砂嵐のあいだに、声ではない本物の録音の切れ端。テレビの小さなスピーカーを通す"""
+    def jingle(n):
+        return load(JINGLE / f"jingles_{n.rstrip('0123456789')}" / f"jingles_{n}.ogg")
+    combos = {"A": [("3-130330-A-22.wav", 0.5), ("2-78381-A-46.wav", 0.4), ("SAX03", 0.5), ("4-175845-A-43.wav", 0.6)],
+              "B": [("STEEL01", 0.6), ("2-57733-A-22.wav", 0.5), ("1-13572-A-46.wav", 0.5), ("2-144137-A-43.wav", 0.4)],
+              "C": [("2-25293-A-22.wav", 0.4), ("PIZZA02", 0.5), ("5-219044-A-46.wav", 0.6), ("NES04", 0.5)]}
+    for i, (v, seq) in enumerate(combos.items()):
+        x = np.zeros(sec(4.2), np.float32)
+        rg = np.random.default_rng(130 + i)
+        t = 0.05
+        for k, (src, dur) in enumerate(seq):
+            st = filt(noise(0.18, 140 + i * 10 + k), 800, 7000) * env(sec(0.18), 0.003, 0.15)    # ザッ（砂嵐）
+            place(x, st * 0.6, t)
+            t += rg.uniform(0.12, 0.18)
+            c = esc(src) if src.endswith(".wav") else jingle(src)
+            c = trim(c)
+            a = int(rg.uniform(0, max(1, len(c) - sec(dur)) * 0.5)) if src.endswith(".wav") else 0
+            c = c[a:a + sec(dur)]
+            c = c / max(np.abs(c).max(), 1e-6) * env(len(c), 0.004, 0.25)
+            place(x, tv(c) * 0.8, t)
+            t += len(c) / SR
+        place(x, filt(noise(0.15, 199 + i), 800, 7000) * 0.5 * env(sec(0.15), 0.003, 0.1), t)
+        mono(OUT / "ep5" / f"53_zapping_{v}.mp3", x[: sec(t + 0.2)], peak=0.8)
+
+
+def room_tone():
+    """第八話 夜明け前のからっぽの部屋：閉めた窓の外の風が、ごく低く、こもって聞こえるだけ"""
+    sets = {"A": ("3-246513-A-16.wav", "3-246513-B-16.wav", "4-163609-B-16.wav", "4-163608-B-16.wav"),
+            "B": ("3-134699-A-16.wav", "3-134699-B-16.wav", "4-163609-B-16.wav", "2-104952-B-16.wav")}
+    for i, (v, files) in enumerate(sets.items()):
+        L = 62
+        wind = filt(ambience([esc(f) for f in files], L, 2.0, 150 + i), 30, 280, order=3)
+        floor = loop_seam(filt(noise(L + 2, 160 + i), 20, 120, order=3), 2.0)            # 部屋そのものの、ほぼ聞こえない低い鳴り
+        x = mix(norm(wind) * 0.6, norm(floor) * 0.15)
+        mono(OUT / "ep8" / f"81_room_tone_loop_{v}.mp3", x, peak=0.25, q=4, steady=True)
+
+
 def credits():
     """使った ESC-50 の録音の出典（CC BY / CC BY-NC の表記）"""
     lic = (LIB / "esc50" / "LICENSE").read_text(encoding="utf-8", errors="ignore")
@@ -361,7 +466,7 @@ def credits():
 
 
 def main():
-    for k in ("ep1", "ep2", "ep4", "ep5", "ep7", "ep8", "ep9", "shared"):
+    for k in ("ep1", "ep2", "ep4", "ep5", "ep6", "ep7", "ep8", "ep9", "shared"):
         (OUT / k).mkdir(parents=True, exist_ok=True)
     ep1()
     ep4()
@@ -369,6 +474,10 @@ def main():
     ep8()
     ep9()
     ambiences()
+    avenue()
+    restaurant()
+    zapping()
+    room_tone()
     credits()
 
 
