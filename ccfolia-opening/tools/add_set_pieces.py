@@ -117,6 +117,14 @@ def main(src, outdir):
                   visible=True, freezed=False, type="object", order=top + k)
         ent["items"][make_id("panel:" + memo)] = it
 
+    # シナリオテキスト（ココフォリアの「シナリオテキスト」欄）：notes.local.json（全9話を話ごとに切り出したもの）
+    nf = ROOT / "notes.local.json"
+    if nf.exists():
+        notes = json.loads(nf.read_text(encoding="utf-8"))
+        ent.setdefault("notes", {})
+        for k, nt in enumerate(notes, 1):
+            ent["notes"][make_id("note:" + nt["name"])] = {"name": nt["name"], "text": nt["text"], "order": k, "iconUrl": ""}
+        print(f"シナリオテキスト {len(notes)} 項目")
     (out / "__data.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"シーン {len(SCENES)} 個・スクリーンパネル {len(PANELS)} 枚、画像 {len(list(out.glob('*'))) - 1} 枚を追加")
 
