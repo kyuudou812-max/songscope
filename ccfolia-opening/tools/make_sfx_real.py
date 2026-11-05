@@ -150,6 +150,15 @@ def scatter(clips, L, gap, gain, seed, cut=None):
     return loop_seam(x, 2.0)
 
 
+def bed(path, x, peak=0.6, ceil=0.8, q=4):
+    """環境音の書き出し：ふだんの大きさ（99.9%）で音量を決め、まれな大きな音はやわらかく ceil 以下に抑える（mp3 にしても 0.85 を超えない）"""
+    x = x / max(np.percentile(np.abs(x), 99.9), 1e-6) * peak
+    a = np.abs(x)
+    k = peak * 0.9
+    x = np.where(a > k, np.sign(x) * (k + (ceil - k) * np.tanh((a - k) / (ceil - k))), x)
+    write_mp3(path, x.astype(np.float32), q=q)
+
+
 def mix(*layers):
     """長さをそろえて足す"""
     n = min(len(a) for a in layers)
@@ -393,7 +402,7 @@ def avenue():
         honks = [trim(esc(f))[: sec(1.2)] for f in horns[v]]
         honk = scatter([distance(h * env(len(h), 0.01, 0.3), 3) for h in honks], L, (7, 16), (0.4, 1.0), 50 + i)
         x = mix(norm(traffic) * 0.5, norm(hum) * 0.12, norm(walk) * 0.35, norm(honk) * 0.18)
-        mono(OUT / "ep4" / f"43_avenue_loop_{v}.mp3", reverb(x, 1.2, 0.2, 3500), peak=0.6, q=4, steady=True)
+        bed(OUT / "ep4" / f"43_avenue_loop_{v}.mp3", reverb(x, 1.2, 0.2, 3500), peak=0.6)
 
 
 def restaurant():
@@ -410,19 +419,19 @@ def restaurant():
         pour = scatter([filt(p, hi=3000) for p in pours], L, (14, 25), (0.3, 0.6), 90 + i, cut=2.5)
         room = loop_seam(filt(noise(L + 2, 100 + i), 40, 220, order=3), 2.0)                # 空調の低い鳴り
         buzz = loop_seam(filt(noise(L + 2, 110 + i), 250, 1400) * (0.6 + 0.4 * smooth_random(L + 2, 0.7, 120 + i)[: sec(L + 2)]), 2.0)
-        x = mix(norm(near) * 0.5, norm(far) * 0.3, norm(sip) * 0.15, norm(pour) * 0.1, norm(room) * 0.25, norm(buzz) * murmur)
-        mono(OUT / "ep6" / f"60_restaurant_ambience_loop_{v}.mp3", reverb(x, 0.9, 0.3, 4000), peak=0.55, q=4, steady=True)
+        x = mix(norm(near) * 0.5, norm(far) * 0.3, norm(sip) * 0.15, norm(pour) * 0.1, norm(room) * 0.1, norm(buzz) * murmur)
+        bed(OUT / "ep6" / f"60_restaurant_ambience_loop_{v}.mp3", reverb(x, 0.9, 0.3, 4000), peak=0.55)
 
 
 def zapping():
     """第五話 チャンネルを次々に替える：短い砂嵐のあいだに、声ではない本物の録音の切れ端。テレビの小さなスピーカーを通す"""
     def jingle(n):
         return load(JINGLE / f"jingles_{n.rstrip('0123456789')}" / f"jingles_{n}.ogg")
-    combos = {"A": [("3-130330-A-22.wav", 0.5), ("2-78381-A-46.wav", 0.4), ("SAX03", 0.5), ("4-175845-A-43.wav", 0.6)],
-              "B": [("STEEL01", 0.6), ("2-57733-A-22.wav", 0.5), ("1-13572-A-46.wav", 0.5), ("2-144137-A-43.wav", 0.4)],
-              "C": [("2-25293-A-22.wav", 0.4), ("PIZZA02", 0.5), ("5-219044-A-46.wav", 0.6), ("NES04", 0.5)]}
+    combos = {"A": [("3-130330-A-22.wav", 0.8), ("2-78381-A-46.wav", 0.7), ("SAX03", 0.8), ("4-175845-A-43.wav", 0.8)],
+              "B": [("STEEL01", 0.8), ("2-57733-A-22.wav", 0.8), ("1-13572-A-46.wav", 0.8), ("2-144137-A-43.wav", 0.7)],
+              "C": [("2-25293-A-22.wav", 0.7), ("PIZZA02", 0.8), ("5-219044-A-46.wav", 0.8), ("NES04", 0.8)]}
     for i, (v, seq) in enumerate(combos.items()):
-        x = np.zeros(sec(4.2), np.float32)
+        x = np.zeros(sec(5), np.float32)
         rg = np.random.default_rng(130 + i)
         t = 0.05
         for k, (src, dur) in enumerate(seq):
@@ -449,7 +458,7 @@ def room_tone():
         wind = filt(ambience([esc(f) for f in files], L, 2.0, 150 + i), 30, 280, order=3)
         floor = loop_seam(filt(noise(L + 2, 160 + i), 20, 120, order=3), 2.0)            # 部屋そのものの、ほぼ聞こえない低い鳴り
         x = mix(norm(wind) * 0.6, norm(floor) * 0.15)
-        mono(OUT / "ep8" / f"81_room_tone_loop_{v}.mp3", x, peak=0.25, q=4, steady=True)
+        bed(OUT / "ep8" / f"81_room_tone_loop_{v}.mp3", x, peak=0.25)
 
 
 def credits():
