@@ -2281,7 +2281,25 @@ def vulture_eyes():
     lab, n = label(binary_dilation(diff, iterations=6))
     sizes = np.bincount(lab.ravel())[1:]
     eyes = np.isin(lab, np.argsort(sizes)[-2:] + 1)                 # いちばん大きい2か所＝二つの目
-    eyes = binary_dilation(eyes, iterations=10)
+    if not draft:
+        # 本番の絵は頭ごと向きが変わるので、差分は頭全体になる。その中で「明るい白目に囲まれた暗い瞳」を DoG で2つ探す
+        from scipy.ndimage import gaussian_filter
+        lb = b.astype(np.float32).mean(-1)
+        dog = gaussian_filter(lb, 10) - gaussian_filter(lb, 3)
+        region = binary_dilation(diff, iterations=20)
+        cand = (dog > np.percentile(dog[region], 99.6)) & region
+        lab2, n2 = label(cand)
+        pts = [(int((lab2 == i).sum()), *np.argwhere(lab2 == i).mean(0)) for i in range(1, n2 + 1)]
+        pairs = [(p1[0] + p2[0], p1, p2) for p1 in pts for p2 in pts
+                 if p1[2] < p2[2] and abs(p1[1] - p2[1]) < 45 and 70 < p2[2] - p1[2] < 260]
+        if pairs:
+            _, p1, p2 = max(pairs)
+            yy, xx = np.mgrid[0:lb.shape[0], 0:lb.shape[1]]
+            r = (p2[2] - p1[2]) * 0.17                                 # 目の大きさは目の間隔から
+            eyes = ((yy - p1[1]) ** 2 + (xx - p1[2]) ** 2 < r * r) | ((yy - p2[1]) ** 2 + (xx - p2[2]) ** 2 < r * r)
+        eyes = binary_dilation(eyes, iterations=4)
+    else:
+        eyes = binary_dilation(eyes, iterations=10)
     glow = np.asarray(Image.fromarray((eyes * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(8)), np.float32) / 255
     fps = FPS
     rg = np.random.default_rng(77)
@@ -2327,7 +2345,14 @@ def vulture_eyes():
     frames += [frame(b, 1.0, 0.0)] * int(2.1 * fps)                # 引いて、こちらを見据えたまま
     for i in range(int(1.8 * fps)):                                 # 全体がゆっくり浮かぶ
         k = (i + 1) / int(1.8 * fps)
-        frames.append(frame(b, 1.0, k * k))
+        # 背景（同じ絵）の上の「沈んだ層」を透かしていく：最後は透明になり、背景の絵そのものが見える
+        # （不透明な全面のコマで浮かばせると、非可逆の差分が積もって最後のコマが崩れていた）
+        if b.shape[:2] == (720, 1280):
+            fr_ = np.asarray(frame(b, 1.0, 0.0)).copy()
+            fr_[..., 3] = int(round(255 * (1 - k * k)))
+            frames.append(Image.fromarray(fr_, "RGBA"))
+        else:
+            frames.append(frame(b, 1.0, k * k))
     sfx = "_draft" if draft else ""
     save_webp_anim(frames, OUT / "ep7" / f"76_vulture_eyes{sfx}.webp", lossless=False, quality=80)
     Image.fromarray(b).save(OUT / "ep7" / f"76_vulture_bg{sfx}.jpg", quality=88)
