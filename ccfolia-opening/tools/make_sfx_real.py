@@ -644,19 +644,76 @@ def restaurant_v2():
         bed(OUT / "ep6" / f"60_restaurant_ambience_loop_v2_{v}.mp3", reverb(x, 0.9, wet, 4000), peak=0.5)
 
 
+def window_slap_v3():
+    """第五話 v3：新聞紙はそんなに甲高くない。大きな紙が窓ガラスに「ぼすっ」と当たり、低くばたつく。
+    閉めた窓越しに部屋の中で聞くので、高い音は強く削る（上限 2〜3kHz）。紙のかさかさは控えめ、やわらかい当たりとはためきが主役"""
+    BOOK = "bb - Books, Paper, Writing (Jan 2021)"
+    RET = "BB_Retail Therapy Sample Pack"
+    # 種類：（当たりの紙, はためきの紙, 上限 Hz, 紙を遅くする倍率, 当たる時刻）
+    kinds = {"A": ("100-CC0-SFX/paper_01.ogg", f"{BOOK}/Riffle Pages 1.wav", 2000, 0.7, (0.35,)),
+             "B": (f"{RET}/Shoofing Papers 1.wav", f"{BOOK}/Page Turn Fast.wav", 2500, 0.75, (0.35,)),
+             "C": ("100-CC0-SFX/paper_03.ogg", f"{BOOK}/Riffle Pages 2.wav", 3000, 0.8, (0.35, 1.3))}
+    winds = ("3-246513-A-16.wav", "4-163609-B-16.wav")
+    for i, (v, (slap, flutter, hi, f, times)) in enumerate(kinds.items()):
+        begin()
+        L = 3.4
+        x = np.zeros(sec(L), np.float32)
+        w = trim(esc(winds[i % 2]))[: sec(L)]
+        w = filt(w, 60, 900) * np.interp(np.arange(len(w)), [0, sec(0.3), sec(1.0), sec(2.2), len(w) - 1], [0.2, 1.0, 0.6, 0.8, 0.0])
+        place(x, w * 0.3, 0)                                                    # 窓の外の風、低く
+        s, fl = speed(lav(slap), f), speed(lav(flutter), f)
+        thump = filt(noise(0.25, 400 + i), 50, 350) * env(sec(0.25), 0.004, 0.08)
+        for n, t0 in enumerate(times):
+            g = 1.0 if n == 0 else 0.65
+            place(x, filt(s[: sec(0.6)], 80, hi) * env(min(len(s), sec(0.6)), 0.006, 0.2) * 0.8 * g, t0)   # ぼすっ（紙が平らに当たる）
+            place(x, thump * 0.9 * g, t0)                                                                   # ガラス越しの低い当たり
+            place(x, filt(lav(f"{RET}/Rattling Cheap Wood 1.wav")[: sec(0.2)], 80, 1200) * 0.12 * g, t0 + 0.01)  # 窓枠がかすかに
+            fseg = fl[: sec(1.0)] * np.linspace(1, 0.15, min(len(fl), sec(1.0))) ** 2
+            place(x, filt(fseg, 120, hi * 0.8) * 0.45 * g, t0 + 0.12)          # 押しつけられて、ばたばた
+        tail = speed(lav("100-CC0-SFX/paper_04.ogg"), f)
+        place(x, filt(tail, 120, hi * 0.7) * env(len(tail), 0.05, 0.25) * 0.3, times[-1] + 1.1)        # はがれて飛んでいく
+        mono(OUT / "ep5" / f"57_window_slap_v3_{v}.mp3", reverb(filt(x, 40, hi, order=4), 0.5, 0.2), peak=0.82)
+
+
+def restaurant_v3():
+    """第六話 ファミレス v3：金属音は食べている人にしか気にならない。主役は部屋全体のこもったざわめき＋空調。
+    カトラリーの音は遠く、まれに、鈍く（A ごく小さく / B ほとんどなし / C なし）。声の合成は一切しない"""
+    begin()
+    src = load(STK / "lenautile_restaurant.ogg")
+    base_src = set(CUR)
+    chunks = [src[a: a + sec(5)] for a in range(0, len(src) - sec(5), sec(2.5))]
+    RET = "BB_Retail Therapy Sample Pack"
+    clink_files = [f"{RET}/Silverware {i}.wav" for i in range(1, 7)] + [f"{RET}/Ceramic Bowl {i}.wav" for i in range(1, 8)]
+    vent = "bb - Fans and Drones (Jul 2021)/Air Vent.wav"
+    kinds = {"A": (0.06, (6, 14)), "B": (0.025, (15, 30)), "C": (0.0, None)}
+    for i, (v, (dg, gap)) in enumerate(kinds.items()):
+        begin()
+        CUR.update(base_src)
+        L = 62
+        crowd = sum(filt(ambience(chunks, L, 1.5, 400 + i * 10 + k), 100, 700, order=4) for k in range(4))
+        hum = filt(ambience([lav(vent)], L, 2.0, 430 + i), 40, 600)
+        layers = [norm(crowd) * 0.6, norm(hum) * 0.25]
+        if dg:
+            clinks = scatter([distance(filt(lav(c), 150, 1800), 2) for c in clink_files], L, gap, (0.4, 1.0), 420 + i)
+            layers.append(norm(clinks) * dg)
+        bed(OUT / "ep6" / f"60_restaurant_ambience_loop_v3_{v}.mp3", reverb(mix(*layers), 1.0, 0.45, 2500), peak=0.5)
+
+
 def redo():
     tadaima_approach_v2()
     tadaima_arrive_v2()
     window_slap_v2()
     restaurant_v2()
+    window_slap_v3()
+    restaurant_v3()
 
 
-# KP が聞いて選んだ候補（本番の build/ccfolia/fx/ に、合成版と同じ名前で上書きする）。v2 の4つはまだ選ばれていない
+# KP が聞いて選んだ候補（本番の build/ccfolia/fx/ に、合成版と同じ名前で上書きする）。51/52 は v2 の C に決定。57/60 は v3 を検討中
 PICKS = {
     "ep1/11_footsteps_stop": "A", "ep1/12_door_open_close": "A", "ep1/13_scratching_loop": "B", "ep1/14_handle_rattle": "A",
     "ep2/23_insect_tide_loop": "A",
     "ep4/42_tarp_run_loop": "A", "ep4/43_avenue_loop": "A", "ep4/44_gusha": "C",
-    "ep5/53_zapping": "A",
+    "ep5/51_tadaima_approach": "v2_C", "ep5/52_tadaima_arrive": "v2_C", "ep5/53_zapping": "A",
     "ep7/74_rain_loop": "A", "ep7/75_channel_loop": "A",
     "ep8/81_room_tone_loop": "A", "ep8/82_bang_gust": "C",
     "ep9/94_projector_loop": "B", "ep9/96_knob_held": "B",
