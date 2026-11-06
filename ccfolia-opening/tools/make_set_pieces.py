@@ -1366,9 +1366,71 @@ def gaussian_noise_1d(n, seed):
     return (v - v.min()) / (np.ptp(v) + 1e-6)
 
 
+PUSH_FPS = 12                       # 寄りは動きがゆっくりでぶれがないので 12fps で足りる（容量を抑える）
+PUSH_SIZE = (960, 540)              # 前景は全面・不透明。ホールの絵は 1280×720 しかないので、出力も小さめに
+
+
+class PushCamera:
+    """ホールの絵（映写の光込み）に、スクリーンへゆっくり寄るカメラ。奥行き（depth_map）で手前の客席ほど大きく
+    拡大して画面の外へ流れ、スクリーンに対して動く（視差）。フィルムそのものは出力の解像度で直接スクリーンに貼るので、
+    寄っても絵がぼけない"""
+
+    def __init__(self, pj):
+        from fxlib import depth_map, grain_tex
+        lit = pj.frame(Image.new("RGB", (960, 720), (0, 0, 0)), 0.0, 1.0)      # フィルムを抜いた、光だけのホール
+        base = Image.alpha_composite(Image.fromarray((pj.plate * 255).astype(np.uint8)).convert("RGBA"), lit)
+        self.lit = np.asarray(base.convert("RGB"), np.float32) / 255
+        self.dark = self.lit * 0.0
+        onnx = ROOT / "build" / "models" / "da.onnx"
+        d = depth_map(Image.fromarray((pj.plate * 255).astype(np.uint8)), onnx)
+        lo, hi = np.percentile(d, [2, 98])
+        d = np.clip((d - lo) / (hi - lo + 1e-6), 0, 1)
+        (ax, ay), (bx, _), (cx, cy), _ = HALL_SCREEN
+        self.ds = float(np.median(d[ay:cy, ax:bx]))
+        self.depth = d
+        self.gate = pj.gate
+        self.tgt = ((ax + bx) / 2, (ay + cy) / 2)
+        self.k = PUSH_SIZE[0] / 1280
+        self.grain = [grain_tex(PUSH_SIZE[1], PUSH_SIZE[0], 960 + j) for j in range(4)]
+
+    def view(self, t):
+        """t=0（引き）〜1（寄りきり）のカメラ：見る中心と、スクリーンの拡大率"""
+        e = t * t * (3 - 2 * t)                                     # ゆっくり出て、ゆっくり止まる
+        S = 4.3 ** e                                                # 寄りは等比（体感で一定の速さ）
+        cxy = np.array([640, 360]) * (1 - e) + np.array(self.tgt) * e
+        return S, cxy
+
+    def warp(self, img, t):
+        from scipy.ndimage import map_coordinates
+        S, c = self.view(t)
+        W, H = PUSH_SIZE
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        qx, qy = xx / self.k - 640, yy / self.k - 360
+        s = np.full_like(qx, S)
+        for _ in range(3):                                          # 逆写像：引いた先の奥行きで拡大率を決め直す
+            sx, sy = c[0] + qx / s, c[1] + qy / s
+            d = map_coordinates(self.depth, [sy, sx], order=1, mode="nearest")
+            s = S ** (1 + 1.2 * np.clip(d - self.ds, 0, 1))         # 手前ほど速く大きくなる（ドリー）
+        return np.dstack([map_coordinates(img[..., ch], [sy, sx], order=1, mode="nearest") for ch in range(3)])
+
+    def gate_quad(self, t):
+        S, c = self.view(t)
+        return [(((x - c[0]) * S + 640) * self.k, ((y - c[1]) * S + 360) * self.k) for x, y in self.gate]
+
+    def frame(self, t, film, on=1.0, i=0, hall=None):
+        from fxlib import quad_warp
+        bg = self.warp(self.lit if hall is None else hall, t) if hall is not False else self._bg
+        rgba = np.asarray(quad_warp(film, self.gate_quad(t), PUSH_SIZE), np.float32) / 255
+        fa = rgba[..., 3:] * on
+        col = bg * (1 - fa) + np.clip(rgba[..., :3] * 1.45 + 0.03, 0, 1) * fa
+        col = col * (1 + 0.05 * self.grain[i % 4][..., None])       # 粒子は4枚を回す（毎コマ全面を変えない）
+        return Image.fromarray((np.clip(col, 0, 1) * 255).astype(np.uint8), "RGB").convert("RGBA")
+
+
 def old_film():
-    """上映中（ループ）と、途切れる（1回再生：1枚目 → 振り返りはじめの2枚目に変わって 5 コマで暗転）の2つ。
-    全面にかぶせず、ホールのスクリーンに映写された画として置く（背景のホールはそのまま見える）"""
+    """上映中（1回再生：引きのホールからスクリーンへゆっくり寄り、寄りきったらフィルムを映し続ける）と、
+    途切れる（1回再生：寄った画のまま、ちらつき → 振り返りはじめの2枚目 → 光が消えて真っ黒）の2つ。
+    カメラが動くので前景は全面・不透明（背景のホールは隠れる）"""
     draft = not FILM[0].exists()
     if draft:                                                       # 絵が届くまでは、第五話の玄関で試す
         a = b = Image.open(SCENES / "ep5_02_entrance.jpg").convert("RGB")
@@ -1378,21 +1440,31 @@ def old_film():
         ((int(im.width * 720 / im.height) - 960) // 2, 0, (int(im.width * 720 / im.height) - 960) // 2 + 960, 720))
     a, b = fit_(a), fit_(b)
     rg = np.random.default_rng(93)
-    pj = Projection()
-    loop = [pj.frame(*film_frame(a, i, rg)) for i in range(int(2.0 * FPS))]   # 2秒のループ（ばらつきなので、つなぎ目は見えない）
+    cam = PushCamera(Projection())
+    F = PUSH_FPS
+    n_push, n_hold = int(9 * F), int(22 * F)                        # 9秒で寄り、22秒映し続ける（台詞4行×4秒＋間）。最後のコマで止まる
+    loop = [cam.frame(i / (n_push - 1), film_frame(a, i, rg)[0], i=i) for i in range(n_push)]
+    cam._bg = cam.warp(cam.lit, 1.0)
+    for i in range(0, n_hold, 3):                                   # 映し続ける間は3コマずつ同じ画（同じコマが続くと容量はほぼ0）
+        loop += [cam.frame(1.0, film_frame(a, i, rg)[0], i=i // 3, hall=False)] * 3
     sfx = "_draft" if draft else ""
-    save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", lossless=False, quality=78, loop=0)
-    cut = [pj.frame(*film_frame(a, i, rg)) for i in range(int(1.0 * FPS))] + [pj.frame(*film_frame(b, i, rg)) for i in range(5)]
-    # 途切れる：フィルムが外れて白く飛ぶのではなく、光がすっと消えてスクリーンもホールも暗く沈む（映写機が止まる）
-    blank = Image.new("RGB", (960, 720), (0, 0, 0))
-    for k in range(0, int(0.5 * FPS), 3):                          # 3コマずつ（全面が変わるコマは容量を食う）
-        cut += [pj.frame(blank, 0.0, (1 - k / (0.5 * FPS)) ** 2)] * 3
-    dark = np.asarray(pj.frame(blank, 0.0, 0.0), np.float32)
-    dark[..., 3] = np.maximum(dark[..., 3], 150)                    # ホールも沈む（真っ黒にはしない：客席の気配は残す）
-    dark[..., :3] = np.where(dark[..., 3:] > 0, dark[..., :3], 0)
-    dark[..., :3] = np.minimum(dark[..., :3], 12)
-    cut += [Image.fromarray(dark.astype(np.uint8), "RGBA")] * 2
-    save_webp_anim(cut, OUT / "ep9" / f"93_film_cut{sfx}.webp", lossless=False, quality=78)
+    save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", fps=F, lossless=False, quality=56, loop=1)
+    cut = []
+    for i in range(int(1.2 * F)):                                   # ちらつきが強くなる
+        f, g = film_frame(a, i, rg)
+        cut.append(cam.frame(1.0, f, on=float(np.clip(1 - rg.random() * (0.2 + 0.6 * i / F), 0.15, 1)), i=i, hall=False))
+    for i in range(int(0.8 * F)):                                   # 振り返りはじめる
+        f, g = film_frame(b, i, rg)
+        cut.append(cam.frame(1.0, f, on=float(np.clip(1 - rg.random() * 0.5, 0.3, 1)), i=i, hall=False))
+    lit = cam._bg
+    n_die = int(0.7 * F)
+    for k in range(n_die):                                          # 光がすっと消えて、スクリーンもホールも黒に沈む
+        o = (1 - (k + 1) / n_die) ** 2
+        cam._bg = lit * (0.15 + 0.85 * o) * o ** 0.5
+        cut.append(cam.frame(1.0, film_frame(b, k, rg)[0], on=o, i=k, hall=False))
+    cut += [Image.new("RGBA", PUSH_SIZE, (0, 0, 0, 255))] * 3
+    cam._bg = lit
+    save_webp_anim(cut, OUT / "ep9" / f"93_film_cut{sfx}.webp", fps=F, lossless=False, quality=70, loop=1)
     return loop, cut
 
 
@@ -1430,10 +1502,10 @@ def ep9():
     write_mp3(OUT / "ep9" / "94_projector_loop.mp3", norm(loop_seam(projector(62, 940), 2.0), 0.5))
     write_mp3(OUT / "ep9" / "95_projector_stop_then_silence.mp3", norm(projector_stop(950), 0.6), q=6)
     t2 = OUT / "preview" / "tmp9.mp3"
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "ep9" / "94_projector_loop.mp3"), "-t", "4",
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "ep9" / "94_projector_loop.mp3"), "-t", "14",
                     "-i", str(OUT / "ep9" / "95_projector_stop_then_silence.mp3"), "-filter_complex",
-                    "[0:a]atrim=0:4[a];[1:a]atrim=0:4[b];[a][b]concat=n=2:v=0:a=1", str(t2)], check=True)
-    preview(SCENES / "ep9_02_hall.jpg", loop * 2 + cut, t2, "ep9_old_film", tail=2)
+                    "[0:a]atrim=0:14[a];[1:a]atrim=0:4[b];[a][b]concat=n=2:v=0:a=1", str(t2)], check=True)
+    preview(SCENES / "ep9_02_hall.jpg", loop[:int(14 * PUSH_FPS)] + cut, t2, "ep9_old_film", fps=PUSH_FPS, tail=2)
 
 
 
