@@ -113,6 +113,9 @@ def main(src, outdir):
         return name
 
     ent["room"]["markers"] = {}                                 # 書き出し時に盤面に残っていた辞書カードを消す（どのシーンでも出続けていた）
+    for s in ent["scenes"].values():                            # 場所のシーン（「第N話 〜」）からも辞書カードを外す（演出が見えなくなるため。カードは探索シーンだけ）
+        if s.get("name", "").startswith("第"):
+            s["markers"] = {}
     by_name = {s["name"]: s for s in ent["scenes"].values()}
     added = {n for n, *_ in SCENES}
     orders = sorted(s["order"] for s in ent["scenes"].values() if s["name"] not in added)
