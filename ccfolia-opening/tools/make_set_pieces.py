@@ -2026,6 +2026,8 @@ def ambience():
 BALCONY = [ROOT / "assets" / f"ep8_balcony_{k}.png" for k in range(3)]   # 届いたらここに置く（0=人なし、1=手を振る、2=のけぞる）
 WINDOW_DRAFT = (205, 30, 505, 445)                                     # 窓の範囲（仮：家具のない部屋の構図）
 WINDOW_REAL = (130, 40, 495, 425)                                      # 窓の範囲（届いたベランダの絵。1280×720 で測った）
+ARM_REAL = (322, 268, 297, 272)                                         # 手を振る腕：x<322・y<268 が肘から先、肘は (297, 272)
+FALL_PX = 560                                                          # 落ちる間に重心が下がる量（px）
 RAIL_REAL, FLOOR_REAL = 312, 425                                       # 届いた絵の手すりの上端と、ベランダの床の線（ここより下に落ちると見えない）
 WINDOW = WINDOW_REAL if all(p.exists() for p in BALCONY) else WINDOW_DRAFT
 
@@ -2110,7 +2112,61 @@ class FallingWoman:
             col = self.black + (col - self.black).clip(0, None) * 0.18
             pre = np.dstack([col * alpha[..., None], alpha])[by0:by1, bx0:bx1]
             self.sprites[key] = (pre, (xs.mean() - bx0, ys.max() - by0), ys.max() - ys.min())
+            row = np.where(m[rail])[0]                                          # 手すりにもたれる接点（腰）：手すりの行での体の真ん中
+            hip_x = row.mean() if len(row) else xs.mean()
+            self.hip = getattr(self, "hip", {})
+            self.hip[key] = np.array([rail - by0, hip_x - bx0], np.float64)
+            self.com = getattr(self, "com", {})
+            self.com[key] = np.array([ys.mean() - by0, xs.mean() - bx0], np.float64)   # 重心
+        if real:                                                                # 手を振る腕：肘から先だけを切り分けて、肘を支点に振る
+            pre = self.sprites["stand"][0]
+            ex, ey = ARM_REAL[2] - bx0, ARM_REAL[3] - by0
+            yy, xx = np.mgrid[0:pre.shape[0], 0:pre.shape[1]]
+            arm = (smoothstep(ARM_REAL[0] - bx0 + 3, ARM_REAL[0] - bx0 - 3, xx) * smoothstep(ARM_REAL[1] - by0 + 3, ARM_REAL[1] - by0 - 3, yy))[..., None]
+            self.arm = (pre * arm, pre * (1 - arm), np.array([ey, ex], np.float64))
         self.rg = np.random.default_rng(84)
+
+    @staticmethod
+    def _xform(pre, ang, pivot, d):
+        """pivot (y, x) を中心に ang 度回し、d (y, x) ずらす（負の角度で、左にあるものが下がる＝反時計回り）"""
+        from scipy.ndimage import affine_transform
+        th = np.deg2rad(ang)
+        c, s = np.cos(th), np.sin(th)
+        R = np.array([[c, -s], [s, c]])                                           # 出力 (y, x) → 入力 (y, x)
+        off = pivot - R @ (pivot + np.asarray(d, np.float64))
+        return np.dstack([affine_transform(pre[..., k], R, offset=off, order=1, mode="constant") for k in range(4)])
+
+    def _clip(self, out, clip):
+        if clip is not None:
+            yy = np.arange(self.box[1], self.box[3])[:, None, None]
+            out = out * np.clip((clip - yy) / 2.0, 0, 1)
+        return out
+
+    def _pre(self, p):
+        """届いた絵の動きの部品（手を振る・もたれかかる・落ちる）を、前乗算 RGBA にする"""
+        kind, v, dx, clip = p[1], p[2], p[3], p[4]
+        if kind == "wave":                                                      # v = (腕の角度, 体の傾き)
+            arm, body, elbow = self.arm
+            pre = body + self._xform(arm, v[0], elbow, (0, 0))
+            return self._xform(pre, v[1], self.hip["stand"], (0, dx))
+        if kind == "morph":                                                     # v = 0..1：腰を支点に前へ傾けながら、立ち姿 → 身を乗り出す姿へ
+            tilt, m = smoothstep(0, 0.7, v), smoothstep(0.45, 1, v)            # 先に体ごと傾け、後半で形を移す
+            A = self._xform(self.sprites["stand"][0], -28 * tilt, self.hip["stand"], (0, dx))
+            B = self._xform(self.sprites["lean"][0], 22 * (1 - tilt), self.hip["lean"], (0, dx))
+            am = (1 - m) * self.gf(A[..., 3], 3) + m * self.gf(B[..., 3], 3)
+            al = self.gf(np.clip((am - 0.5) * 9 + 0.5, 0, 1), 0.8)            # 2つの形の間をなめらかにつなぐ（重ね焼きにしない）
+            col = (A[..., :3] * (1 - m) + B[..., :3] * m) / np.maximum(A[..., 3:] * (1 - m) + B[..., 3:] * m, 1e-4)
+            return np.dstack([col * al[..., None], al])
+        if kind == "fall":                                                      # v = 0..1：手すりを支点に上半身が下へ回り込み、重力で落ちる
+            k = v
+            ang = -100 * smoothstep(0, 0.6, k)
+            th = np.deg2rad(ang)
+            R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+            pv, com = self.hip["lean"], self.com["lean"]
+            target = com + np.array([FALL_PX * k ** 2.2, dx])                    # 重心は放物線で下へだけ動く（一度も上がらない）
+            d = target - pv - R.T @ (com - pv)
+            return self._clip(self._xform(self.sprites["lean"][0], ang, pv, d), clip)
+        raise ValueError(kind)
 
     def _place(self, key, ang, dx, dy, clip=None):
         """手すりの高さを中心に ang 度傾け、(dx, dy) ずらした前乗算 RGBA。clip より下は見えない（ベランダの床の向こう）"""
@@ -2136,7 +2192,7 @@ class FallingWoman:
         if not poses:
             return None
         for p in poses:
-            acc += self._place(*p)
+            acc += self._pre(p) if p[0] == "real" else self._place(*p)
         acc /= len(poses)
         al = acc[..., 3]
         col = acc[..., :3] / np.maximum(acc[..., 3:], 1e-4)
@@ -2160,16 +2216,15 @@ class FallingWoman:
         h = self.sprites["stand"][2]
         if t < ts or t >= te:
             return None
-        if t < tl:
-            return ("stand", 0.0, dx + np.sin(t * 2.3) * 0.6, 0.0, None if self.real else self.rail)
         if self.real:
-            hl = self.sprites["lean"][2]
-            if t < tf:                                                            # 手すりへ身を乗り出したまま、わずかに沈む
-                k = smoothstep(0, 1, (t - tl) / (tf - tl))
-                return ("lean", -4 * k, dx, hl * 0.02 * k, None)
-            k = (t - tf) / (te - tf)                                              # 頭から前へ手すりを越え（脚が上がる）、まっすぐ下へ加速してベランダの床の向こうに消える
-            return ("lean", -8 - 85 * k ** 1.2, dx, hl * (-0.06 * k + 1.9 * k * k),
-                    self.floor + 70 * max(0.0, 1 - k * 4))
+            if t < tl:                                                            # 肘から先を左右に振り、体もわずかに揺れる
+                return ("real", "wave", (16 * np.sin(2 * np.pi * 1.4 * (t - ts)), 0.7 * np.sin(1.3 * t)), dx, None)
+            if t < tf:                                                            # 0.5〜1秒かけて手すりへ重心を移す
+                return ("real", "morph", smoothstep(0, 1, (t - tl) / (tf - tl)), dx, None)
+            k = (t - tf) / (te - tf)                                              # 腰壁（ベランダの床の線）より下は隠す
+            return ("real", "fall", k, dx, self.floor + 70 * max(0.0, 1 - k * 4))
+        if t < tl:
+            return ("stand", 0.0, dx + np.sin(t * 2.3) * 0.6, 0.0, self.rail)
         if t < tf:
             k = smoothstep(0, 1, (t - tl) / (tf - tl))
             return ("stand", -ang * 0.5 * k, dx, -h * 0.04 * k, self.rail)    # 重心を後ろへ（わずかに伸び上がる）
@@ -2181,11 +2236,11 @@ class FallingWoman:
         poses = []
         for ev in events:
             moving = ev[2] <= t < ev[3]
-            ts = [t + shutter * (j / (n - 1) - 0.5) for j in range(n)] if moving else [t]
+            ts = [t - shutter * j / (n - 1) for j in range(n)] if moving else [t]   # 過去側だけを重ねる：落ちる体の上に、髪と服がなびくような尾が残る
             ps = [self.pose(u, ev) for u in ts]
             if any(p is not None for p in ps):
                 if moving:
-                    ps = [p if p is not None else ("stand", 0, 0, 1e4, None) for p in ps]   # 消えた瞬間は画面の外へ
+                    ps = [p for p in ps if p is not None]   # 消えた瞬間は画面の外へ
                 poses.append(ps)
         if not poses:
             return None
@@ -2238,7 +2293,7 @@ def balcony_loop():
     rail = fw.rail
     fps, L = FPS, 6.0
     n_fr = int(L * fps)
-    events = [(0.0, 2.4, 2.9, 3.5, 22, 0)]                           # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
+    events = [(0.0, 2.0, 2.8, 3.3, 22, 0)]                           # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
     frames, mosaic = [], None
     rg = np.random.default_rng(86)
     for i in range(n_fr):
