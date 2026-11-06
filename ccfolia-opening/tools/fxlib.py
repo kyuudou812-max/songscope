@@ -136,7 +136,8 @@ def write_mp3(path, x, q=4, stereo=None):
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(tmp), "-c:a", "libmp3lame", "-q:a", str(q),
                     str(path)], check=True)
     tmp.unlink()
-    print(f"{path.relative_to(ROOT)}  {len(x) / SR:6.1f}秒  {path.stat().st_size / 1024:6.0f}KB")
+    rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+    print(f"{rel}  {len(x) / SR:6.1f}秒  {path.stat().st_size / 1024:6.0f}KB")
 
 
 # ---------------------------------------------------------------- 絵
@@ -185,4 +186,118 @@ def save_webp_anim(frames, path, fps=30, lossless=True, quality=80, loop=1):
     kw = dict(lossless=True) if lossless else dict(quality=quality)
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=dur, loop=loop,
                    minimize_size=True, **kw)
-    print(f"{path.relative_to(ROOT)}  {len(frames)}コマ  {path.stat().st_size / 1024 / 1024:5.2f}MB")
+    rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+    print(f"{rel}  {len(frames)}コマ  {path.stat().st_size / 1024 / 1024:5.2f}MB")
+
+
+# ---------------------------------------------------------------- 合成（VFX-STUDY.local.md）
+# 「貼り絵」に見えないための道具。背景と前景を、同じ光・同じ粒子・同じカメラに通す。
+
+def depth_map(img, onnx_path, size=518):
+    """Depth-Anything V2（ONNX, GitHub releases の fabio-sim/Depth-Anything-ONNX）で奥行き。
+    戻り値は 0（奥）〜1（手前）の float32、img と同じ大きさ。onnxruntime だけで動く"""
+    import onnxruntime as ort
+    W, H = img.size
+    x = np.asarray(img.convert("RGB").resize((size, size), Image.BICUBIC), np.float32) / 255
+    x = (x - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
+    x = x.transpose(2, 0, 1)[None].astype(np.float32)
+    s = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    d = s.run(None, {s.get_inputs()[0].name: x})[0][0]
+    d = (d - d.min()) / (np.ptp(d) + 1e-6)
+    return np.asarray(Image.fromarray(d.astype(np.float32)).resize((W, H), Image.BICUBIC), np.float32)
+
+
+def parallax_frame(img_arr, depth, t, push=0.06, drift=(10.0, 4.0), near_gain=1.0):
+    """奥行きで画素をずらす 2.5D カメラ。t=0..1。push は奥への寄り（手前ほど大きく拡大）、
+    drift は手前の横揺れ px。逆写像（背景から引く）なので穴が開かず、端は複製で埋まる"""
+    from scipy.ndimage import map_coordinates
+    H, W = depth.shape
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    cx, cy = W / 2, H * 0.45
+    z = 1 + push * t * (0.35 + near_gain * depth)
+    dx = drift[0] * np.sin(t * np.pi) * depth
+    dy = drift[1] * np.sin(t * np.pi * 0.5) * depth
+    sx = cx + (xx - cx) / z - dx
+    sy = cy + (yy - cy) / z - dy
+    out = np.empty_like(img_arr)
+    for c in range(img_arr.shape[2]):
+        out[..., c] = map_coordinates(img_arr[..., c], [sy, sx], order=1, mode="nearest")
+    return out
+
+
+def integrate(bg, fg_rgb, alpha, depth_at=0.5, haze=(70, 52, 40), haze_amt=0.35,
+              wrap_px=10, wrap_amt=0.45, soften=1.2, ao_amt=0.5, ao_y=None):
+    """前景（人物など）を背景の「中」に置く。全部 float32 0..1、H×W×3 / H×W。
+    1. 縁をぼかす（AIの切り抜きの硬い縁は一番の貼り絵感）
+    2. 背景の明るさで前景を染める（色合わせ：背景のぼかしを掛け合わせる）
+    3. ライトラップ：背景の光が縁に回り込む
+    4. 空気遠近：奥行きぶん霞の色へ寄せる
+    5. 接地の影（足元の AO）"""
+    from scipy.ndimage import gaussian_filter
+    a = gaussian_filter(alpha, soften)
+    blur_bg = np.stack([gaussian_filter(bg[..., c], 40) for c in range(3)], -1)
+    lum = blur_bg.mean(-1, keepdims=True)
+    fg = fg_rgb * (0.35 + 1.3 * lum) * (blur_bg / (lum + 1e-4)) ** 0.6
+    edge = np.clip(gaussian_filter(1 - a, wrap_px) * a, 0, 1)[..., None]
+    fg = fg + blur_bg * edge * wrap_amt * 2
+    fg = fg * (1 - haze_amt * (1 - depth_at)) + np.array(haze, np.float32) / 255 * haze_amt * (1 - depth_at)
+    out = bg.copy()
+    if ao_y is not None:
+        H, W = alpha.shape
+        cols = alpha.max(0)
+        xs = np.where(cols > 0.5)[0]
+        if len(xs):
+            ao = np.zeros_like(alpha)
+            ao[int(ao_y):int(ao_y) + 6, xs.min():xs.max()] = 1
+            ao = gaussian_filter(ao, (4, (xs.max() - xs.min()) * 0.25))
+            out = out * (1 - ao_amt * np.clip(ao / (ao.max() + 1e-6), 0, 1))[..., None]
+    return out * (1 - a[..., None]) + fg * a[..., None]
+
+
+def film_finish(frames, seed=0, grain=0.05, weave=0.8, vignette=0.45, breathe=0.06,
+                flicker=0.04, dust=0.0, tone=(1.0, 0.86, 0.70)):
+    """場面全体を一本のフィルムに通す：粒子・ゲートの揺れ・周辺減光の呼吸・露光ゆらぎ・ゴミ。
+    前景も背景も同じ処理を通すことが「同じ画に住んでいる」感の大半。frames は float32 0..1 のリスト"""
+    from scipy.ndimage import gaussian_filter, shift
+    r = np.random.default_rng(seed)
+    H, W = frames[0].shape[:2]
+    yy, xx = np.mgrid[0:H, 0:W]
+    rr = ((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2
+    n = len(frames)
+    flick = gaussian_filter(r.normal(0, 1, n * 3), 1.5)[:n]
+    out = []
+    for i, f in enumerate(frames):
+        ph = 2 * np.pi * i / n                      # ループで継ぎ目が出ない周期
+        g = f
+        if weave:
+            g = shift(g, (weave * np.sin(ph * 3 + r.normal(0, .3)), weave * 0.5 * r.normal(), 0), order=1, mode="nearest")
+        v = 1 - (vignette + breathe * np.sin(ph)) * rr
+        g = g * np.clip(v, 0, 1)[..., None] * (1 + flicker * flick[i] / (np.abs(flick).max() + 1e-6))
+        gn = gaussian_filter(r.normal(0, 1, (H, W)), 0.7)
+        lum = g.mean(-1, keepdims=True)
+        g = g + grain * gn[..., None] * (0.4 + lum) * 1.6     # 明るい所にもしっかり乗る銀塩寄りの粒子
+        if dust and r.random() < dust:
+            for _ in range(r.integers(1, 4)):
+                y, x = r.integers(0, H), r.integers(0, W)
+                rad = r.uniform(1, 3)
+                g = g * (1 - 0.6 * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * rad ** 2)))[..., None]
+        g = g.mean(-1, keepdims=True) * np.array(tone, np.float32) * 0.4 + g * 0.6
+        out.append(np.clip(g, 0, 1))
+    return out
+
+
+def fall_blur(fg_rgba, dy, steps=12):
+    """落下する物体の縦モーションブラー（シャッター開角180°相当＝1コマ移動量の半分）。
+    fg_rgba: H×W×4 float、dy: このコマの移動量 px。プリマルチで足すので縁が汚れない"""
+    from scipy.ndimage import shift
+    pm = fg_rgba.copy()
+    pm[..., :3] *= pm[..., 3:]
+    acc = np.zeros_like(pm)
+    L = max(1, int(abs(dy) * 0.5))
+    k = min(steps, L)
+    for j in range(k):
+        acc += shift(pm, (L * j / max(k - 1, 1), 0, 0), order=1, mode="constant")
+    acc /= k
+    a = acc[..., 3:]
+    acc[..., :3] = np.where(a > 1e-4, acc[..., :3] / np.maximum(a, 1e-4), 0)
+    return acc
