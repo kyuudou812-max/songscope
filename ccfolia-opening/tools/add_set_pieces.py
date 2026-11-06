@@ -62,6 +62,16 @@ SCENES = [
     ("エンドB 窓の外の女", "第9話 劇場のホール", S / "ep6_01_restaurant.jpg", E9 / f"89_endb_fall{ENDB}.webp"),
     ("エンドA 最後の廊下", "第9話 劇場のホール", CC / "01_bg_corridor.jpg", CC / "room" / "11_grain_loop.webp"),
 ]
+# ChatGPT の差分の絵（tools/finish_images.py が書き出す）。届いたものだけシーンにする
+for name, base, bg, fg in [
+    ("第1話 ドア（隙間の光）", "第1話 会議室", S / "ep1_01_door_a.jpg", None),
+    ("第1話 ドア（隙間の影）", "第1話 会議室", S / "ep1_01_door_b.jpg", None),
+    ("第2話 玉虫色の地面", "第2話 資材置き場", S / "ep2_03_storage_iridescent.jpg", None),
+    ("第4話 遺留品（差分）", "第4話 ブルーシートの現場", S / "ep4_02_bluesheet_items.jpg", FX / "shared" / "71_blink_reopen.webp"),
+    ("第6話 全員の視線（1秒）", "第6話 ファミレス", S / "ep6_01_restaurant.jpg", FX / "ep6" / "63_gaze_flash.webp"),
+]:
+    if bg.exists() and (fg is None or fg.exists()):
+        SCENES.append((name, base, bg, fg))
 # (メモ, 画像, x, y, 幅, 高さ, 裏面)。フィールドは x -64〜64・y -36〜36。PC の置き場はフィールドの下、NPC の置き場は右
 PANELS = [(f"第3話 人影{k}", FX / "ep3" / f"31_edge_figure_{k}.webp", x, -34, 8, 24, None)
           for k, x in zip(range(1, 7), (-74, -84, -94, 132, 142, -104))]
