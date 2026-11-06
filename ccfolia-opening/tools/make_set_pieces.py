@@ -307,7 +307,7 @@ def nandomo():
         stand = max(0.06, period - (0.5 + 0.55) / speed) * (0.85 + 0.3 * rg.random())
         tl = ts + stand
         tf = tl + 0.5 / speed * (0.9 + 0.2 * rg.random())
-        te = tf + 0.55 / speed
+        te = tf + 0.75 / speed
         events.append((ts, tl, tf, te, 20 + 6 * rg.random() + 6 * prog, rg.normal(0, 3 + 6 * prog)))
         ts = te - (0.32 / speed if prog > 0.45 else -0.12 / speed)        # 後半は、落ちきる前に次が立っている
     print("落ちる回数", len(events))
@@ -337,7 +337,7 @@ def nandomo():
     hold = int(0.2 * FPS)
     frames += [frames[-1]] * hold
     frames.append(Image.new("RGBA", (1280, 720), BLACK + (255,)))     # 真っ黒（ここで音も止まる）
-    save_webp_anim(frames, OUT / "ep8" / "84_nandomo.webp", lossless=False, quality=38)
+    save_webp_anim(frames, OUT / "ep8" / "84_nandomo.webp", lossless=False, quality=34)
     return frames
 
 
@@ -2223,21 +2223,29 @@ class FallingWoman:
             return self._xform(pre, v[1], self.hip["stand"], (0, dx))
         if kind == "morph":                                                     # v = 0..1：腰を支点に前へ傾けながら、立ち姿 → 身を乗り出す姿へ
             tilt, m = smoothstep(0, 0.7, v), smoothstep(0.45, 1, v)            # 先に体ごと傾け、後半で形を移す
-            A = self._xform(self.sprites["stand"][0], -28 * tilt, self.hip["stand"], (0, dx))
+            st = self.sprites["stand"][0]                                       # 足は床に固定：腰（手すりの高さ）から上だけを前へ折る
+            yy = np.arange(st.shape[0])[:, None, None]
+            up = smoothstep(self.hip["stand"][0] + 4, self.hip["stand"][0] - 4, yy)
+            A = st * (1 - up) + self._xform(st * up, -34 * tilt, self.hip["stand"], (0, 0))
+            A = self._xform(A, 0, self.hip["stand"], (0, dx))
             B = self._xform(self.sprites["lean"][0], 22 * (1 - tilt), self.hip["lean"], (0, dx))
             am = (1 - m) * self.gf(A[..., 3], 3) + m * self.gf(B[..., 3], 3)
             al = self.gf(np.clip((am - 0.5) * 9 + 0.5, 0, 1), 0.8)            # 2つの形の間をなめらかにつなぐ（重ね焼きにしない）
             col = (A[..., :3] * (1 - m) + B[..., :3] * m) / np.maximum(A[..., 3:] * (1 - m) + B[..., 3:] * m, 1e-4)
             return np.dstack([col * al[..., None], al])
-        if kind == "fall":                                                      # v = 0..1：手すりを支点に上半身が下へ回り込み、重力で落ちる
+        if kind == "fall":                                                      # v = 0..1：手すりを支点に上半身が向こうへ下がり、脚が遅れて手すりを越え、逆さの縦向きで落ちる
             k = v
-            ang = -100 * smoothstep(0, 0.6, k)
-            th = np.deg2rad(ang)
-            R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
-            pv, com = self.hip["lean"], self.com["lean"]
-            target = com + np.array([FALL_PX * k ** 2.2, dx])                    # 重心は放物線で下へだけ動く（一度も上がらない）
-            d = target - pv - R.T @ (com - pv)
-            return self._clip(self._xform(self.sprites["lean"][0], ang, pv, d), clip)
+            pre, pv = self.sprites["lean"][0], self.hip["lean"]
+            yy = np.arange(pre.shape[0])[:, None, None]
+            leg = smoothstep(pv[0] + 2, pv[0] + 10, yy)                         # 手すりより下＝脚
+            torso = self._xform(pre * (1 - leg), -90 * smoothstep(0, 0.4, k), pv, (0, 0))
+            legs = self._xform(pre * leg, -180 * smoothstep(0.08, 0.55, k), pv, (0, 0))
+            out = torso + legs
+            a = out[..., 3]
+            cy = (a.sum(1) * np.arange(a.shape[0])).sum() / max(a.sum(), 1e-3)
+            drop = 30 * k + FALL_PX * (max(0.0, k - 0.45) / 0.55) ** 2         # 回りきるまではほとんど沈まず、そこから重力で加速
+            dy = self.com["lean"][0] + drop - cy                                 # 重心は下へだけ動く（脚が上がっても体は浮かない）
+            return self._clip(self._xform(out, 0, pv, (dy, dx)), clip)
         raise ValueError(kind)
 
     def _place(self, key, ang, dx, dy, clip=None):
@@ -2365,7 +2373,7 @@ def balcony_loop():
     rail = fw.rail
     fps, L = FPS, 6.0
     n_fr = int(L * fps)
-    events = [(0.0, 2.0, 2.8, 3.3, 22, 0)]                           # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
+    events = [(0.0, 2.0, 2.8, 3.55, 22, 0)]                           # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
     frames, mosaic = [], None
     rg = np.random.default_rng(86)
     for i in range(n_fr):
