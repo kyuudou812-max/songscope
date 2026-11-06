@@ -35,7 +35,7 @@ E9 = FX / "ep9"
 DRAFT = "_draft" if not (E9 / "90_full_door_bg.jpg").exists() else ""      # 開ききったドアの絵が届くまでは試作版
 FILM = "_draft" if not (E9 / "92_film_loop.webp").exists() else ""
 BAL = "_draft" if not (FX / "ep8" / "86_balcony_loop.webp").exists() else ""
-ENDB = "_draft" if not (FX / "ep8" / "86_balcony_bg.jpg").exists() else ""   # ベランダの絵が届くまでは試作版
+ENDB = "_draft" if not (E9 / "89_endb_fall.webp").exists() else ""          # ベランダの絵が届くまでは試作版（make_set_pieces が作り分ける）
 VUL = "_draft" if not (FX / "ep7" / "76_vulture_eyes.webp").exists() else ""
 SCENES = [
     ("第1話 居眠り", "第1話 会議室", S / "ep1_01_conference.jpg", FX / "shared" / "72_blink_close.webp"),
@@ -103,12 +103,23 @@ def main(src, outdir):
         return name
 
     by_name = {s["name"]: s for s in ent["scenes"].values()}
+    added = {n for n, *_ in SCENES}
+    orders = sorted(s["order"] for s in ent["scenes"].values() if s["name"] not in added)
+    kids = {}
+    for name, base, bg, fg in SCENES:
+        kids.setdefault(base, []).append(name)
     for name, base, bg, fg in SCENES:
         if base not in by_name:
             raise SystemExit(f"お手本のシーンがない: {base}")
+        old = by_name.get(name, {})                              # 2回目以降：部屋で手で付けた BGM などは残す
         sc = copy.deepcopy(by_name[base])
-        sc.update(name=name, backgroundUrl=add(bg), foregroundUrl=add(fg) if fg else None, soundRef=None, mediaRef=None)
-        sc["order"] = by_name[base]["order"] + 0.05              # お手本のすぐ後ろに並べる
+        sc.update(name=name, backgroundUrl=add(bg), foregroundUrl=add(fg) if fg else None,
+                  soundRef=old.get("soundRef"), mediaRef=old.get("mediaRef"))
+        # お手本のすぐ後ろに、SCENES の順で並べる（同じ order だと並びが不定になる）。次のシーンとの間を等分する
+        b = by_name[base]["order"]
+        nxt = min((o for o in orders if o > b), default=b + 1)
+        sib = kids[base]
+        sc["order"] = round(b + (nxt - b) * (sib.index(name) + 1) / (len(sib) + 1), 6)
         ent["scenes"][make_id(name)] = sc
 
     top = max((i.get("order", 0) for i in ent["items"].values()), default=0)
