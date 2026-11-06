@@ -210,11 +210,9 @@ def match_tone(img, ref, keep_chroma=0.0):
 
 # ---------------------------------------------------------------- 5〜7
 def gaze_flash(path, gaze):
-    """全員の視線：1秒だけ映り、消える（ファミレスのシーンの前景、1回再生）"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    f1 = Image.open(gaze).convert("RGBA")
-    f2 = Image.new("RGBA", f1.size, (0, 0, 0, 0))
-    f1.save(path, save_all=True, append_images=[f2], duration=[1000, 100], loop=1, quality=82)
+    """全員の視線：1秒だけ、わずかに寄りながら映り、切れる（中身は make_diff_fx.gaze_flash。path・gaze はそちらと同じ）"""
+    import make_diff_fx
+    make_diff_fx.gaze_flash()
 
 
 def spec_notes(spec):

@@ -66,8 +66,12 @@ SCENES = [
 for name, base, bg, fg in [
     ("第1話 ドア（隙間の光）", "第1話 会議室", S / "ep1_01_door_a.jpg", None),
     ("第1話 ドア（隙間の影）", "第1話 会議室", S / "ep1_01_door_b.jpg", None),
-    ("第2話 玉虫色の地面", "第2話 資材置き場", S / "ep2_03_storage_iridescent.jpg", None),
-    ("第4話 遺留品（差分）", "第4話 ブルーシートの現場", S / "ep4_02_bluesheet_items.jpg", FX / "shared" / "71_blink_reopen.webp"),
+    # 以下の前景は tools/make_diff_fx.py
+    ("第1話 ドア（影がうごめく）", "第1話 会議室", S / "ep1_01_door_a.jpg", FX / "ep1" / "15_gap_shadow_loop.webp"),
+    ("第2話 玉虫色の地面", "第2話 資材置き場", S / "ep2_03_storage_iridescent.jpg",
+     FX / "ep2" / "24_iridescent_ground_loop.webp" if (FX / "ep2" / "24_iridescent_ground_loop.webp").exists() else None),
+    ("第4話 遺留品（差分）", "第4話 ブルーシートの現場", S / "ep4_02_bluesheet_items.jpg",
+     FX / "ep4" / "45_blink_items.webp" if (FX / "ep4" / "45_blink_items.webp").exists() else FX / "shared" / "71_blink_reopen.webp"),
     ("第6話 全員の視線（1秒）", "第6話 ファミレス", S / "ep6_01_restaurant.jpg", FX / "ep6" / "63_gaze_flash.webp"),
 ]:
     if bg.exists() and (fg is None or fg.exists()):
