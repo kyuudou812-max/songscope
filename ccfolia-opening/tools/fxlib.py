@@ -301,3 +301,44 @@ def fall_blur(fg_rgba, dy, steps=12):
     a = acc[..., 3:]
     acc[..., :3] = np.where(a > 1e-4, acc[..., :3] / np.maximum(a, 1e-4), 0)
     return acc
+
+
+# ---------------------------------------------------------------- 合成の下ごしらえ（VFX の適用：make_set_pieces から使う）
+
+def plate_depth(path, onnx=None):
+    """背景の絵の奥行き（0=奥〜1=手前）。一度計算したら build/cache に置く。
+    モデルは $DEPTH_ONNX か build/models/da.onnx（Depth-Anything V2 small）。無ければ「下ほど手前」で代用"""
+    import hashlib
+    import os
+    path = Path(path)
+    cache = ROOT / "build" / "cache" / f"depth_{hashlib.sha256(path.read_bytes()).hexdigest()[:16]}.npy"
+    if cache.exists():
+        return np.load(cache)
+    img = Image.open(path).convert("RGB")
+    onnx = Path(onnx or os.environ.get("DEPTH_ONNX", ROOT / "build" / "models" / "da.onnx"))
+    if onnx.exists():
+        d = depth_map(img, onnx)
+        lo, hi = np.percentile(d, (1, 99))                           # 外れ値（カーテンの縁など）を切る
+        d = np.clip((d - lo) / (hi - lo + 1e-6), 0, 1).astype(np.float32)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        np.save(cache, d)
+        return d
+    return np.repeat(np.linspace(0, 1, img.height, dtype=np.float32)[:, None], img.width, 1)
+
+
+def grain_tex(h, w, seed=0, sigma=0.7):
+    """背景の AI 絵の細かい質感に合わせる粒子（平均 0・標準偏差 1）。前景に焼き込むと背景と同じ紙に見える"""
+    from scipy.ndimage import gaussian_filter
+    g = gaussian_filter(np.random.default_rng(seed).normal(0, 1, (h, w)), sigma)
+    return (g / (g.std() + 1e-6)).astype(np.float32)
+
+
+def quad_warp(src, quad, size):
+    """src（PIL）を、出力 size の中の四角形 quad（左上・右上・右下・左下）に貼る（コーナーピン）。外は透明"""
+    w, h = src.size
+    A, B = [], []
+    for (x, y), (u, v) in zip(quad, [(0, 0), (w, 0), (w, h), (0, h)]):
+        A += [[x, y, 1, 0, 0, 0, -u * x, -u * y], [0, 0, 0, x, y, 1, -v * x, -v * y]]
+        B += [u, v]
+    coef = np.linalg.solve(np.array(A, float), np.array(B, float))
+    return src.convert("RGBA").transform(size, Image.PERSPECTIVE, tuple(coef), Image.BICUBIC)

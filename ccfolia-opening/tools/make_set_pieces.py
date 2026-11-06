@@ -129,18 +129,28 @@ def preview(bg, frames, audio, name, fps=FPS, tail=1.0):
 
 # ================================================================ 共通：まぶた
 def lids(open_, w=640, h=360, feather=0.3):
-    """まぶたの形（横長の楕円の外側が黒）。open_=0 で閉じ、1.3 で画面の外まで開く"""
+    """まぶたの形。open_=0 で閉じ、1.3 で画面の外まで開く。
+    上まぶたは下より大きく動き、縁はまつ毛でわずかに波打って均一でない。上の縁のすぐ内側に、まつ毛の薄い影の帯。
+    開ききる前は、目が明るさに慣れていないので、内側にうっすら暖色の白いもや（露出の順応）"""
     if open_ <= 0.01:
         return Image.new("RGBA", (w, h), BLACK + (255,))
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    u = xx / w
+    wob = 0.025 * np.sin(u * 23.0 + 1.3) + 0.018 * np.sin(u * 51.0 + 0.4) + 0.012 * np.sin(u * 97.0)   # まつ毛の不揃い
+    cy = h * (0.50 - 0.04 * min(open_, 1))                          # 開くにつれて、すき間の中心が少し上へ
     a = w * (0.55 + 0.6 * open_)
-    b = max(h * 0.62 * open_, 0.5)
-    r = np.sqrt(((xx - w / 2) / a) ** 2 + ((yy - h * 0.48) / b) ** 2)
+    b_up = max(h * 0.70 * open_, 0.5)                              # 上まぶた（よく動く）
+    b_dn = max(h * 0.48 * open_, 0.5)                              # 下まぶた（あまり動かない）
+    b = np.where(yy < cy, b_up, b_dn)
+    r = np.sqrt(((xx - w / 2) / a) ** 2 + ((yy - cy) / b) ** 2) * (1 + wob * (yy < cy))
     alpha = smoothstep(1 - feather, 1 + feather, r)
-    im = np.zeros((h, w, 4), np.uint8)
-    im[..., :3] = BLACK
-    im[..., 3] = (alpha * 255).astype(np.uint8)
-    return Image.fromarray(im, "RGBA")
+    lash = np.exp(-((r - (1 - feather * 0.9)) / 0.07) ** 2) * (yy < cy) * 0.22 * float(np.clip(1.25 - open_, 0, 1))
+    alpha = np.clip(np.maximum(alpha, lash), 0, 1)
+    veil = 0.10 * np.clip(1 - open_ / 0.9, 0, 1) * (1 - alpha)         # 慣れていない明るさ
+    im = np.zeros((h, w, 4), np.float32)
+    im[..., :3] = (np.array(BLACK, np.float32) * alpha[..., None] + np.array([235, 215, 190], np.float32) * veil[..., None]) / np.maximum(alpha + veil, 1e-4)[..., None]
+    im[..., 3] = np.clip(alpha + veil, 0, 1) * 255
+    return Image.fromarray(im.astype(np.uint8), "RGBA")
 
 
 def blink_open():
@@ -700,17 +710,29 @@ def sheet_texture():
     return im.crop((285, 40, 755, 330)).resize((1280, 720), Image.LANCZOS)
 
 
+def seamless(img, feather=0.22):
+    """上下左右につないでも継ぎ目が出ない布にする：半分ずらした自分自身を、縁の近くでだけ溶かし込む。
+    （裏返してつなぐと、つなぎ目が鏡の線として縦・横の帯に見えていた）"""
+    a = np.asarray(img, np.float32)
+    H, W = a.shape[:2]
+    rolled = np.roll(np.roll(a, H // 2, 0), W // 2, 1)
+    wx = np.minimum(np.arange(W), W - 1 - np.arange(W)) / (W * feather)
+    wy = np.minimum(np.arange(H), H - 1 - np.arange(H)) / (H * feather)
+    w = np.clip(np.minimum(wx[None, :], wy[:, None]), 0, 1)
+    w = (w * w * (3 - 2 * w))[..., None]
+    # 半分ずらした方の縁は真ん中に来るので、そこは元の絵が勝つ。縁だけずらした方（＝元の真ん中の布）になる
+    return Image.fromarray(np.clip(a * w + rolled * (1 - w), 0, 255).astype(np.uint8))
+
+
 def sheet_loop(period=1.4, size=(1280, 720)):
     """シートを左右にかき分けると、すぐ奥にまた同じシートがある。1周ごとに、奥のシートが手前のシートの位置まで来るのでつながる"""
     W, H = size
-    tex = sheet_texture().resize(size, Image.LANCZOS)
+    tex = seamless(sheet_texture().resize(size, Image.LANCZOS))
     n = int(round(period * FPS))
     big = Image.new("RGB", (W * 3, H * 3))
     for i in range(3):
         for j in range(3):
-            tile = tex.transpose(Image.FLIP_LEFT_RIGHT) if i % 2 != 1 else tex
-            tile = tile.transpose(Image.FLIP_TOP_BOTTOM) if j % 2 != 1 else tile
-            big.paste(tile, (i * W, j * H))
+            big.paste(tex, (i * W, j * H))
     frames = []
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     for i in range(n):
@@ -738,11 +760,15 @@ def sheet_loop(period=1.4, size=(1280, 720)):
         sx_r = np.clip(xx - gap / 2, 0, W - 1).astype(int)
         yi = yy.astype(int)
         mask_l, mask_r = left[..., None], right[..., None]
+        if k > 0.02:                                             # 押しのけられる布には横のモーションブラー（速いほど長く）
+            from scipy.ndimage import uniform_filter1d
+            front = uniform_filter1d(front, max(1, int(40 * k ** 0.7)), axis=1, mode="nearest")
         moved = np.where(mask_l, front[yi, sx_l], np.where(mask_r, front[yi, sx_r], 0))
         c = np.where(mask_l | mask_r, moved * shade * (1 - 0.25 * k), c)
         # 走っている揺れ
         dy = int(6 * np.sin(2 * np.pi * p * 2))
-        img = Image.fromarray(np.clip(c, 0, 255).astype(np.uint8)).transform(size, Image.AFFINE, (1, 0, 0, 0, 1, dy))
+        img = Image.fromarray(np.clip(c, 0, 255).astype(np.uint8)).transform(   # 少し寄せてから揺らす（上下に黒い帯を出さない）
+            size, Image.AFFINE, (0.98, 0, W * 0.01, 0, 0.98, H * 0.01 + dy * 0.98), Image.BILINEAR)
         frames.append(img.convert("RGBA"))
     save_webp_anim(frames, OUT / "ep4" / "41_endless_sheet_loop.webp", lossless=False, quality=72, loop=0)
     return frames
@@ -804,27 +830,59 @@ def ep4():
 # 立ち去ろうとすると、視界の端に人が増えていく（L1093〜）。目の端に見えるものがいちばん気味が悪い（周辺視野）。
 # 画面の端（フィールドの外、チャット欄のそば）にスクリーンパネルで置き、離れようとするたびに KP が1枚ずつ表示する
 def edge_figures(count=6):
-    """人影の立ち絵を強くぼかし、黒い人の形だけにする（顔も服もわからない。誰か特定の人物に見せない）"""
+    """人影の立ち絵を強くぼかし、黒い人の形だけにする（顔も服もわからない。誰か特定の人物に見せない）。
+    6枚とも同じ形にならないよう、元の立ち絵（4人）・大きさ（遠近）・傾き・半身だけ覗く、を変える。
+    縁はむらのあるぼけで暗がりに溶かし、足もとに接地の影、上からの弱い光で頭と肩だけわずかに浮かせ、背景と同じ粒子を焼き込む"""
     from PIL import ImageFilter
-    src = Image.open(ROOT / "build" / "ccfolia" / "npc" / "npc_figure.webp").convert("RGBA")
+    from scipy.ndimage import gaussian_filter
+    from fxlib import grain_tex
+    npc = ROOT / "build" / "ccfolia" / "npc"
+    srcs = [Image.open(npc / f"npc_{n}.webp").getchannel("A") for n in ("figure", "neighbor", "woman", "lecturer")]
+    # (元, 高さの割合＝遠近, 傾き, 左右反転, 見える幅の割合（半身だけ覗く）)
+    plan = [(0, 0.95, 0.00, False, 1.0), (1, 0.78, -0.05, True, 1.0), (2, 0.88, 0.04, False, 0.55),
+            (3, 0.66, 0.02, True, 1.0), (0, 1.00, -0.03, True, 0.6), (1, 0.58, 0.06, False, 1.0)]
     rg = np.random.default_rng(31)
+    CW, CH = 200, 600                                               # パネルは 8×24 マス（1:3）
     out = []
     for k in range(count):
-        a = src.getchannel("A")
-        sx = rg.uniform(0.8, 1.15)                                # 体格を変える
-        a = a.resize((int(a.width * sx), a.height), Image.LANCZOS)
-        if k % 2:
+        si, hk, shear, flip, vis = plan[k % len(plan)]
+        a = srcs[si]
+        if flip:
             a = a.transpose(Image.FLIP_LEFT_RIGHT)
-        a = a.filter(ImageFilter.GaussianBlur(rg.uniform(9, 16)))  # 目の端なので、輪郭は合わない
-        a = a.point(lambda v, o=rg.uniform(0.55, 0.8): int(min(255, v * 1.3) * o))
-        pad = 40
-        im = Image.new("RGBA", (a.width + pad * 2, a.height + pad * 2), (10, 8, 8, 0))
-        layer = Image.new("RGBA", a.size, (10, 8, 8, 255))
-        layer.putalpha(a)
-        im.alpha_composite(layer, (pad, pad))
-        im = im.resize((im.width * 600 // im.height, 600), Image.LANCZOS)
-        im.save(OUT / "ep3" / f"31_edge_figure_{k + 1}.webp", lossless=True)
-        out.append(im)
+        h = int((CH - 40) * hk)
+        a = a.resize((int(a.width * h / a.height), h), Image.LANCZOS)
+        a = a.transform(a.size, Image.AFFINE, (1, shear, -shear * a.height * 0.5, 0, 1, 0), Image.BICUBIC)   # わずかに傾いて立つ
+        canvas = Image.new("L", (CW, CH), 0)
+        x = (CW - a.width) // 2 + int(rg.normal(0, 8))
+        canvas.paste(a, (x, CH - 30 - h))
+        m = np.asarray(canvas, np.float32) / 255
+        if vis < 1:                                                 # 画面の端（柱の陰）から半身だけ覗く
+            edge = CW * (1 - vis) if flip else CW * vis
+            xx = np.arange(CW)[None, :]
+            m = m * (smoothstep(edge - 12, edge + 12, xx) if flip else 1 - smoothstep(edge - 12, edge + 12, xx))
+        nz = gaussian_filter(rg.random((CH, CW)), 7)
+        nz = (nz - nz.min()) / (np.ptp(nz) + 1e-6)
+        blur = 6 + 8 * (1 - hk)                                     # 遠いほどぼける（目の端なので、どれも輪郭は合わない）
+        m = gaussian_filter(m, blur) * (0.75 + 0.5 * nz)
+        m = np.clip(m * 1.4, 0, 1) * rg.uniform(0.62, 0.82) * (0.7 + 0.3 * hk)
+        # 接地の影：足もとの横長のにじみ
+        ys = np.where(m.max(1) > 0.1)[0]
+        foot = ys.max() if len(ys) else CH - 30
+        ao = np.zeros((CH, CW), np.float32)
+        cols = np.where(m[max(0, foot - 20):foot].max(0) > 0.1)[0]
+        if len(cols):
+            ao[foot - 3:foot + 3, max(0, cols.min() - 14):cols.max() + 14] = 1
+            ao = gaussian_filter(ao, (4, 10))
+            ao = ao / (ao.max() + 1e-6) * 0.45 * hk
+        alpha = np.clip(np.maximum(m, ao), 0, 1)
+        # 色：ほとんど黒。上からの弱い光で、頭と肩の上の縁だけ暗い赤茶に。粒子は背景の絵と同じくらい
+        top = np.clip(m - np.roll(m, 6, 0), 0, 1)
+        col = np.array([12, 9, 8], np.float32) + np.array([46, 32, 24], np.float32) * np.clip(top * 3, 0, 1)[..., None]
+        col = col * (1 + 0.15 * grain_tex(CH, CW, 310 + k)[..., None])
+        im = np.dstack([np.clip(col, 0, 255), alpha * 255]).astype(np.uint8)
+        img = Image.fromarray(im, "RGBA")
+        img.save(OUT / "ep3" / f"31_edge_figure_{k + 1}.webp", quality=88)
+        out.append(img)
     return out
 
 
@@ -966,12 +1024,57 @@ def ep5():
 # ================================================================ 第七話
 def oiwai_flood():
     """「お祝いですよ」が四方から重なり、画面を埋め尽くす（DEX 失敗、L2580〜）。最後のコマで止まる。
+    文字は HUD のように上に貼らず、合流地点の絵の「中」に置く：
+      - 奥行き（Depth-Anything）で、奥の文字ほど小さく・ぼけ・霞み、手前の群衆の頭に隠れる
+      - 文字の明るさは、その場所の絵の明るさで決まる（暗い水面では沈み、灯りの近くで浮く）。水面には揺れる映り込み
+      - 重なるほど、白く飛ばずに墨のように濁って沈む（終わりは白飛びではなく、暗く埋まる）
     1コマで増える文字は、画面の1か所のまわりにまとめる（毎コマ画面全体が変わると、1回再生の素材が 20MB を超えるため）"""
+    from scipy.ndimage import gaussian_filter
+    from PIL import ImageFilter
+    from fxlib import grain_tex, plate_depth
     W, H = 1280, 720
+    plate_path = SCENES / "ep7_04_junction.jpg"
+    plate = np.asarray(Image.open(plate_path).convert("RGB").resize((W, H)), np.float32) / 255
+    D = plate_depth(plate_path)
+    D = np.asarray(Image.fromarray(D).resize((W, H)), np.float32)
+    light = gaussian_filter(plate.mean(-1), 18)
+    light = light / (np.percentile(light, 99) + 1e-6)
+    gr = grain_tex(H, W, 711)
     phrase = "「" + TXT["ep7_oiwai"] + "」"
     rg = np.random.default_rng(71)
-    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
+    buf_c = np.zeros((H, W, 3), np.float32)                      # 文字の層（プリマルチ）
+    buf_a = np.zeros((H, W), np.float32)
+    ink = np.array(TEXT, np.float32) / 255
+
+    def stamp(x, y, z, alpha):
+        size = int(13 + 46 * z ** 1.3)
+        f = font(size)
+        tw = int(f.getlength(phrase)) + 8
+        im = Image.new("L", (tw, size + 10), 0)
+        ImageDraw.Draw(im).text((4, 2), phrase, font=f, fill=255)
+        blur = 2.2 * (1 - z) ** 2 + 0.3                           # 被写界深度：奥ほどぼける
+        m = np.asarray(im.filter(ImageFilter.GaussianBlur(blur)), np.float32) / 255
+        refl = None
+        if z < 0.75:                                              # 水面への映り込み：上下に裏返し、横に揺らし、薄く
+            r = m[::-1]
+            r = np.stack([np.roll(row, int(2.5 * np.sin(j * 0.9 + x))) for j, row in enumerate(r)])
+            refl = gaussian_filter(r, (2.0, 0.8)) * 0.22
+        for mm, yy0 in ((m, y),) + (((refl, y + m.shape[0] + 2),) if refl is not None else ()):
+            x0, y0 = int(x), int(yy0)
+            xs, ys = slice(max(0, x0), min(W, x0 + mm.shape[1])), slice(max(0, y0), min(H, y0 + mm.shape[0]))
+            if xs.start >= xs.stop or ys.start >= ys.stop:
+                continue
+            mk = mm[ys.start - y0:ys.stop - y0, xs.start - x0:xs.stop - x0]
+            occ = np.clip((z + 0.1 - D[ys, xs]) / 0.08, 0, 1)    # 手前の群衆・柱に隠れる
+            a = mk * occ * alpha
+            lit = np.clip(0.35 + 0.9 * light[ys, xs], 0.3, 1.1)[..., None]
+            haze = (1 - z) * 0.45                                 # 空気遠近：奥ほど絵の色に寄る
+            col = ink * lit * (1 - haze) + plate[ys, xs] * 1.3 * haze
+            col = col * (1 - 0.45 * buf_a[ys, xs][..., None])     # 重なるほど濁って沈む（白飛びさせない）
+            col = col * (1 + 0.08 * gr[ys, xs][..., None])
+            buf_c[ys, xs] = col * a[..., None] + buf_c[ys, xs] * (1 - a[..., None])
+            buf_a[ys, xs] = a + buf_a[ys, xs] * (1 - a)
+
     frames, placed, acc, t = [], 0, 0.0, 0
     total = 420
     while placed < total:
@@ -980,15 +1083,16 @@ def oiwai_flood():
         cx, cy = rg.uniform(0, W - 200), rg.uniform(0, H - 40)
         spread = 60 + 160 * min(1, placed / total)
         while acc >= 1 and placed < total:
-            size = int(rg.uniform(18, 36))
-            f = font(size)
-            x = np.clip(cx + rg.normal(0, spread), -60, W - 120)
-            y = np.clip(cy + rg.normal(0, spread * 0.5), -10, H - 30)
-            d.text((x, y), phrase, font=f, fill=TEXT + (int(rg.uniform(120, 255)),))
+            x = float(np.clip(cx + rg.normal(0, spread), -60, W - 120))
+            y = float(np.clip(cy + rg.normal(0, spread * 0.5), -10, H - 30))
+            z = float(np.clip(D[int(np.clip(y + 15, 0, H - 1)), int(np.clip(x + 60, 0, W - 1))] + rg.uniform(0.02, 0.25), 0, 1))
+            stamp(x, y, z, rg.uniform(0.5, 0.95))
             placed += 1
             acc -= 1
-        dim = Image.new("RGBA", (W, H), BLACK + (int(140 * min(1, (t // 6 + 1) / 5)),))   # 背景を5段で沈める
-        frame = Image.alpha_composite(dim, halo(layer, 5, 6, 1.2))
+        dim = 0.80 * min(1, (t // 6 + 1) / 5)                      # 背景を5段で沈める（黒ではなく、絵の暗部の色へ）
+        a = buf_a + dim * (1 - buf_a)
+        c = (buf_c + np.array(BLACK, np.float32) / 255 * dim * (1 - buf_a)[..., None]) / np.maximum(a, 1e-4)[..., None]
+        frame = Image.fromarray(np.dstack([np.clip(c, 0, 1) * 255, a * 255]).astype(np.uint8), "RGBA")
         frames += [frame, frame]                                 # 1秒に15回だけ変える（同じコマが続くと容量をほとんど食わない）
         t += 2
     frames += [frames[-1]] * int(0.5 * FPS)
@@ -1051,6 +1155,63 @@ def doorway_mask(img):
     return lab == (np.argmax(sizes) + 1)
 
 
+def woman_ground(bg, m, shape, strength=1.0):
+    """暗闇の女を床に「立たせる」：足もとの接地の影（AO）と、つやのある床に映る戸口の光の筋を、女の形が遮る。
+    戻り値は床の上に重ねる黒の不透明度（H×W, 0..1）。女の形がほどければ、影と映り込みも一緒に薄れる"""
+    from scipy.ndimage import gaussian_filter
+    H, W = shape.shape
+    ys, xs = np.where(m)
+    y1 = ys.max()
+    cols = np.where(shape.max(0) > 0.3)[0]
+    if len(cols) == 0:
+        return np.zeros((H, W), np.float32)
+    floor = np.asarray(bg.convert("L"), np.float32) / 255
+    # 映り込み：女の形を戸口の下端で上下に裏返し、縦に縮めてにじませる（床の光沢の分だけ）
+    refl = np.zeros_like(shape)
+    n = min(H - y1 - 1, y1)
+    src = shape[y1 - n:y1][::-1]
+    idx = (np.arange(n) * 1.6).astype(int)
+    keep = idx < n
+    refl[y1 + 1:y1 + 1 + keep.sum()] = src[idx[keep]]
+    refl = gaussian_filter(refl, (5, 2)) * np.exp(-np.maximum(np.arange(H) - y1, 0) / 60)[:, None]
+    lit = np.clip((floor - 0.05) * 8, 0, 1)                         # 床が光っているところほど、遮ったのがわかる
+    # 接地の影：足もとの小さな楕円
+    ao = np.zeros_like(shape)
+    cx = (cols.min() + cols.max()) / 2
+    ao[y1 - 2:y1 + 5, int(cx - (cols.max() - cols.min()) * 0.7):int(cx + (cols.max() - cols.min()) * 0.7)] = 1
+    ao = gaussian_filter(ao, (3, 7))
+    ao = ao / (ao.max() + 1e-6)
+    cover = shape.sum() / max((shape > 0.5).sum(), 1)                # ほどけた分だけ薄く
+    out = np.clip(refl * lit * 0.9 + ao * 0.55 * min(1, cover), 0, 1) * (1 - m) * strength
+    return out.astype(np.float32)
+
+
+def soft_matte(shape, seed=0):
+    """切り抜きの硬い縁を、闇に溶ける縁に（ハーフマット）：縁だけ、むらのある幅でにじませる"""
+    from scipy.ndimage import gaussian_filter
+    H, W = shape.shape
+    nz = gaussian_filter(np.random.default_rng(seed).random((H, W)), 2.5)
+    nz = (nz - nz.min()) / (np.ptp(nz) + 1e-6)
+    soft = gaussian_filter(shape, 1.8)
+    return np.clip(np.maximum(shape * 0.0, soft) * (0.7 + 0.6 * nz), 0, 1) * np.clip(soft * 3, 0, 1)
+
+
+def grain_title(title, seed=0):
+    """題字にも背景と同じ粒子と、ごく軽いハレーション（明るい字の周りに赤茶のにじみ）を乗せる"""
+    from PIL import ImageFilter
+    from fxlib import grain_tex
+    a = np.asarray(title, np.float32)
+    g = grain_tex(a.shape[0], a.shape[1], seed)
+    a[..., :3] = np.clip(a[..., :3] * (1 + 0.07 * g[..., None]), 0, 255)
+    glow = np.asarray(title.getchannel("A").filter(ImageFilter.GaussianBlur(6)), np.float32) / 255
+    hal = np.zeros_like(a)
+    hal[..., :3] = (150, 70, 45)
+    hal[..., 3] = glow * 70
+    base = Image.fromarray(hal.astype(np.uint8), "RGBA")
+    base.alpha_composite(Image.fromarray(a.astype(np.uint8), "RGBA"))
+    return base
+
+
 def woman_in_darkness():
     """戸口の暗闇が、ゆっくりわずかに明るい「濁った暗がり」に変わっていき、女の形のところだけが真っ黒のまま残る。
     最後に OP のタイトルが、同じ書体・同じ位置の決め方（戸口の真上）で浮かぶ。前景（1回再生）"""
@@ -1069,7 +1230,9 @@ def woman_in_darkness():
     w = int(w_src.width * h / w_src.height)
     shape = Image.new("L", bg.size, 0)
     shape.paste(w_src.resize((w, h), Image.LANCZOS), (int((x0 + x1) / 2 - w / 2), int(y1 - h - 1)))
-    shape = np.asarray(shape.filter(ImageFilter.GaussianBlur(0.8)), np.float32) / 255 * m
+    shape = soft_matte(np.asarray(shape, np.float32) / 255, 91) * m
+    ground = woman_ground(bg, m, shape)
+    from fxlib import grain_tex
     # 濁った暗がり：ほんの少しだけ明るい赤茶。縦に流れるむらがあり、ゆっくり揺れる
     H, W = m.shape
     rg = np.random.default_rng(91)
@@ -1077,19 +1240,20 @@ def woman_in_darkness():
                         np.float32) / 255
     title = Image.open(ROOT / "build" / "ep9_title_still" / "f0000.png").convert("RGBA")
     tb = title.getbbox()
-    title = title.crop(tb)
+    title = grain_title(title.crop(tb), 913)
     tx = int((x0 + x1) / 2 - (tb[2] - tb[0]) / 2) - (tb[0] - int((x0 + x1) / 2 - (tb[2] - tb[0]) / 2)) * 0  # 戸口の真上にそろえる
     frames = []
     T = 9.0
     for i in range(int(T * FPS)):
-        tt = i / FPS
+        tt = (i - i % 2) / FPS                                    # 1秒に15回だけ変える（容量を5MB以内に）
         k = smoothstep(1.0, 5.5, tt)                              # 暗がりが浮かび上がる
         lum = (30 + 16 * streak + 5 * np.sin(2 * np.pi * (tt / 3.0) + streak * 6)) * k
         rgb = np.clip(lum[..., None] * lut()[np.clip(lum, 0, 255).astype(int)], 0, 255)
-        alpha = (m * (1 - shape) * k * 255).astype(np.uint8)
+        alpha = m * (1 - shape) * k
+        fl = ground * (np.round(k * 6) / 6)                                        # 床：女が戸口の光の映り込みを遮り、足もとが沈む
         im = np.zeros((H, W, 4), np.uint8)
         im[..., :3] = (rgb * m[..., None]).astype(np.uint8)       # 透明なところの色は 0 に（毎コマ変わる色が残ると 30MB になる）
-        im[..., 3] = alpha
+        im[..., 3] = (np.maximum(alpha, fl) * 255).astype(np.uint8)
         frame = Image.fromarray(im, "RGBA")
         ta = smoothstep(6.0, 7.5, tt)
         if ta > 0:
@@ -1109,31 +1273,96 @@ FILM = (ROOT / "assets" / "ep9_film_1.png", ROOT / "assets" / "ep9_film_2.png") 
 
 
 def film_frame(src, i, rg, size=(960, 720)):
-    """1コマ分の古いフィルム：上下左右の揺れ・明るさのちらつき・縦の傷・塵・粒子・周辺の暗さ"""
+    """1コマ分の古いフィルム（960×720 の RGB と、そのコマの明るさ）：揺れ・ちらつき・縦の傷・塵・粒子・周辺の暗さ"""
     from PIL import ImageFilter
     W, H = size
     dx, dy = rg.normal(0, 1.2), rg.normal(0, 2.0)                   # フィルムの送りの揺れ
     im = src.transform(size, Image.AFFINE, (1, 0, dx, 0, 1, dy), Image.BILINEAR)
     lum = np.asarray(im.convert("L"), np.float32)
-    lum = lum * (0.92 + 0.1 * rg.random())                         # 明るさのちらつき
+    gain = 0.92 + 0.1 * rg.random()
+    lum = lum * gain                                               # 明るさのちらつき
     lum += rg.normal(0, 9, (H, W))                                 # 粒子
     for _ in range(rg.integers(0, 3)):                             # 縦の傷（明るい細い線）
         x = rg.integers(0, W)
-        lum[:, x:x + 1] += rg.uniform(30, 70)
+        lum[:, x:x + 2] += rg.uniform(30, 70)
     for _ in range(rg.integers(2, 7)):                             # 塵（黒い点やけば）
-        x, y, r = rg.integers(0, W), rg.integers(0, H), rg.integers(1, 4)
+        x, y, r = rg.integers(0, W), rg.integers(0, H), rg.integers(2, 6)
         lum[max(0, y - r):y + r, max(0, x - r):x + r] *= 0.2
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     lum *= np.clip(1 - 0.7 * (((xx - W / 2) / W) ** 2 + ((yy - H / 2) / H) ** 2) * 2.2, 0.2, 1)
     lum = np.clip(lum * 0.85, 0, 255)
     rgb = np.clip(lum[..., None] * lut()[lum.astype(int)], 0, 255).astype(np.uint8)
-    out = Image.new("RGBA", (1280, 720), BLACK + (255,))           # 4:3 の古い映画。左右は黒
-    out.paste(Image.fromarray(rgb).filter(ImageFilter.GaussianBlur(0.6)), ((1280 - W) // 2, 0))
-    return out
+    return Image.fromarray(rgb).filter(ImageFilter.GaussianBlur(0.6)), gain
+
+
+# ホールの絵（ep9_02_hall.jpg）のスクリーン：左上・右上・右下・左下。4:3 のフィルムは真ん中に映り、左右は暗いまま
+HALL_SCREEN = [(476, 39), (804, 39), (803, 188), (477, 188)]
+
+
+class Projection:
+    """フィルムのコマを、ホールのスクリーンに映写したように前景へ置く。
+    スクリーン（台形にコーナーピン）・映写光の円錐（塵の筋）・客席の頭に返る光を、フィルムの明るさに合わせて揺らす"""
+
+    def __init__(self):
+        from PIL import ImageFilter
+        from fxlib import grain_tex
+        hall = Image.open(SCENES / "ep9_02_hall.jpg").convert("RGB").resize((1280, 720))
+        self.plate = np.asarray(hall, np.float32) / 255
+        lum = self.plate.mean(-1)
+        (ax, ay), (bx, _), (cx, cy), _ = HALL_SCREEN
+        scr = Image.new("L", (1280, 720), 0)
+        ImageDraw.Draw(scr).polygon(HALL_SCREEN, fill=255)
+        self.screen = np.asarray(scr.filter(ImageFilter.GaussianBlur(1.2)), np.float32) / 255
+        gw = (cy - ay) * 4 / 3                                       # 4:3 のゲートの幅
+        mx = (ax + bx) / 2
+        self.gate = [(mx - gw / 2, ay + 1), (mx + gw / 2, ay + 1), (mx + gw / 2, cy - 1), (mx - gw / 2, cy - 1)]
+        # 映写光：客席の後ろ上（画面の外）から、スクリーンのゲートへすぼまる光の筋。奥（スクリーン）に近いほど細く明るい
+        yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
+        vx, vy = mx, -900.0                                          # 光の出どころ（画面の上の外、カメラの後ろ）を見かけ上ここに置く
+        ang = np.arctan2(xx - vx, yy - vy)
+        a0, a1 = np.arctan2(self.gate[0][0] - 60 - vx, cy - vy), np.arctan2(self.gate[1][0] + 60 - vx, cy - vy)
+        inside = smoothstep(0, 0.02, ang - a0) * smoothstep(0, 0.02, a1 - ang) * (yy < cy)
+        rays = np.interp(ang, np.linspace(a0, a1, 64), gaussian_noise_1d(64, 93)) ** 1.5 * 0.8 + 0.2
+        self.beam = (inside * rays * (0.25 + 0.75 * (yy / cy) ** 2)).astype(np.float32)
+        # 客席の頭の上の縁（明るい→暗いの境）に、スクリーンの光が返る。スクリーンから遠いほど弱い
+        dist = np.hypot(xx - mx, (yy - cy) * 1.4)
+        top_edge = np.clip(np.roll(lum, 2, 0) - lum, 0, 1) * 0 + np.clip(lum - np.roll(lum, 3, 0), 0, 1)
+        self.bounce = (np.clip(top_edge * 6, 0, 1) * (yy > 230) * np.exp(-dist / 520)).astype(np.float32)
+        self.spill = ((yy > 205) * np.exp(-dist / 380) * 0.5).astype(np.float32)
+        self.grain = grain_tex(720, 1280, 931)
+        self.warm = np.array([1.0, 0.86, 0.68], np.float32)
+
+    def frame(self, film, gain, on=1.0):
+        from fxlib import quad_warp
+        rgba = np.asarray(quad_warp(film, self.gate, (1280, 720)), np.float32) / 255
+        fa = rgba[..., 3:] * on
+        scr_dark = self.plate * 0.22                                 # ゲートの外のスクリーンは光が来ない
+        col = scr_dark * (1 - fa) + np.clip(rgba[..., :3] * 1.45 + 0.03, 0, 1) * fa   # 映写された画はスクリーンの地より明るい
+        a = self.screen.copy()
+        b = on                                                       # 円錐と返りの光は揺らさない（揺らすと毎コマ全面が変わり 20MB を超える）
+        light = self.warm * b
+        # 光の円錐（塵の中の光）と、客席の頭・床に返る光：前景の色を明るい暖色にし、不透明度で量を決める
+        haze = self.beam * 0.30 * b
+        hb = np.clip(self.bounce * 0.55 + self.spill * 0.12, 0, 1) * b
+        rim = np.clip(self.plate * 1.9 + 0.08, 0, 1) * light
+        col = np.where(a[..., None] > 0.01, col, rim * hb[..., None] / (hb[..., None] + haze[..., None] + 1e-6)
+                       + (0.95 * light) * haze[..., None] / (hb[..., None] + haze[..., None] + 1e-6))
+        alpha = np.maximum(a, np.clip(haze + hb, 0, 0.6) * (1 - a))
+        col = col * (1 + 0.05 * self.grain[..., None])
+        out = np.dstack([np.clip(col, 0, 1) * 255, alpha * 255]).astype(np.uint8)
+        out[..., :3] = np.where(out[..., 3:] == 0, 0, out[..., :3])
+        return Image.fromarray(out, "RGBA")
+
+
+def gaussian_noise_1d(n, seed):
+    from scipy.ndimage import gaussian_filter1d
+    v = gaussian_filter1d(np.random.default_rng(seed).random(n * 2), 1.2, mode="wrap")[:n]
+    return (v - v.min()) / (np.ptp(v) + 1e-6)
 
 
 def old_film():
-    """上映中（ループ）と、途切れる（1回再生：1枚目 → 振り返りはじめの2枚目に変わって 5 コマで真っ黒）の2つ"""
+    """上映中（ループ）と、途切れる（1回再生：1枚目 → 振り返りはじめの2枚目に変わって 5 コマで暗転）の2つ。
+    全面にかぶせず、ホールのスクリーンに映写された画として置く（背景のホールはそのまま見える）"""
     draft = not FILM[0].exists()
     if draft:                                                       # 絵が届くまでは、第五話の玄関で試す
         a = b = Image.open(SCENES / "ep5_02_entrance.jpg").convert("RGB")
@@ -1143,11 +1372,20 @@ def old_film():
         ((int(im.width * 720 / im.height) - 960) // 2, 0, (int(im.width * 720 / im.height) - 960) // 2 + 960, 720))
     a, b = fit_(a), fit_(b)
     rg = np.random.default_rng(93)
-    loop = [film_frame(a, i, rg) for i in range(int(2.0 * FPS))]   # 2秒のループ（ばらつきなので、つなぎ目は見えない）
+    pj = Projection()
+    loop = [pj.frame(*film_frame(a, i, rg)) for i in range(int(2.0 * FPS))]   # 2秒のループ（ばらつきなので、つなぎ目は見えない）
     sfx = "_draft" if draft else ""
     save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", lossless=False, quality=78, loop=0)
-    cut = [film_frame(a, i, rg) for i in range(int(1.0 * FPS))] + [film_frame(b, i, rg) for i in range(5)]
-    cut.append(Image.new("RGBA", (1280, 720), BLACK + (255,)))
+    cut = [pj.frame(*film_frame(a, i, rg)) for i in range(int(1.0 * FPS))] + [pj.frame(*film_frame(b, i, rg)) for i in range(5)]
+    # 途切れる：フィルムが外れて白く飛ぶのではなく、光がすっと消えてスクリーンもホールも暗く沈む（映写機が止まる）
+    blank = Image.new("RGB", (960, 720), (0, 0, 0))
+    for k in range(0, int(0.5 * FPS), 3):                          # 3コマずつ（全面が変わるコマは容量を食う）
+        cut += [pj.frame(blank, 0.0, (1 - k / (0.5 * FPS)) ** 2)] * 3
+    dark = np.asarray(pj.frame(blank, 0.0, 0.0), np.float32)
+    dark[..., 3] = np.maximum(dark[..., 3], 150)                    # ホールも沈む（真っ黒にはしない：客席の気配は残す）
+    dark[..., :3] = np.where(dark[..., 3:] > 0, dark[..., :3], 0)
+    dark[..., :3] = np.minimum(dark[..., :3], 12)
+    cut += [Image.fromarray(dark.astype(np.uint8), "RGBA")] * 2
     save_webp_anim(cut, OUT / "ep9" / f"93_film_cut{sfx}.webp", lossless=False, quality=78)
     return loop, cut
 
@@ -1189,7 +1427,7 @@ def ep9():
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "ep9" / "94_projector_loop.mp3"), "-t", "4",
                     "-i", str(OUT / "ep9" / "95_projector_stop_then_silence.mp3"), "-filter_complex",
                     "[0:a]atrim=0:4[a];[1:a]atrim=0:4[b];[a][b]concat=n=2:v=0:a=1", str(t2)], check=True)
-    preview(None, loop * 2 + cut, t2, "ep9_old_film", tail=2)
+    preview(SCENES / "ep9_02_hall.jpg", loop * 2 + cut, t2, "ep9_old_film", tail=2)
 
 
 
@@ -1564,26 +1802,57 @@ def blink_close():
 
 
 def lobby_flicker(L=10.0):
-    """最終話のロビー：入口の照明が「ちか、ちか」と明滅する（前景、ループ）。暗くなる回数は1秒に3回まで"""
+    """最終話のロビー：照明が「ちか、ちか」と明滅する（前景、ループ）。暗くなる回数は1秒に3回まで。
+    画面全体を一律に暗くせず、絵の中の灯り（シャンデリア・左右の燭台）ごとに別々に瞬かせる：
+    消えた灯りの周り（その灯りが照らしていた壁・床）ほど暗く沈み、点いている灯りには光のにじみ（ブルーム）が乗る"""
+    from scipy.ndimage import gaussian_filter
+    W, H = 640, 360
+    plate = np.asarray(Image.open(SCENES / "ep9_01_lobby.jpg").convert("RGB").resize((W, H), Image.LANCZOS), np.float32) / 255
+    lum = plate.mean(-1)
+    core = np.clip((lum - np.percentile(lum, 99.3)) * 12, 0, 1)    # 灯りの芯（いちばん明るい点々）
+    xx = np.arange(W)[None, :].repeat(H, 0) / W
+    groups = [np.clip(1 - xx * 3, 0, 1), np.clip(1 - np.abs(xx - 0.5) * 4, 0, 1), np.clip(xx * 3 - 2, 0, 1)]   # 左・中央・右
+    lit_maps, glow_maps = [], []
+    for g in groups:
+        c = core * g
+        lit = gaussian_filter(c, 40) + gaussian_filter(c, 12) * 0.5    # その灯りが照らしていた範囲
+        lit_maps.append(lit / (lit.max() + 1e-6))
+        gl = gaussian_filter(c, 6)
+        glow_maps.append(gl / (gl.max() + 1e-6))
     rg = np.random.default_rng(97)
     n = int(L * FPS)
-    dim = np.zeros(n)
-    f = int(rg.uniform(10, 30))
-    while f < n - 8:
-        length = int(rg.integers(2, 6))
-        depth = rg.uniform(0.35, 0.75)
-        dim[f:f + length] = depth
-        if rg.random() < 0.4:                                     # 点き直しに失敗して、もう一度
-            dim[f + length + 1:f + length + 3] = depth * 0.8
-        f += int(rg.uniform(0.6, 2.8) * FPS)                       # 次まで 0.6〜2.8 秒（1秒に3回を超えない）
-    cache = {}
-    frames = []
-    for v in dim:
-        key = round(v, 2)
+    dims = []
+    for gi in range(3):
+        dim = np.zeros(n)
+        f = int(rg.uniform(10, 30)) + gi * 7
+        while f < n - 8:
+            length = int(rg.integers(2, 6))
+            depth = rg.uniform(0.45, 0.9)
+            dim[f:f + length] = depth
+            if rg.random() < 0.4:                                     # 点き直しに失敗して、もう一度
+                dim[f + length + 1:f + length + 3] = depth * 0.8
+            f += int(rg.uniform(0.6, 2.8) * FPS) + (int(rg.uniform(0, 1.5) * FPS) if gi != 1 else 0)
+        dims.append(dim)
+    for k in range(n):                                               # シャンデリアが落ちると、左右も少し引きずられる（同じ回路）
+        dims[0][k] = max(dims[0][k], dims[1][k] * 0.4)
+        dims[2][k] = max(dims[2][k], dims[1][k] * 0.4)
+    warm = np.array([255, 196, 140], np.float32)
+    cache, frames = {}, []
+    for k in range(n):
+        key = tuple(round(d[k] * 10) / 10 for d in dims)
         if key not in cache:
-            cache[key] = Image.new("RGBA", (640, 360), BLACK + (int(255 * key),))
+            dark = np.zeros((H, W), np.float32)
+            glow = np.zeros((H, W), np.float32)
+            for dv, lit, gl in zip(key, lit_maps, glow_maps):
+                dark = 1 - (1 - dark) * (1 - dv * (0.25 + 0.7 * np.sqrt(lit)))   # 消えた灯りが照らしていた所ほど暗い
+                glow = np.maximum(glow, (1 - dv) * gl * 0.45)            # 点いている灯りのにじみ
+            dark = dark * (1 - glow)
+            a = dark + glow
+            col = (np.array(BLACK, np.float32) * dark[..., None] + warm * glow[..., None]) / np.maximum(a, 1e-4)[..., None]
+            im = np.dstack([np.clip(col, 0, 255), np.clip(a, 0, 1) * 255]).astype(np.uint8)
+            cache[key] = Image.fromarray(im, "RGBA")
         frames.append(cache[key])
-    save_webp_anim(frames, OUT / "ep9" / "98_lobby_flicker_loop.webp", loop=0)
+    save_webp_anim(frames, OUT / "ep9" / "98_lobby_flicker_loop.webp", lossless=False, quality=85, loop=0)
     return frames
 
 
@@ -1613,14 +1882,19 @@ def darkness_proof():
         w = int(w_src.width * h / w_src.height)
         s = Image.new("L", (W, H), 0)
         s.paste(w_src.resize((w, h), Image.LANCZOS), (int((x0 + x1) / 2 - w / 2), int(y1 - h - 1)))
-        return np.asarray(s.filter(ImageFilter.GaussianBlur(0.8)), np.float32) / 255
+        return np.asarray(s, np.float32) / 255
 
-    noise = np.asarray(Image.fromarray((np.random.default_rng(92).random((H // 2, W // 2)) * 255).astype(np.uint8)).resize(
+    noise = np.asarray(Image.fromarray((np.random.default_rng(92).random((H // 10, W // 3)) * 255).astype(np.uint8)).resize(
         (W, H), Image.BICUBIC), np.float32) / 255
     sfx = "_draft" if draft else ""
 
-    def save(shape, name):
-        a = (m * (1 - shape) * 255).astype(np.uint8)
+    from fxlib import grain_tex
+    rgb = np.clip(rgb * (1 + 0.12 * grain_tex(H, W, 912)[..., None]), 0, 255)
+
+    def save(shape, name, ground=1.0):
+        shape = soft_matte(shape, 91) * m
+        fl = woman_ground(bg, m, shape, ground)
+        a = (np.maximum(m * (1 - shape), fl) * 255).astype(np.uint8)
         im = np.zeros((H, W, 4), np.uint8)
         im[..., :3] = (rgb * m[..., None]).astype(np.uint8)
         im[..., 3] = a
@@ -1628,16 +1902,18 @@ def darkness_proof():
 
     full = shape_at(1.0)
     inside = distance_transform_edt(full > 0.5)                     # 輪郭からの距離（内側ほど大きい）
-    for k, depth in enumerate((0, 4, 10)):                           # ほどける深さ（px）
+    inside = inside / (inside.max() + 1e-6)
+    # 段階ごとに、残る量をはっきり変える：0＝全身、1＝輪郭から 1/3 ほど欠けて穴が開く、2＝芯の切れ端だけ、3＝何もない
+    for k, depth in enumerate((0, 0.45, 0.9)):
         if depth == 0:
             s = full
         else:
             # 輪郭の近くから、むらのある形で欠けていく（糸がほどけるように、縦に流れるむら）
             erode = (inside < depth * (0.4 + 1.2 * noise)) & (full > 0)
-            s = full * (1 - erode) * (0.85 if k == 2 else 1.0)
+            s = full * (1 - erode) * (0.8 if k == 2 else 1.0)
         save(s, str(k))
     save(np.zeros_like(full), "3")
-    save(shape_at(1.12), "reach")
+    save(shape_at(1.12), "reach", ground=1.35)                      # 近づく：大きく、足もとの影も濃く
     bg.save(OUT / "ep9" / f"90_full_door_bg{sfx}.jpg", quality=88)
 
 
@@ -1658,13 +1934,39 @@ def queue_panel():
         if rg.random() < 0.5:
             a = a.transpose(Image.FLIP_LEFT_RIGHT)
         a = a.filter(ImageFilter.GaussianBlur(4 + 6 * k))
-        a = a.point(lambda v, o=0.7 - 0.35 * k: int(min(255, v * 1.3) * o))
-        layer = Image.new("RGBA", a.size, (12, 9, 9, 255))
-        layer.putalpha(a)
+        a = a.point(lambda v, o=0.78 - 0.3 * k: int(min(255, v * 1.3) * o))
+        # 空気遠近：奥ほど雨の夜の霞の色（暗い赤茶の灰）に寄る。手前は黒に近く、上の縁だけ街灯でわずかに光る
+        haze = np.array([12, 9, 9], np.float32) * (1 - k) + np.array([78, 62, 54], np.float32) * k
+        am = np.asarray(a, np.float32) / 255
+        rim = np.clip(am - np.roll(am, 5, 0), 0, 1)[..., None] * np.array([60, 44, 34], np.float32) * (1 - k)
+        col = np.clip(haze + rim, 0, 255)
+        layer = Image.fromarray(np.dstack([np.broadcast_to(col, am.shape + (3,)), am * 255]).astype(np.uint8), "RGBA")
         x = int(W * (0.92 - 0.82 * k) - a.width / 2 + rg.normal(0, 12))
         y = int(H - h - k * H * 0.28)
-        img.alpha_composite(layer, (x, y)) if x + a.width > 0 else None
-    img.save(OUT / "ep7" / "73_queue_panel.webp", lossless=True)
+        if x + a.width > 0:
+            # 濡れた路面への映り込み：上下に裏返し、縦ににじませ、薄く
+            rf = layer.transpose(Image.FLIP_TOP_BOTTOM).resize((a.width, max(1, int(h * 0.35))), Image.LANCZOS)
+            rf = rf.filter(ImageFilter.GaussianBlur(3 + 4 * k))
+            rf.putalpha(rf.getchannel("A").point(lambda v: int(v * 0.28)))
+            img.alpha_composite(rf, (x, min(H - 1, y + h)))
+            img.alpha_composite(layer, (x, y))
+    # 雨：細い斜めの筋（行列の手前を落ちる）と、全体の粒子
+    from fxlib import grain_tex
+    arr = np.asarray(img, np.float32)
+    streak = np.zeros((H, W), np.float32)
+    for _ in range(900):
+        x0, y0, ln = rg.uniform(0, W), rg.uniform(0, H), rg.uniform(10, 26)
+        for j in range(int(ln)):
+            yy, xx = int(y0 + j), int(x0 + j * 0.18)
+            if 0 <= yy < H and 0 <= xx < W:
+                streak[yy, xx] = max(streak[yy, xx], 0.35 * (1 - j / ln))
+    al = arr[..., 3] / 255
+    rain_a = streak * 0.6
+    a2 = rain_a + al * (1 - rain_a)
+    c = (np.array([170, 150, 135], np.float32) * rain_a[..., None] + arr[..., :3] * (al * (1 - rain_a))[..., None]) / np.maximum(a2, 1e-4)[..., None]
+    c = c * (1 + 0.12 * grain_tex(H, W, 733)[..., None])
+    img = Image.fromarray(np.dstack([np.clip(c, 0, 255), a2 * 255]).astype(np.uint8), "RGBA")
+    img.save(OUT / "ep7" / "73_queue_panel.webp", quality=90)
     return img
 
 
@@ -1984,13 +2286,32 @@ def vulture_eyes():
     fps = FPS
     rg = np.random.default_rng(77)
     frames = []
-    dark = np.zeros((720, 1280, 3), np.float32) + np.array(BLACK, np.float32)
+    from scipy.ndimage import gaussian_filter
+    from fxlib import grain_tex
+    gr = grain_tex(720, 1280, 771)[..., None]
+    bloom_k = np.asarray(Image.fromarray((glow * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(28)), np.float32)[..., None] / 255
+
+    def dark_of(img):
+        """黒で潰さない暗部：絵そのものを深く沈め（暗部のディテールと粒子を残す）、茶のグレードに寄せる"""
+        x = img.astype(np.float32)
+        x = x * 0.16 + np.array(BLACK, np.float32) * 2.5
+        x = x * (1 + 0.18 * gr)                                      # 暗部にも粒子（他の場面の絵と同じ紙）
+        return x
+
+    darks = {}
 
     def frame(img, eye_gain, light, shift=(0, 0)):
+        key = id(img)
+        if key not in darks:
+            darks[key] = dark_of(img)
+        dark = darks[key]
         src = np.roll(np.roll(img.astype(np.float32), shift[1], 0), shift[0], 1) if shift != (0, 0) else img.astype(np.float32)
-        e = src * glow[..., None] * eye_gain
+        g = np.roll(np.roll(glow, shift[1], 0), shift[0], 1)[..., None] if shift != (0, 0) else glow[..., None]
+        e = src * g * eye_gain
+        bl = (np.roll(np.roll(bloom_k, shift[1], 0), shift[0], 1) if shift != (0, 0) else bloom_k) * eye_gain
         full = img.astype(np.float32) * light
         out = np.maximum(dark * (1 - light) + full, e)
+        out = out + bl * np.array([120, 85, 60], np.float32) * (1 - light)   # 目の光が、まわりの顔（頬・くちばし）にかすかに回る
         return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).convert("RGBA")
 
     for i in range(int(2.5 * fps)):                                 # 目だけ。忙しなく動く（小さく跳ねるように）
