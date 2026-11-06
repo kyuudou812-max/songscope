@@ -112,6 +112,7 @@ def main(src, outdir):
             res[name] = {"type": TYPES[path.suffix]}
         return name
 
+    ent["room"]["markers"] = {}                                 # 書き出し時に盤面に残っていた辞書カードを消す（どのシーンでも出続けていた）
     by_name = {s["name"]: s for s in ent["scenes"].values()}
     added = {n for n, *_ in SCENES}
     orders = sorted(s["order"] for s in ent["scenes"].values() if s["name"] not in added)
@@ -125,6 +126,7 @@ def main(src, outdir):
         sc = copy.deepcopy(by_name[base])
         sc.update(name=name, backgroundUrl=add(bg), foregroundUrl=add(fg) if fg else None,
                   soundRef=old.get("soundRef"), mediaRef=old.get("mediaRef"))
+        sc["markers"] = {}                                      # 演出シーンには辞書カードを持ち込まない（お手本の場所シーンから受け継いでいた）
         # お手本のすぐ後ろに、SCENES の順で並べる（同じ order だと並びが不定になる）。次のシーンとの間を等分する
         b = by_name[base]["order"]
         nxt = min((o for o in orders if o > b), default=b + 1)
