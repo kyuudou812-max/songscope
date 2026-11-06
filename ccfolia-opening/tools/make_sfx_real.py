@@ -8,9 +8,15 @@
   kenney_rpg/     Kenney「RPG Audio」（CC0）           git clone https://github.com/Boyquotes/kenney-rpg-audio-for-godot
   kenney_more/    Kenney の音素材のまとめ（CC0）        git clone https://github.com/ismetcabbar9-oss/kenney-audio-assets の「Audio (295 files)」
   esc50/          ESC-50（Freesound の録音。CC BY-NC。非営利で、出典の表記が要る）  git clone https://github.com/karolpiczak/ESC-50
-  使った ESC-50 の録音の出典は build/ccfolia/fx_real/CREDITS.txt に書き出す
+  audioaugust/   Inexor「AudioAugust」（CC BY 4.0。鉄のドア）  git clone --sparse https://github.com/inexorgame/audioaugust（doors impacts noise "step sounds"）
+  lavender_cc0/  CC0 の音素材のまとめ（紙・食器・鉄のドア・換気口）  git clone --sparse https://github.com/lavenderdotpet/CC0-Public-Domain-Sounds
+                 （100-CC0-wood-metal-SFX 100-CC0-SFX "bb - Books, Paper, Writing (Jan 2021)" "BB_Retail Therapy Sample Pack" "bb - Fans and Drones (Jul 2021)"）
+  stk_assets/    SuperTuxKart の素材（レストランの録音 lenautile_restaurant.ogg、CC0）  git clone --sparse https://github.com/Pttn/stk-assets（sfx）
+  候補ぜんぶの出典は build/ccfolia/fx_real/CREDITS.txt、本番（PICKS で選ばれたもの）の出典は SFX-CREDITS.txt に書き出す
 
-出力: build/ccfolia/fx_real/<元のファイル名>_A/B/C.mp3（候補）と CREDITS.txt
+出力: build/ccfolia/fx_real/<元のファイル名>_A/B/C.mp3（候補。作り直しは _v2_A/B/C）と CREDITS.txt。
+      PICKS の候補は build/ccfolia/fx/<元のファイル名>.mp3 に上書きして本番にする
+
 使い方: python3 tools/make_sfx_real.py
 """
 import re
@@ -30,7 +36,21 @@ IMP = LIB / "kenney_impact" / "addons" / "kenney impact sounds"
 CASINO = LIB / "kenney_more" / "Casino sounds (50 sounds)"
 JINGLE = LIB / "kenney_more" / "Jingle sounds (85 sounds)"
 ESC = LIB / "esc50" / "audio"
+AUG = LIB / "audioaugust"                      # Inexor「AudioAugust」（CC BY 4.0）  git clone https://github.com/inexorgame/audioaugust
+LAV = LIB / "lavender_cc0"                     # CC0 の音素材のまとめ  git clone https://github.com/lavenderdotpet/CC0-Public-Domain-Sounds
+STK = LIB / "stk_assets" / "sfx"               # SuperTuxKart の素材（ファミレスの録音は CC0）  git clone https://github.com/Pttn/stk-assets
 USED_ESC = set()
+CUR = set()                                    # いま作っている音に使った録音（書き出すたびに SOURCES に写す）
+SOURCES = {}
+
+
+def begin():
+    """ここから別の音を作る（使った録音の記録をまっさらに）"""
+    CUR.clear()
+
+
+def record(path):
+    SOURCES[Path(path).resolve()] = set(CUR)
 
 
 # ---------------------------------------------------------------- 読み込みと加工
@@ -39,6 +59,7 @@ def load(path):
     path = Path(path)
     if path.parent == ESC:
         USED_ESC.add(path.name)
+    CUR.add(path.absolute())
     raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", str(path), "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
                          capture_output=True, check=True).stdout
     return np.frombuffer(raw, np.float32).copy()
@@ -104,6 +125,7 @@ def stereo(path, l, r, peak=0.8, q=3):
     l, r = np.pad(l, (0, n - len(l))), np.pad(r, (0, n - len(r)))
     m = max(np.abs(l).max(), np.abs(r).max(), 1e-6)
     write_mp3(path, l / m * peak, q=q, stereo=r / m * peak)
+    record(path)
 
 
 def mono(path, x, peak=0.8, q=3, steady=False):
@@ -113,6 +135,7 @@ def mono(path, x, peak=0.8, q=3, steady=False):
         write_mp3(path, x.astype(np.float32), q=q)
     else:
         write_mp3(path, norm(x, peak), q=q)
+    record(path)
 
 
 def ambience(clips, L=62, xf=1.5, seed=0):
@@ -157,6 +180,7 @@ def bed(path, x, peak=0.6, ceil=0.8, q=4):
     k = peak * 0.9
     x = np.where(a > k, np.sign(x) * (k + (ceil - k) * np.tanh((a - k) / (ceil - k))), x)
     write_mp3(path, x.astype(np.float32), q=q)
+    record(path)
 
 
 def mix(*layers):
@@ -173,6 +197,7 @@ def tv(x):
 # ---------------------------------------------------------------- 第一話
 def ep1():
     d = OUT / "ep1"
+    begin()
     # 足音：右から近づき、ドアの前（正面）でぴたりと止まる。硬い靴と床、ドア越し
     sets = {
         "A": [load(IMP / f"footstep_concrete_{i:03d}.ogg") for i in range(5)],
@@ -194,6 +219,7 @@ def ep1():
         x = behind_door(x + wet * (0.9 - 0.6 * kk), hi=4500)
         stereo(d / f"11_footsteps_stop_{v}.mp3", *pan(x, np.clip(np.linspace(0.85, -0.2, len(x)), 0, 1)), peak=0.6)
 
+    begin()
     # ガチャ、ぎい、バタン：ノブ → きしみながら開く → 閉まる（会議室の中で鳴る）
     combos = {"A": ("door_open_1", "creak_1", "door_close_1"), "B": ("door_open_2", "creak_2", "door_close_3"),
               "C": ("door_open_1", "creak_3", "door_close_4")}
@@ -205,6 +231,7 @@ def ep1():
         place(x, trim(load(RPG / f"{cl}.ogg")), 2.6)
         mono(d / f"12_door_open_close_{v}.mp3", reverb(x, 0.6, 0.25))
 
+    begin()
     # 引っ掻く・擦り付ける：ドアの向こうで何人もが。左右に散らばる。ループ
     srcs = {
         "A": [speed(trim(load(CASINO / f"cardSlide{i}.ogg")), 0.7) for i in range(1, 9)],
@@ -230,6 +257,7 @@ def ep1():
         n = min(len(l), len(r))
         stereo(d / f"13_scratching_loop_{v}.mp3", l[:n] * 0.8 + r[:n] * 0.2, r[:n] * 0.8 + l[:n] * 0.2, peak=0.55)
 
+    begin()
     # ガチャン×3：ノブを強く回す → 手が滑って戻る。ドアが枠の中で揺れる
     knobs = {"A": ("metal_latch", "door_close_2"), "B": ("metal_click", "door_close_3"), "C": ("metal_latch", "door_close_4")}
     knock = trim(esc("1-81001-B-30.wav"))
@@ -246,6 +274,7 @@ def ep1():
 # ---------------------------------------------------------------- 第四話
 def ep4():
     d = OUT / "ep4"
+    begin()
     # グシャ：重く湿ったものが背後に落ちる
     combos = {"A": ("impact_soft_heavy_000", "impact_punch_heavy_002"), "B": ("impact_soft_heavy_003", "impact_wood_heavy_001"),
               "C": ("impact_punch_heavy_004", "impact_soft_medium_001")}
@@ -255,6 +284,7 @@ def ep4():
         place(x, speed(trim(load(IMP / f"{b}.ogg")), 0.7) * 0.6, 0.06)
         place(x, filt(trim(esc("1-84536-A-39.wav"))[: sec(0.3)], 300, 2500) * 0.12, 0.07)   # 細かく潰れる音を、ごく薄く
         mono(d / f"44_gusha_{v}.mp3", reverb(filt(x, hi=6000), 0.9, 0.3), peak=0.85)
+    begin()
     # シートをかき分けて走る：布とビニールのこすれ、遠くの大通り
     for v, seed in (("A", 1), ("B", 2), ("C", 3)):
         L = 62
@@ -282,6 +312,7 @@ def steel_door(seed, close=True, heavy="impact_metal_heavy_000"):
 
 
 def ep5():
+    begin()
     d = OUT / "ep5"
     for v, heavy in (("A", "impact_metal_heavy_000"), ("B", "impact_plate_heavy_002"), ("C", "impact_metal_heavy_003")):
         # 一部屋ずつ近づく（左の遠くから正面へ）。「ただいまー」の間は無音で空け、KP がチャットで送る
@@ -302,6 +333,7 @@ def ep5():
         place(y, speed(trim(load(RPG / "creak_2.ogg")), 0.7) * 0.5, 2.4)
         place(y, filt(steel_door(2, True, heavy), hi=2500) * 0.6, 6.4)
         mono(d / f"52_tadaima_arrive_{v}.mp3", reverb(y, 0.5, 0.2), peak=0.75)
+    begin()
     # 窓に紙が叩きつけられる「バン！」とばたつき
     for v, (a, b) in (("A", ("book_close", "book_flip_1")), ("B", ("book_place_2", "book_flip_2")), ("C", ("book_close", "book_flip_3"))):
         x = np.zeros(sec(2.0), np.float32)
@@ -314,6 +346,7 @@ def ep5():
 
 # ---------------------------------------------------------------- 第八話
 def ep8():
+    begin()
     d = OUT / "ep8"
     winds = [esc(f) for f in ("3-134699-B-16.wav", "3-134699-A-16.wav", "3-246513-B-16.wav", "3-246513-A-16.wav",
                               "4-163608-B-16.wav", "4-163609-B-16.wav", "3-134699-C-16.wav")]
@@ -349,8 +382,12 @@ def projector_from(tick, motor, L):
 def ep9():
     d = OUT / "ep9"
     ticks = {"A": "4-188033-A-38.wav", "B": "4-181035-A-38.wav", "C": "5-219342-A-38.wav"}
+    begin()
     motor = ambience([esc(f) for f in ("3-152020-A-36.wav", "3-152020-C-36.wav", "5-231551-A-36.wav")], 62, 1.5, 7)
+    motor_src = set(CUR)
     for v, f in ticks.items():
+        begin()
+        CUR.update(motor_src)
         ev = events(esc(f), 0.2)
         tick = trim(ev[0])[: sec(0.05)] if ev else trim(esc(f))[: sec(0.05)]
         loop = projector_from(tick, motor, 62)
@@ -359,6 +396,7 @@ def ep9():
         p = projector_from(tick, motor, 1.2) * np.sin(np.pi * np.arange(sec(1.2)) / sec(1.2)) ** 2
         mono(OUT / "shared" / f"79_presence_projector_{v}.mp3", reverb(filt(p, hi=3500), 1.6, 0.6, 2500), peak=0.35)
         # ノブが向こうから引き戻される
+        begin()
         x = np.zeros(sec(3.4), np.float32)
         for i, t0 in enumerate((0.2, 1.6)):
             place(x, trim(load(RPG / "metal_click.ogg")) * 0.5, t0)
@@ -369,13 +407,16 @@ def ep9():
 
 # ---------------------------------------------------------------- 環境音（1通り）
 def ambiences():
+    begin()
     rain = ambience([esc(f) for f in ("2-81731-A-10.wav", "4-163264-A-10.wav", "2-87781-A-10.wav", "4-160999-A-10.wav",
                                       "1-29561-A-10.wav", "4-161127-A-10.wav")], 62, 1.5, 1)
     mono(OUT / "ep7" / "74_rain_loop_A.mp3", rain, peak=0.5, q=4, steady=True)
+    begin()
     water = ambience([esc(f) for f in ("1-79220-A-17.wav", "5-212734-A-17.wav", "1-61221-A-17.wav", "5-215634-A-17.wav")], 62, 1.5, 2)
     drops = ambience([esc(f) for f in ("5-261433-A-15.wav", "1-90797-A-15.wav", "3-156907-A-15.wav")], 62, 1.0, 3)
     n = min(len(water), len(drops))
     mono(OUT / "ep7" / "75_channel_loop_A.mp3", reverb(filt(water[:n], hi=3000) * 0.8 + drops[:n] * 0.3, 2.0, 0.5, 2500), peak=0.55, q=4, steady=True)
+    begin()
     waves = ambience([esc(f) for f in ("3-187710-A-11.wav", "4-195497-B-11.wav", "2-124662-A-11.wav", "4-195497-A-11.wav",
                                        "5-219379-A-11.wav", "2-132157-B-11.wav")], 92, 2.0, 4)
     bugs = ambience([esc(f) for f in ("4-130891-A-7.wav", "1-19501-A-7.wav", "2-99955-B-7.wav", "5-216213-A-13.wav")], 92, 1.0, 5)
@@ -386,6 +427,7 @@ def ambiences():
 # ---------------------------------------------------------------- 町と部屋の環境音（第四・五・六・八話）
 def avenue():
     """第四話 昼の大通り：遠い車の流れ、たくさんの軽い足音、まれに遠くのクラクション。人の声は入れない"""
+    begin()
     engines = {"A": ("4-186940-A-44.wav", "4-186938-A-44.wav", "4-186935-A-44.wav"),
                "B": ("1-50455-A-44.wav", "1-50454-A-44.wav", "4-186935-A-44.wav"),
                "C": ("4-186940-A-44.wav", "1-50454-A-44.wav", "3-141240-A-44.wav")}
@@ -408,6 +450,7 @@ def avenue():
 def restaurant():
     """第六話 ファミレス：皿とカトラリーの触れ合い、グラス、すする音、低い空調。
     ざわめきは本物の録音がないので、音程のないこもった雑音をごく薄く（声の合成はしない）。C はざわめきなし"""
+    begin()
     dish = [trim(load(IMP / f"impact_{k}_light_{i:03d}.ogg")) for k in ("plate", "glass", "metal") for i in range(5)]
     sips = [filt(trim(s), hi=4000) for f in ("1-17295-A-29.wav", "2-102581-A-29.wav") for s in events(esc(f), 0.3)]
     pours = [trim(esc(f)) for f in ("1-61221-A-17.wav", "5-215634-A-17.wav")]
@@ -425,6 +468,7 @@ def restaurant():
 
 def zapping():
     """第五話 チャンネルを次々に替える：短い砂嵐のあいだに、声ではない本物の録音の切れ端。テレビの小さなスピーカーを通す"""
+    begin()
     def jingle(n):
         return load(JINGLE / f"jingles_{n.rstrip('0123456789')}" / f"jingles_{n}.ogg")
     combos = {"A": [("3-130330-A-22.wav", 0.8), ("2-78381-A-46.wav", 0.7), ("SAX03", 0.8), ("4-175845-A-43.wav", 0.8)],
@@ -451,6 +495,7 @@ def zapping():
 
 def room_tone():
     """第八話 夜明け前のからっぽの部屋：閉めた窓の外の風が、ごく低く、こもって聞こえるだけ"""
+    begin()
     sets = {"A": ("3-246513-A-16.wav", "3-246513-B-16.wav", "4-163609-B-16.wav", "4-163608-B-16.wav"),
             "B": ("3-134699-A-16.wav", "3-134699-B-16.wav", "4-163609-B-16.wav", "2-104952-B-16.wav")}
     for i, (v, files) in enumerate(sets.items()):
@@ -461,17 +506,211 @@ def room_tone():
         bed(OUT / "ep8" / f"81_room_tone_loop_{v}.mp3", x, peak=0.25)
 
 
-def credits():
-    """使った ESC-50 の録音の出典（CC BY / CC BY-NC の表記）"""
+# ---------------------------------------------------------------- やり直し（v2）：KP が「全部だめ」とした4つ
+# 前の版がだめだった理由の見立て
+#  51・52 鉄のドア：Kenney の「掛け金」と「金属を叩く音」を重ねただけで、ドアではなく金属を殴る音だった。
+#                   → 本物の鉄扉の録音（AudioAugust の metaldoor_*、CC0 パックの metal_open/close）を使い、
+#                     団地の外廊下（コンクリート）の短い跳ね返りをつけ、部屋ごとに遠近と左右を変える
+#  57 新聞が窓に：本を閉じる音（厚く重い「ドン」）で、紙らしさがなかった。
+#                   → 本物の紙の録音（ばさっ・めくれ・こすれ）を主役に、ガラスは薄い「とん」と窓枠のかたかただけ、風の息を前後に
+#  60 ファミレス：人の声の録音がなく、食器の音を散らしただけ＋雑音だった（店のざわめきにならない）。
+#                   → 本物のレストランの録音（CC0）を、声が聞き取れなくなるまでこもらせて何枚も重ね、近くの本物の食器の音を足す
+def aug(rel):
+    return trim(load(AUG / rel))
+
+
+def lav(rel):
+    return trim(load(LAV / rel))
+
+
+def corridor(x, k, seed=0):
+    """団地の外廊下：k 部屋むこう。遠いほど小さくこもる＋コンクリートの壁の短い跳ね返り（約 0.09 秒）"""
+    y = distance(x, k)
+    slap = np.zeros(len(y) + sec(0.3), np.float32)
+    slap[: len(y)] += y
+    place(slap, filt(y, hi=2000) * 0.35, 0.09 + 0.01 * k)
+    return slap
+
+
+def iron_door(kind, part):
+    """重い鉄の玄関ドア。part='open'：ガチャ（ノブ・錠）→ ぎい（重い蝶番）、'close'：バタン（鉄の板と枠）＋かちゃ"""
+    x = np.zeros(sec(2.0), np.float32)
+    if kind == "aug":
+        if part == "open":
+            place(x, aug("doors/metal/metaldoor_lock_2.ogg") * 0.7, 0)
+            place(x, speed(aug("doors/metal/metaldoor_open_1.ogg"), 0.85), 0.25)
+        else:
+            place(x, speed(aug("doors/metal/metaldoor_close_3.ogg"), 0.9), 0)
+            place(x, aug("doors/metal/metal_click_1.ogg") * 0.4, 0.45)
+    else:
+        if part == "open":
+            place(x, aug("doors/metal/metaldoor_lock_4.ogg") * 0.6, 0)
+            place(x, speed(lav("100-CC0-wood-metal-SFX/metal_open_01.ogg"), 0.9), 0.2)
+        else:
+            place(x, speed(lav("100-CC0-wood-metal-SFX/metal_close_01.ogg"), 0.9), 0)
+            place(x, filt(aug("impacts/metallic/metallic_hit_hall_1.ogg"), 60, 600) * 0.12, 0.01)   # 鉄の板の低い鳴り、ごく薄く
+    return trim(x, -60)
+
+
+def tadaima_approach_v2():
+    """第五話：4部屋むこうから隣の部屋まで、一部屋ずつ、ガチャ・ぎい …（「ただいまー」の間）… バタン。約 18 秒。左から正面へ"""
+    for v, (kind, steps) in {"A": ("aug", False), "B": ("lav", False), "C": ("aug", True)}.items():
+        begin()
+        L, t = 18.5, 0.4
+        l, r = np.zeros(sec(L + 1), np.float32), np.zeros(sec(L + 1), np.float32)
+        walk = [aug(f"step sounds/pavement/pav_step_{i}.flac") for i in range(1, 9)] if steps else []
+        for k, p in zip((4, 3, 2, 1), (-0.85, -0.6, -0.4, -0.2)):
+            for part, dt in (("open", 2.6), ("close", 1.5)):     # 開けて、声の間、閉めて、次の部屋へ
+                a, b = pan(corridor(iron_door(kind, part), k), p)
+                place(l, a, t), place(r, b, t)
+                t += dt
+            if steps and k > 1:                                   # 次の部屋まで歩く（サンダルの軽い足音）
+                for j, ts in enumerate(np.arange(t - 1.3, t - 0.1, 0.42)):
+                    a, b = pan(corridor(filt(walk[(k * 3 + j) % 8], 200, 5000) * 0.35, k), p + 0.1)
+                    place(l, a, ts), place(r, b, ts)
+        stereo(OUT / "ep5" / f"51_tadaima_approach_v2_{v}.mp3", l[: sec(t + 0.2)], r[: sec(t + 0.2)], peak=0.8)
+
+
+def tadaima_arrive_v2():
+    """第五話（押入れに隠れた場合）：この部屋の鉄のドアが開く → ぎし、と床 → 沈黙 → バタンと閉まる。押入れの襖越しにこもる"""
+    creaks = {"A": [("100-CC0-wood-metal-SFX/wood_squeak_01.ogg", 0.7)],
+              "B": [("esc:1-51805-A-33.wav", 0.8)],
+              "C": [("100-CC0-wood-metal-SFX/wood_squeak_02.ogg", 0.75), ("100-CC0-wood-metal-SFX/wood_squeak_01.ogg", 0.65)]}
+    for v, kind in (("A", "aug"), ("B", "lav"), ("C", "aug")):
+        begin()
+        x = np.zeros(sec(11), np.float32)
+        place(x, iron_door(kind, "open"), 0.3)
+        t = 2.4
+        for rel, f in creaks[v]:
+            c = trim(esc(rel[4:]))[: sec(0.9)] if rel.startswith("esc:") else lav(rel)
+            c = speed(c, f)
+            place(x, aug("step sounds/room/step2.flac") * 0.35, t - 0.05)     # 体重をかける
+            place(x, c * env(len(c), 0.01, 0.4) * 0.8, t)                      # ぎし
+            t += 1.3
+        place(x, iron_door(kind, "close") * 0.9, 7.0)
+        x = reverb(filt(x, hi=2800), 0.5, 0.25)                                # 襖越し、六畳の小さな響き
+        mono(OUT / "ep5" / f"52_tadaima_arrive_v2_{v}.mp3", x, peak=0.8)
+
+
+def window_slap_v2():
+    """第五話：強い風で、新聞が窓に叩きつけられる「バサッ！」→ 押しつけられたままばたつく → はがれて飛んでいく。部屋の中から"""
+    BOOK = "bb - Books, Paper, Writing (Jan 2021)"
+    RET = "BB_Retail Therapy Sample Pack"
+    hits = {"A": ("100-CC0-SFX/paper_01.ogg", f"{BOOK}/Riffle Pages 1.wav", "impact_glass_light_001", (0.35,)),
+            "B": (f"{RET}/Shoofing Papers 1.wav", f"{BOOK}/Page Turn Fast.wav", "impact_glass_light_003", (0.35,)),
+            "C": ("100-CC0-SFX/paper_03.ogg", f"{BOOK}/Riffle Pages 2.wav", "impact_glass_light_000", (0.35, 1.25))}
+    winds = ("3-246513-A-16.wav", "4-163609-B-16.wav")
+    for i, (v, (slap, flutter, glass, times)) in enumerate(hits.items()):
+        begin()
+        L = 3.2
+        x = np.zeros(sec(L), np.float32)
+        w = trim(esc(winds[i % 2]))[: sec(L)]
+        w = filt(w, 80, 1800) * np.interp(np.arange(len(w)), [0, sec(0.3), sec(1.0), sec(2.2), len(w) - 1], [0.2, 1.0, 0.6, 0.8, 0.0])
+        place(x, w * 0.25, 0)                                                   # 窓の外の風（閉めた窓越し）
+        s, fl = lav(slap), lav(flutter)
+        for n, t0 in enumerate(times):
+            g = 1.0 if n == 0 else 0.7
+            place(x, s[: sec(0.5)] * env(min(len(s), sec(0.5)), 0.002, 0.15) * g, t0)          # バサッ（紙が平らにぶつかる）
+            place(x, filt(trim(load(IMP / f"{glass}.ogg")), hi=3500) * 0.35 * g, t0 + 0.004)    # ガラスの薄い「とん」
+            place(x, lav(f"{RET}/Rattling Cheap Wood 1.wav")[: sec(0.25)] * 0.18 * g, t0 + 0.01)  # 窓枠がかたっ
+            fseg = fl[: sec(0.8)] * np.linspace(1, 0.2, min(len(fl), sec(0.8))) ** 2
+            place(x, filt(fseg, 300, 7000) * 0.4 * g, t0 + 0.12)               # 押しつけられて、ばたばた
+        tail = lav("100-CC0-SFX/paper_04.ogg")
+        place(x, filt(tail, 400, 6000) * env(len(tail), 0.05, 0.25) * 0.3, times[-1] + 1.0)      # はがれて飛んでいく
+        mono(OUT / "ep5" / f"57_window_slap_v2_{v}.mp3", reverb(filt(x, hi=7000), 0.5, 0.2), peak=0.85)
+
+
+def restaurant_v2():
+    """第六話 ファミレス：本物のレストランの録音（CC0）。言葉が聞き取れないよう、高い音（子音）を削り、時間をずらした何枚かを重ねて
+    一人ひとりの声を溶かす。手前に本物の食器・カトラリー・グラスの音。声の合成・歌は一切使わない"""
+    begin()
+    src = load(STK / "lenautile_restaurant.ogg")
+    base_src = set(CUR)
+    chunks = [src[a: a + sec(5)] for a in range(0, len(src) - sec(5), sec(2.5))]
+    RET = "BB_Retail Therapy Sample Pack"
+    near_files = [f"{RET}/Silverware {i}.wav" for i in range(1, 7)] + [f"{RET}/Silverware Ting {i}.wav" for i in range(1, 5)] + \
+                 [f"{RET}/Ceramic Bowl {i}.wav" for i in range(1, 8)] + [f"{RET}/Glass Glasses 1.wav"] + [f"100-CC0-SFX/dishes_0{i}.ogg" for i in range(1, 5)]
+    vent = "bb - Fans and Drones (Jul 2021)/Air Vent.wav"
+    # 種類：（こもらせる上限 Hz, 重ねる枚数, 食器の間隔, 食器の大きさ, 響き）
+    kinds = {"A": (900, 3, (0.5, 2.5), 0.35, 0.3), "B": (650, 4, (1.0, 4.0), 0.25, 0.45), "C": (1100, 4, (0.3, 1.5), 0.45, 0.3)}
+    for i, (v, (hi, layers, gap, dg, wet)) in enumerate(kinds.items()):
+        begin()
+        CUR.update(base_src)
+        L = 62
+        crowd = sum(filt(ambience(chunks, L, 1.5, 300 + i * 10 + k), 120, hi, order=4) for k in range(layers))
+        near = scatter([filt(lav(f), 150, 9000) for f in near_files], L, gap, (0.3, 1.0), 320 + i)
+        hum = filt(ambience([lav(vent)], L, 2.0, 330 + i), 40, 400)
+        x = mix(norm(crowd) * 0.6, norm(near) * dg, norm(hum) * 0.12)
+        bed(OUT / "ep6" / f"60_restaurant_ambience_loop_v2_{v}.mp3", reverb(x, 0.9, wet, 4000), peak=0.5)
+
+
+def redo():
+    tadaima_approach_v2()
+    tadaima_arrive_v2()
+    window_slap_v2()
+    restaurant_v2()
+
+
+# KP が聞いて選んだ候補（本番の build/ccfolia/fx/ に、合成版と同じ名前で上書きする）。v2 の4つはまだ選ばれていない
+PICKS = {
+    "ep1/11_footsteps_stop": "A", "ep1/12_door_open_close": "A", "ep1/13_scratching_loop": "B", "ep1/14_handle_rattle": "A",
+    "ep2/23_insect_tide_loop": "A",
+    "ep4/42_tarp_run_loop": "A", "ep4/43_avenue_loop": "A", "ep4/44_gusha": "C",
+    "ep5/53_zapping": "A",
+    "ep7/74_rain_loop": "A", "ep7/75_channel_loop": "A",
+    "ep8/81_room_tone_loop": "A", "ep8/82_bang_gust": "C",
+    "ep9/94_projector_loop": "B", "ep9/96_knob_held": "B",
+    "shared/79_presence_projector": "B",
+}
+PROD = ROOT / "build" / "ccfolia" / "fx"
+
+
+def credit_lines(paths):
+    """録音の一覧から出典の文を作る（ライブラリごと。ESC-50 は録音ごと）"""
+    used = set().union(*(SOURCES.get(Path(p).resolve(), set()) for p in paths))
+    libs = {q.relative_to(LIB.absolute()).parts[0] for q in used}
     lic = (LIB / "esc50" / "LICENSE").read_text(encoding="utf-8", errors="ignore")
-    lines = ["効果音の出典", "", "Kenney「Impact Sounds」「RPG Audio」「Casino Sounds」（CC0） https://kenney.nl", "",
-             "ESC-50（K. J. Piczak, CC BY-NC 3.0） https://github.com/karolpiczak/ESC-50 より、次の録音を加工して使用:"]
-    for f in sorted(USED_ESC):
-        stem = "-".join(f.split("-")[:3])
-        m = re.search(r"\[" + re.escape(stem) + r"\.ogg\]: (.+)", lic)
-        lines.append(f"- {m.group(1).strip() if m else f}")
-    (OUT / "CREDITS.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"CREDITS.txt（ESC-50 の録音 {len(USED_ESC)} 本）")
+    lines = ["効果音の出典", ""]
+    if libs & {"kenney_impact", "kenney_rpg", "kenney_more"}:
+        lines += ["Kenney「Impact Sounds」「RPG Audio」「Casino Sounds」「Music Jingles」（CC0） https://kenney.nl", ""]
+    if "audioaugust" in libs:
+        lines += ["AudioAugust（Johannes \"Hanni\" Schneider / Inexor, CC BY 4.0） https://github.com/inexorgame/audioaugust", ""]
+    if "lavender_cc0" in libs:
+        lines += ["CC0 Public Domain Sounds（まとめ: lavenderdotpet。Ben Burnes の素材パックほか、CC0） https://github.com/lavenderdotpet/CC0-Public-Domain-Sounds", ""]
+    if "stk_assets" in libs:
+        lines += ["レストランの録音: Alcappuccino（CC0） https://freesound.org/people/Alcappuccino/sounds/263528/ （SuperTuxKart の素材より）", ""]
+    escs = sorted({q.name for q in used if q.parent == ESC.absolute()})
+    if escs:
+        lines.append("ESC-50（K. J. Piczak, CC BY-NC 3.0） https://github.com/karolpiczak/ESC-50 より、次の録音を加工して使用:")
+        seen = []
+        for f in escs:
+            stem = "-".join(f.split("-")[:3])
+            m = re.search(r"\[" + re.escape(stem) + r"\.ogg\]: (.+)", lic)
+            t = f"- {m.group(1).strip() if m else f}"
+            if t not in seen:
+                seen.append(t)
+        lines += seen
+    return lines
+
+
+def credits():
+    """候補ぜんぶの出典（fx_real/CREDITS.txt）"""
+    (OUT / "CREDITS.txt").write_text("\n".join(credit_lines(list(SOURCES))) + "\n", encoding="utf-8")
+    print(f"CREDITS.txt（候補 {len(SOURCES)} 本）")
+
+
+def install():
+    """選ばれた候補を本番の名前で fx/ に写し、本番で使う音だけの出典を SFX-CREDITS.txt に書く"""
+    import shutil
+    used = []
+    for name, v in PICKS.items():
+        src = OUT / f"{name}_{v}.mp3"
+        dst = PROD / f"{name}.mp3"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+        used.append(src)
+    (ROOT / "SFX-CREDITS.txt").write_text("\n".join(credit_lines(used)) + "\n", encoding="utf-8")
+    print(f"本番に {len(used)} 本を入れた（SFX-CREDITS.txt を更新）")
 
 
 def main():
@@ -487,7 +726,9 @@ def main():
     restaurant()
     zapping()
     room_tone()
+    redo()
     credits()
+    install()
 
 
 if __name__ == "__main__":
