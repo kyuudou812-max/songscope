@@ -6,6 +6,8 @@ AudioAugust（Johannes "Hanni" Schneider / Inexor, CC BY 4.0） https://github.c
 
 CC0 Public Domain Sounds（まとめ: lavenderdotpet。Ben Burnes の素材パックほか、CC0） https://github.com/lavenderdotpet/CC0-Public-Domain-Sounds
 
+レストランの録音: Alcappuccino（CC0） https://freesound.org/people/Alcappuccino/sounds/263528/ （SuperTuxKart の素材より）
+
 ESC-50（K. J. Piczak, CC BY-NC 3.0） https://github.com/karolpiczak/ESC-50 より、次の録音を加工して使用:
 - clip derived from sw_brushing_teeth.wav (http://www.freesound.org/people/jppi_Stu/sounds/17092/) by jppi_Stu [CC-BY]
 - clip derived from 20060524.fly.flac (http://www.freesound.org/people/dobroide/sounds/19501/) by dobroide [CC-BY]

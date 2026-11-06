@@ -713,7 +713,7 @@ PICKS = {
     "ep1/11_footsteps_stop": "A", "ep1/12_door_open_close": "A", "ep1/13_scratching_loop": "B", "ep1/14_handle_rattle": "A",
     "ep2/23_insect_tide_loop": "A",
     "ep4/42_tarp_run_loop": "A", "ep4/43_avenue_loop": "A", "ep4/44_gusha": "C",
-    "ep5/51_tadaima_approach": "v2_C", "ep5/52_tadaima_arrive": "v2_C", "ep5/53_zapping": "A",
+    "ep5/51_tadaima_approach": "v2_C", "ep5/52_tadaima_arrive": "v2_C", "ep5/57_window_slap": "v3_C", "ep6/60_restaurant_ambience_loop": "v3_B", "ep5/53_zapping": "A",
     "ep7/74_rain_loop": "A", "ep7/75_channel_loop": "A",
     "ep8/81_room_tone_loop": "A", "ep8/82_bang_gust": "C",
     "ep9/94_projector_loop": "B", "ep9/96_knob_held": "B",
