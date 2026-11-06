@@ -12,8 +12,8 @@
 
 足すもの（一覧は下の SCENES・PANELS）:
   シーン   第1話の居眠り・目を覚ます／第4話の逃走・大通り／第7話のお祝いですよ／第8話の目覚め・何度も／
-           最終話のロビー（明滅）・ホール（人数別）・古い映画・暗闇の女・暗闇証明の各段階／エンドAの最後の廊下
-  パネル   第3話の人影・チラシ／第5話のスマホ・訃報・震えた文字／第7話の行列／第1〜7話の報酬の札（裏面は切り抜き）／
+           最終話のロビー（明滅）・エンドBの窓の外の女・ホール（人数別）・古い映画・暗闇の女・暗闇証明の各段階／エンドAの最後の廊下
+  パネル   第3話の人影・チラシ／第5話のスマホ・訃報・震えた文字／第7話の行列／最終話の座席のスマホ・AF のカード／第1〜7話の報酬の札（裏面は切り抜き）／
            第8話の四択（裏面は切り抜き）／第2〜9話の前回のあらすじ
   最終話の「開ききったドア」と「古い映画」の絵が届くまでは、試作版（_draft）の画像で入る
 """
@@ -35,6 +35,7 @@ E9 = FX / "ep9"
 DRAFT = "_draft" if not (E9 / "90_full_door_bg.jpg").exists() else ""      # 開ききったドアの絵が届くまでは試作版
 FILM = "_draft" if not (E9 / "92_film_loop.webp").exists() else ""
 BAL = "_draft" if not (FX / "ep8" / "86_balcony_loop.webp").exists() else ""
+ENDB = "_draft" if not (FX / "ep8" / "86_balcony_bg.jpg").exists() else ""   # ベランダの絵が届くまでは試作版
 VUL = "_draft" if not (FX / "ep7" / "76_vulture_eyes.webp").exists() else ""
 SCENES = [
     ("第1話 居眠り", "第1話 会議室", S / "ep1_01_conference.jpg", FX / "shared" / "72_blink_close.webp"),
@@ -58,6 +59,7 @@ SCENES = [
     ("第9話 暗闇証明2（大きくほどける）", "第9話 劇場のホール", E9 / f"90_full_door_bg{DRAFT}.jpg", E9 / f"99_proof_2{DRAFT}.webp"),
     ("第9話 暗闇証明3（何もない）", "第9話 劇場のホール", E9 / f"90_full_door_bg{DRAFT}.jpg", E9 / f"99_proof_3{DRAFT}.webp"),
     ("第9話 暗闇証明（女が近づく）", "第9話 劇場のホール", E9 / f"90_full_door_bg{DRAFT}.jpg", E9 / f"99_proof_reach{DRAFT}.webp"),
+    ("エンドB 窓の外の女", "第9話 劇場のホール", S / "ep6_01_restaurant.jpg", E9 / f"89_endb_fall{ENDB}.webp"),
     ("エンドA 最後の廊下", "第9話 劇場のホール", CC / "01_bg_corridor.jpg", CC / "room" / "11_grain_loop.webp"),
 ]
 # (メモ, 画像, x, y, 幅, 高さ, 裏面)。フィールドは x -64〜64・y -36〜36。PC の置き場はフィールドの下、NPC の置き場は右
@@ -68,6 +70,8 @@ PANELS += [
     ("第5話 スマホのニュース", FX / "ep5" / "56_phone_news.webp", -7, -14, 14, 27, None),
     ("第5話 新聞の訃報（PL がめくる）", FX / "ep5" / "54_obituary.webp", -12, -15, 24, 30, FX / "ep5" / "55b_kamisama_under.webp"),
     ("第7話 スマホのニュース", FX / "ep7" / "77_phone_news.webp", -7, -14, 14, 27, None),
+    ("第9話 座席のスマホ", FX / "ep9" / "88_seat_phone.webp", -7, -14, 14, 27, None),
+    ("第9話 AF《とある化身の知識》", FX / "ep9" / "87_af_card.webp", -24, -19, 48, 38, None),
     ("第5話 震えた文字", FX / "ep5" / "55_kamisama.webp", -19, -9, 38, 19, None),
     ("第7話 行列（PC の後ろ）", FX / "ep7" / "73_queue_panel.webp", -64, 36, 128, 54, None),
 ]

@@ -60,6 +60,9 @@
   ep9/94_projector_loop.mp3     … 映写機の音（BGM、ループ）
   ep9/95_projector_stop_then_silence.mp3 … フィルムが外れて映写機が止まる → 無音（BGM。途切れる前景と同時に始まる）
   reward/epN_rewardK(_cut).webp … 報酬の札（第1〜7話、各3枚。_cut は切り抜かれた裏。スクリーンパネルの裏面に入れる）
+  ep9/87_af_card.webp           … AF《とある化身の知識》のカード（スクリーンパネル。各話で決まる所は af_fill、空なら空欄）
+  ep9/88_seat_phone.webp        … 座席に返されたスマホ（第七話で盗られたもの。画面は第七話の朝のニュースのまま）
+  ep9/89_endb_fall.webp         … エンドB：ファミレスの窓の外を、女が一瞬落ちる（前景、1回再生）。ベランダの絵が届くまでは _draft
   recap/recap_epN.webp          … 前回のあらすじ（スクリーンパネル、38×24 マス。第2話〜最終話の冒頭）
   preview/*.mp4                 … 確認用（背景に重ねて、音付き）
 
@@ -1853,7 +1856,146 @@ def presence():
     write_mp3(OUT / "shared" / "79_presence_projector.mp3", norm(x, 0.35))
 
 
-PIECES = {"presence": presence, "vulture": vulture, "balcony": balcony, "ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
+# ================================================================ 終わりの三つ（エンドB・座席のスマホ・AF のカード）
+# エンドB の最後の一行（本文 L3411 付近）。ファミレスの左の窓（明るいガラスのところ）だけに、
+# ベランダの「のけぞる女」の形を、一瞬だけ上から下へ通す（1回再生の前景。最後のコマは透明）。
+# 女の形はベランダと同じ材料（balcony_inputs）から取るので、ベランダの絵が届くまでは _draft、届けば本番に替わる
+ENDB_GLASS = (0, 0, 430, 262)                                      # ファミレスの左の窓の範囲（ep6_01_restaurant.jpg）
+
+
+def endb_fall():
+    from PIL import ImageFilter
+    (e, _, b), draft = balcony_inputs()
+    mb = figure_mask(e, b)
+    ys, xs = np.where(mb)
+    fig = Image.fromarray(np.dstack([b,
+                                     (mb * 255).astype(np.uint8)]), "RGBA").crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
+    fig = fig.rotate(160, resample=Image.BICUBIC, expand=True)          # 頭から落ちる
+    h = 210
+    fig = fig.resize((int(fig.width * h / fig.height), h), Image.LANCZOS)
+    arr = np.asarray(fig).copy()
+    arr[..., :3] = (np.asarray(arr[..., :3], np.float32) * 0.2).astype(np.uint8)   # 逆光の暗い影
+    fig = Image.fromarray(arr, "RGBA").filter(ImageFilter.GaussianBlur(1.2))      # 速さでわずかにぶれる
+    rest = np.asarray(Image.open(SCENES / "ep6_01_restaurant.jpg").convert("L").resize((1280, 720)), np.float32)
+    x0, y0, x1, y1 = ENDB_GLASS
+    glass = np.zeros((720, 1280), np.float32)
+    glass[y0:y1, x0:x1] = smoothstep(115, 150, rest[y0:y1, x0:x1])      # 明るいガラスだけ（窓枠・植木・人の頭は残す）
+    glass = np.asarray(Image.fromarray((glass * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5)), np.float32) / 255
+    frames = []
+    pre, fall, post = int(0.4 * FPS), 9, int(0.6 * FPS)                 # 落ちるのは 9 コマ（0.3 秒）
+    for i in range(pre + fall + post):
+        fr = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
+        k = (i - pre) / (fall - 1)
+        if 0 <= k <= 1:
+            lay = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
+            lay.alpha_composite(fig, (70, int(-h * 0.7 + (y1 + h * 0.4) * k * (0.6 + 0.4 * k))))
+            a = np.asarray(lay).copy()
+            a[..., 3] = (a[..., 3] * glass).astype(np.uint8)
+            fr = Image.fromarray(a, "RGBA")
+        frames.append(clean_alpha(fr))
+    sfx = "_draft" if draft else ""
+    path = OUT / "ep9" / f"89_endb_fall{sfx}.webp"
+    save_webp_anim(frames, path, lossless=True, loop=1)
+    return frames
+
+
+def clean_alpha(img):
+    """透明なところの色を 0 にする（ココフォリアで縁ににじまないように）"""
+    a = np.asarray(img).copy()
+    a[a[..., 3] == 0, :3] = 0
+    return Image.fromarray(a, "RGBA")
+
+
+def seat_phone():
+    """最終話：座席に置かれた、第七話で盗られたスマホ（本文 L3027）。
+    画面は第七話の朝のニュースのまま。時刻は出さず、画面は少し暗い"""
+    W, H = 360, 700
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, W - 1, H - 1], 44, fill=(14, 11, 10, 255), outline=(60, 50, 46, 255), width=3)
+    d.rounded_rectangle([14, 14, W - 15, H - 15], 34, fill=(18, 14, 13, 255))
+    f1, f2 = font(17), font(12)
+    d.text((34, 70), "ニュース", font=font(20), fill=QUIET + (255,))
+    y = 120
+    for i, s in enumerate(TXT["ep7_phone_news"]):
+        d.line([(30, y - 12), (W - 30, y - 12)], fill=(40, 33, 31, 255), width=1)
+        assert draw_text(None, (0, 0), s, f1, None) < W - 68, s
+        draw_text(d, (34, y), s, f1, (QUIET if "失踪" in s else QUIETEST) + (255,))
+        d.text((34, y + 30), TXT["phone_cats"]["ep7_phone_news"][i], font=f2, fill=QUIETEST + (255,))
+        y += 82
+    img = clean_alpha(img)
+    img.save(OUT / "ep9" / "88_seat_phone.webp", lossless=True, exact=True)
+    return img
+
+
+def af_card(W=900):
+    """最終話：AF《とある化身の知識》のカード（KP シート L344〜）。報酬の札と同じ紙。各話で決まる所は af_fill から埋め、
+    空なら下線の空欄にして KP が読み上げる"""
+    import re
+    c, fill = TXT["af_card"], TXT.get("af_fill", {})
+    f0, f1, f2 = font(26), font(25), font(22)
+    lh, ml = int(f1.size * 1.75), W - 150
+
+    def tokens(s):
+        for part in re.split(r"(\{\w+\})", s):
+            if part.startswith("{"):
+                v = fill.get(part[1:-1], "")
+                yield ("blank", "　" * 5) if not v else ("text", v)
+            else:
+                yield from (("text", ch) for ch in part)
+
+    def layout(s, f):
+        lines, cur, x = [], [], 0
+        for kind, t in tokens(s):
+            units = [t] if kind == "blank" else list(t)
+            for u in units:
+                w = f.getlength(u) + (0 if kind == "blank" else f.size * 0.04)
+                if x + w > ml and not (kind == "text" and u in "。、」）"):
+                    lines.append(cur); cur, x = [], 0
+                cur.append((kind, u, w)); x += w
+        lines.append(cur)
+        return lines
+
+    paras = [layout(s, f1) for s in c["body"]]
+    rews = [layout(s, f2) for s in c["rewards"]]
+    h = 120 + sum(len(p) * lh + 18 for p in paras) + 30 + sum(len(r) * int(f2.size * 1.6) for r in rews) + 60
+    img, pad = card_paper(W, h, 909)
+    d = ImageDraw.Draw(img)
+    tw = draw_text(None, (0, 0), c["title"], f0, None, spacing=0.12)
+    draw_text(d, (pad + (W - tw) / 2, pad + 44), c["title"], f0, TEXT + (255,), spacing=0.12)
+    y = pad + 120
+
+    def put(lines, f, step, color):
+        nonlocal y
+        for ln in lines:
+            x = pad + 75
+            for kind, u, w in ln:
+                if kind == "blank":
+                    d.line([(x + 4, y + f.size * 1.15), (x + w - 4, y + f.size * 1.15)], fill=QUIETEST + (255,), width=2)
+                else:
+                    d.text((x, y), u, font=f, fill=color + (255,))
+                x += w
+            y += step
+
+    for p in paras:
+        put(p, f1, lh, TEXT)
+        y += 18
+    y += 30
+    for r in rews:
+        put(r, f2, int(f2.size * 1.6), QUIET)
+    img = clean_alpha(img)
+    img.save(OUT / "ep9" / "87_af_card.webp", lossless=True, exact=True)
+    return img
+
+
+def finale():
+    (OUT / "ep9").mkdir(parents=True, exist_ok=True)
+    endb_fall()
+    seat_phone()
+    af_card()
+
+
+PIECES = {"finale": finale, "presence": presence, "vulture": vulture, "balcony": balcony, "ambience": ambience, "moving": moving, "seats": ep9_seats, "props": props, "reward": rewards, "ep6": ep6, "recap": recap, "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4, "ep5": ep5, "ep7": ep7, "ep8": ep8, "ep9": ep9}
 
 if __name__ == "__main__":
     for name in sys.argv[1:] or PIECES:
