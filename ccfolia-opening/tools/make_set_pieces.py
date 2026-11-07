@@ -307,7 +307,7 @@ def nandomo():
         stand = max(0.06, period - (0.5 + 0.55) / speed) * (0.85 + 0.3 * rg.random())
         tl = ts + stand
         tf = tl + 0.5 / speed * (0.9 + 0.2 * rg.random())
-        te = tf + 0.75 / speed
+        te = tf + 0.9 / speed
         events.append((ts, tl, tf, te, 20 + 6 * rg.random() + 6 * prog, rg.normal(0, 3 + 6 * prog)))
         ts = te - (0.32 / speed if prog > 0.45 else -0.12 / speed)        # 後半は、落ちきる前に次が立っている
     print("落ちる回数", len(events))
@@ -2098,7 +2098,7 @@ def ambience():
 BALCONY = [ROOT / "assets" / f"ep8_balcony_{k}.png" for k in range(3)]   # 届いたらここに置く（0=人なし、1=手を振る、2=のけぞる）
 WINDOW_DRAFT = (205, 30, 505, 445)                                     # 窓の範囲（仮：家具のない部屋の構図）
 WINDOW_REAL = (130, 40, 495, 425)                                      # 窓の範囲（届いたベランダの絵。1280×720 で測った）
-ARM_REAL = (322, 268, 297, 272)                                         # 手を振る腕：x<322・y<268 が肘から先、肘は (297, 272)
+ARM_REAL = (307, 259, 298, 262, 238, 296, 240)                          # 手を振る腕：x<307・y<259 が肘から先（二の腕・肩は入れない）、肘 (298,262)、y<238 が手で手首 (296,240)
 FALL_PX = 560                                                          # 落ちる間に重心が下がる量（px）
 RAIL_REAL, FLOOR_REAL = 312, 425                                       # 届いた絵の手すりの上端と、ベランダの床の線（ここより下に落ちると見えない）
 WINDOW = WINDOW_REAL if all(p.exists() for p in BALCONY) else WINDOW_DRAFT
@@ -2192,10 +2192,12 @@ class FallingWoman:
             self.com[key] = np.array([ys.mean() - by0, xs.mean() - bx0], np.float64)   # 重心
         if real:                                                                # 手を振る腕：肘から先だけを切り分けて、肘を支点に振る
             pre = self.sprites["stand"][0]
-            ex, ey = ARM_REAL[2] - bx0, ARM_REAL[3] - by0
+            ax, ay, ex, ey, hy, wx, wy = ARM_REAL
             yy, xx = np.mgrid[0:pre.shape[0], 0:pre.shape[1]]
-            arm = (smoothstep(ARM_REAL[0] - bx0 + 3, ARM_REAL[0] - bx0 - 3, xx) * smoothstep(ARM_REAL[1] - by0 + 3, ARM_REAL[1] - by0 - 3, yy))[..., None]
-            self.arm = (pre * arm, pre * (1 - arm), np.array([ey, ex], np.float64))
+            arm = (smoothstep(ax - bx0 + 2, ax - bx0 - 2, xx) * smoothstep(ay - by0 + 2, ay - by0 - 2, yy))[..., None]
+            hand = arm * smoothstep(hy - by0 + 2, hy - by0 - 2, yy)[..., None]
+            self.arm = (pre * (arm - hand), pre * hand, pre * (1 - arm),
+                        np.array([ey - by0, ex - bx0], np.float64), np.array([wy - by0, wx - bx0], np.float64))
         self.rg = np.random.default_rng(84)
 
     @staticmethod
@@ -2208,6 +2210,16 @@ class FallingWoman:
         off = pivot - R @ (pivot + np.asarray(d, np.float64))
         return np.dstack([affine_transform(pre[..., k], R, offset=off, order=1, mode="constant") for k in range(4)])
 
+    @staticmethod
+    def _yscale(pre, sy, y0):
+        """y0 の行を中心に縦だけ sy 倍（負なら上下が返る）。横は動かさない"""
+        from scipy.ndimage import affine_transform
+        if abs(sy) < 0.02:
+            return np.zeros_like(pre)
+        M = np.array([[1 / sy, 0], [0, 1]])
+        off = np.array([y0 - y0 / sy, 0])
+        return np.dstack([affine_transform(pre[..., k], M, offset=off, order=1, mode="constant") for k in range(4)])
+
     def _clip(self, out, clip):
         if clip is not None:
             yy = np.arange(self.box[1], self.box[3])[:, None, None]
@@ -2218,9 +2230,30 @@ class FallingWoman:
         """届いた絵の動きの部品（手を振る・もたれかかる・落ちる）を、前乗算 RGBA にする"""
         kind, v, dx, clip = p[1], p[2], p[3], p[4]
         if kind == "wave":                                                      # v = (腕の角度, 体の傾き)
-            arm, body, elbow = self.arm
-            pre = body + self._xform(arm, v[0], elbow, (0, 0))
-            return self._xform(pre, v[1], self.hip["stand"], (0, dx))
+            fore, hand, body, elbow, wrist = self.arm                           # 肩・二の腕・体は動かさない。肘から先だけを回し、手首は少し遅れて振れる
+            th = np.deg2rad(v[0])
+            w2 = elbow + np.array([[np.cos(th), np.sin(th)], [-np.sin(th), np.cos(th)]]) @ (wrist - elbow)   # 回したあとの手首の位置
+            arm = self._xform(fore, v[0], elbow, (0, 0)) + self._xform(self._xform(hand, v[0], elbow, (0, 0)), v[1], w2, (0, 0))
+            return self._xform(body + arm, 0, elbow, (0, dx))
+        if kind == "back":                                                      # v = (構え 0..1, 落ちる 0..1)：画面の中では回さない。カメラから遠ざかる向きに倒れるので、縦に縮める
+            pre_k, k = v
+            st = self.sprites["stand"][0]
+            fore, hand, body, elbow, wrist = self.arm
+            pv = self.hip["stand"]
+            yy = np.arange(st.shape[0])[:, None, None]
+            up = smoothstep(pv[0] + 3, pv[0] - 3, yy)                           # 腰（手すりの高さ）から上
+            u = min(1.0, k / 0.55) ** 1.6                                       # はじめはゆっくり
+            su = (1 - 0.08 * pre_k) * (1 - 0.45 * u)                            # 上半身：奥へ倒れて縮みながら、
+            upper = self._xform(self._yscale(st * up, su, pv[0]), 0, pv, ((pv[0] - self.com["stand"][0]) * 0 + 125 * u, 0))
+            upper = upper * smoothstep(pv[0] + 2, pv[0] - 2, yy)                # 手すりの線より下（向こう側）へ沈んで消える
+            g = smoothstep(0.22, 0.6, k)
+            sl = 1 - 1.4 * g                                                    # 脚：足先が床から浮き、腰を支点に手すりの上へ（負＝足先が上）
+            legs = self._yscale(st * (1 - up), sl, pv[0])
+            if sl < 0:
+                legs = legs * smoothstep(pv[0] + 2, pv[0] - 2, yy)              # 越えた脚は手すりより上だけ見える
+            drop = FALL_PX * (max(0.0, k - 0.68) / 0.32) ** 2                    # 最後に、残った脚の影がまっすぐ下へ重力で抜ける
+            out = self._xform(upper + legs, 0, pv, (drop, dx))
+            return self._clip(out, clip)
         if kind == "morph":                                                     # v = 0..1：腰を支点に前へ傾けながら、立ち姿 → 身を乗り出す姿へ
             tilt, m = smoothstep(0, 0.7, v), smoothstep(0.45, 1, v)            # 先に体ごと傾け、後半で形を移す
             st = self.sprites["stand"][0]                                       # 足は床に固定：腰（手すりの高さ）から上だけを前へ折る
@@ -2298,11 +2331,13 @@ class FallingWoman:
             return None
         if self.real:
             if t < tl:                                                            # 肘から先を左右に振り、体もわずかに揺れる
-                return ("real", "wave", (16 * np.sin(2 * np.pi * 1.4 * (t - ts)), 0.7 * np.sin(1.3 * t)), dx, None)
-            if t < tf:                                                            # 0.5〜1秒かけて手すりへ重心を移す
-                return ("real", "morph", smoothstep(0, 1, (t - tl) / (tf - tl)), dx, None)
+                ph = 2 * np.pi * 1.4 * (t - ts)
+                return ("real", "wave", (12 * np.sin(ph), 6 * np.sin(ph - 0.9)), dx, None)
+            if t < tf:                                                            # 手が止まり、わずかに後ろへ重心を移す（上半身がほんの少し縮む）
+                k = smoothstep(0, 1, (t - tl) / (tf - tl))
+                return ("real", "back", (k, 0.0), dx, None)
             k = (t - tf) / (te - tf)                                              # 腰壁（ベランダの床の線）より下は隠す
-            return ("real", "fall", k, dx, self.floor + 70 * max(0.0, 1 - k * 4))
+            return ("real", "back", (1.0, k), dx, self.floor)
         if t < tl:
             return ("stand", 0.0, dx + np.sin(t * 2.3) * 0.6, 0.0, self.rail)
         if t < tf:
@@ -2373,7 +2408,7 @@ def balcony_loop():
     rail = fw.rail
     fps, L = FPS, 6.0
     n_fr = int(L * fps)
-    events = [(0.0, 2.0, 2.8, 3.55, 22, 0)]                           # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
+    events = [(0.0, 2.0, 2.8, 3.7, 22, 0)]                           # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
     frames, mosaic = [], None
     rg = np.random.default_rng(86)
     for i in range(n_fr):
