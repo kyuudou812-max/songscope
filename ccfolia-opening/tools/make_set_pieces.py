@@ -327,7 +327,7 @@ def nandomo():
         late = 0.5 if tt > dur - 0.5 else 0.0                               # 最後の0.5秒で一段暗く（全面を変えるのは1回だけ）
         dim = (150 - 95 * wm) / 255 * k
         dim = dim + (1 - dim) * late * 0.8
-        if i % 3 == 0 or wcache is None:                                    # 窓の女は1秒10コマ（容量を 5MB に収めるため。モーションブラーでカクつきは目立たない）
+        if i % 4 == 0 or wcache is None:                                    # 窓の女とカーテンは1秒7.5コマ（容量を 5MB に収めるため。モーションブラーでカクつきは目立たない）
             w = fw.frame(tt, events, shutter=1 / 14)
             wcache = w if w is not None else (np.zeros((720, 1280, 3), np.float32), np.zeros((720, 1280), np.float32))
         rgb, a = wcache
@@ -337,7 +337,8 @@ def nandomo():
     hold = int(0.2 * FPS)
     frames += [frames[-1]] * hold
     frames.append(Image.new("RGBA", (1280, 720), BLACK + (255,)))     # 真っ黒（ここで音も止まる）
-    save_webp_anim(frames, OUT / "ep8" / "84_nandomo.webp", lossless=False, quality=34)
+    small = [f.resize((854, 480), Image.LANCZOS) for f in frames]       # 横切るカーテンの面積が大きいので、854×480 で書き出して 5MB に収める（ココフォリアが画面に引き伸ばす）
+    save_webp_anim(small, OUT / "ep8" / "84_nandomo.webp", lossless=False, quality=32)
     return frames
 
 
@@ -2095,6 +2096,7 @@ def ambience():
 # ChatGPT の3枚（人なし／手を振る女／のけぞる女。同じ構図）の差から女の形だけを切り出し、
 # 手を振って立つ → のけぞる → 手すりの向こうへ沈んで消える → 誰もいない、を6秒でループさせる（『回路』のように、遠くから淡々と）。
 # 窓の外の白くぼやけた景色は、こちらで白いモザイク（画素の粗いブロック）にして揺らす（本文「白いモザイクをかけていた」）
+BALCONY_ARCH = ROOT / "assets" / "ep8_balcony_3.png"                    # 4枚目（03_fall_1）：反らせて後ろへ倒れはじめる姿。あれば落ちる所を見せずカーテンで隠す
 BALCONY = [ROOT / "assets" / f"ep8_balcony_{k}.png" for k in range(3)]   # 届いたらここに置く（0=人なし、1=手を振る、2=のけぞる）
 WINDOW_DRAFT = (205, 30, 505, 445)                                     # 窓の範囲（仮：家具のない部屋の構図）
 WINDOW_REAL = (130, 40, 495, 425)                                      # 窓の範囲（届いたベランダの絵。1280×720 で測った）
@@ -2157,7 +2159,7 @@ class FallingWoman:
       - 絵と同じ強さの粒子を、毎コマ変えて乗せる
     返すのは 1280×720 の (RGB 0..255, アルファ 0..1) の float の組。透明なところの色は 0"""
 
-    def __init__(self, e, a, b, ma, mb, rail, floor=None, real=False):
+    def __init__(self, e, a, b, ma, mb, rail, floor=None, real=False, arch=None):
         from scipy.ndimage import gaussian_filter
         self.gf = gaussian_filter
         x0, y0, x1, y1 = WINDOW
@@ -2190,6 +2192,21 @@ class FallingWoman:
             self.hip[key] = np.array([rail - by0, hip_x - bx0], np.float64)
             self.com = getattr(self, "com", {})
             self.com[key] = np.array([ys.mean() - by0, xs.mean() - bx0], np.float64)   # 重心
+        if arch is not None:                                                    # 反らせて後ろへ倒れはじめる姿（03_fall_1）。足もとは同じ床
+            img, m = arch
+            alpha = gaussian_filter(m.astype(np.float32), 1.1)
+            col = self.black + (img.astype(np.float32) - self.black).clip(0, None) * 0.18
+            self.sprites["arch"] = (np.dstack([col * alpha[..., None], alpha])[by0:by1, bx0:bx1], None, None)
+            # 手前を横切るカーテン：絵の左のカーテンの布目（縦のひだ）を写し取り、窓の光で透かす
+            cr = ef[100:470, 485:775]
+            lum = cr.mean(-1)
+            ca = smoothstep(np.percentile(lum, 25), np.percentile(lum, 80), gaussian_filter(lum, 1.0))   # 布のところだけ（後ろの暗い壁は抜く）
+            hh, ww = ca.shape
+            yy_, xx_ = np.mgrid[0:hh, 0:ww]
+            wav = 25 * np.sin(yy_ / 31.0) + 12 * np.sin(yy_ / 9.0 + 1)           # 切り取った縁が直線にならないよう、波打たせてぼかす
+            ca *= smoothstep(0, 110, xx_ + wav - 20) * smoothstep(ww, ww - 60, xx_ - wav) * smoothstep(0, 40, yy_ + wav) * smoothstep(hh, hh - 50, yy_)
+            self.cloth_a = np.clip(ca * 1.15, 0, 0.97).astype(np.float32)
+            self.cloth_rgb = np.clip(cr * 1.35 + 6, 0, 255).astype(np.float32)   # 窓の光を受けて、壁の前より少し明るく
         if real:                                                                # 手を振る腕：肘から先だけを切り分けて、肘を支点に振る
             pre = self.sprites["stand"][0]
             ax, ay, ex, ey, hy, wx, wy = ARM_REAL
@@ -2235,6 +2252,14 @@ class FallingWoman:
             w2 = elbow + np.array([[np.cos(th), np.sin(th)], [-np.sin(th), np.cos(th)]]) @ (wrist - elbow)   # 回したあとの手首の位置
             arm = self._xform(fore, v[0], elbow, (0, 0)) + self._xform(self._xform(hand, v[0], elbow, (0, 0)), v[1], w2, (0, 0))
             return self._xform(body + arm, 0, elbow, (0, dx))
+        if kind == "arch":                                                      # v = 0..1：立ち姿 → 反らせた姿へ、形だけを短く移す（位置は動かさない）
+            m = v
+            A = self.sprites["stand"][0]
+            B = self.sprites["arch"][0]
+            am = (1 - m) * self.gf(A[..., 3], 2.5) + m * self.gf(B[..., 3], 2.5)
+            al = self.gf(np.clip((am - 0.5) * 9 + 0.5, 0, 1), 0.8)
+            col = (A[..., :3] * (1 - m) + B[..., :3] * m) / np.maximum(A[..., 3:] * (1 - m) + B[..., 3:] * m, 1e-4)
+            return self._xform(np.dstack([col * al[..., None], al]), 0, self.hip["stand"], (0, dx))
         if kind == "back":                                                      # v = (構え 0..1, 落ちる 0..1)：画面の中では回さない。カメラから遠ざかる向きに倒れるので、縦に縮める
             pre_k, k = v
             st = self.sprites["stand"][0]
@@ -2346,8 +2371,86 @@ class FallingWoman:
         k = (t - tf) / (te - tf)
         return ("stand", -ang * 0.5 - 3 * k, dx, h * (-0.04 + 0.05 * k + 1.5 * k * k), self.rail)   # 重心が手すりを越えたら、まっすぐ下へ加速して手すりの陰に消える
 
+    def curtain(self, p, t):
+        """暴れるカーテンが窓を右から左へ横切る（p = 0..1）。絵の右のカーテン（はためいている本物の布）を写し取り、
+        大きく手前へ引き伸ばして波打たせる。2枚重ねて、真ん中では女を隠す。返すのは全画面の (色, アルファ, 布の真ん中の x)"""
+        from scipy.ndimage import map_coordinates
+        x0, y0, x1, _ = WINDOW
+        src, sa = self.cloth_rgb, self.cloth_a
+        h, w = sa.shape
+        q = smoothstep(0, 1, p)
+        rgb = np.zeros((720, 1280, 3), np.float32)
+        a = np.zeros((720, 1280), np.float32)
+        yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
+        acc_a = np.zeros((720, 1280), np.float32)
+        acc_c = np.zeros((720, 1280, 3), np.float32)
+        cx_main = None
+        for off, sc, dens, ph in ((150, 1.25, 0.75, 2.0), (0, 1.55, 1.0, 0.0)):
+            cx = (x1 + 260) - q * ((x1 + 260) - (x0 - 330)) + off * (1 - q)
+            if cx_main is None or off == 0:
+                cx_main = cx
+            sx, sy = sc * 1.25, sc * 1.05
+            top = 20 - 30 * sc + 30
+            # 出力の画素 → 布の画素（横の波打ちと、裾ほど遅れるはためき）
+            v = (yy - top) / sy
+            bow = 80 * np.sin(np.pi * q) * np.clip(v / h, 0, 1) ** 1.5
+            u = (xx - cx + bow + 20 * np.sin(yy / 61 + 6.5 * t + ph) + 8 * np.sin(yy / 19 - 9 * t + ph)) / sx + w / 2
+            v = v + 6 * np.sin(xx / 47 + 5 * t + ph)
+            al = map_coordinates(sa, [v, u], order=1, mode="constant", cval=0) * dens
+            col = np.dstack([map_coordinates(src[..., k], [v, u], order=1, mode="constant", cval=0) for k in range(3)])
+            acc_c = col * al[..., None] + acc_c * (1 - al[..., None])
+            acc_a = al + acc_a * (1 - al)
+        rgb = acc_c / np.maximum(acc_a[..., None], 1e-4)
+        a = acc_a
+        a[a < 1 / 255] = 0                                                      # 粒子は写し取った布目に元から入っている（足すと容量が膨らむ）
+        rgb[a == 0] = 0
+        return np.clip(rgb, 0, 255), a, cx_main
+
+    def frame_real(self, t, events):
+        """届いた絵：手を振る（肘から先）→ 一瞬止まる → 反らせた姿へ移る → カーテンが横切って隠す → いない。落ちる所は見せない。
+        ev = (立ち始め, 手を止める, カーテンが来る, カーテンが去る, -, 横のずれ)"""
+        rgb = np.zeros((720, 1280, 3), np.float32)
+        a = np.zeros((720, 1280), np.float32)
+        curt = []
+        for ts, tl, tc, te, _, dx in events:
+            if not ts <= t < te:
+                continue
+            p = (t - tc) / (te - tc) if t >= tc else -1
+            fade = 1.0
+            if p >= 0:
+                cr, ca, cx = self.curtain(p, t)
+                curt.append((cr, ca))
+                wx = self.hip["stand"][1] + self.box[0]
+                fade = float(np.clip((cx - (wx - 60)) / 120, 0, 1))             # 布が女の前を通る間に消え、過ぎたらもういない
+                if fade <= 0:
+                    continue
+            if t < tl:
+                ph = 2 * np.pi * 1.4 * (t - ts)
+                pose = ("real", "wave", (12 * np.sin(ph), 6 * np.sin(ph - 0.9)), dx, None)
+            elif t < tl + 0.15:
+                pose = ("real", "wave", (0.0, 0.0), dx, None)                   # 一瞬止まる
+            else:
+                pose = ("real", "arch", smoothstep(0, 1, (t - tl - 0.15) / 0.4), dx, None)
+            w = self.render([pose])
+            if w is not None:
+                wr, wa = w
+                wa = wa * fade
+                na = wa + a * (1 - wa)
+                rgb = (wr * wa[..., None] + rgb * (a * (1 - wa))[..., None]) / np.maximum(na[..., None], 1e-4)
+                a = na
+        for cr, ca in curt:                                                     # カーテンは女より手前
+            na = ca + a * (1 - ca)
+            rgb = (cr * ca[..., None] + rgb * (a * (1 - ca))[..., None]) / np.maximum(na[..., None], 1e-4)
+            a = na
+        if not a.any():
+            return None
+        rgb[a == 0] = 0
+        return rgb, a
+
     def frame(self, t, events, shutter=1 / 40, n=7):
         """時刻 t のコマ。落ちている間だけ、シャッターの開いている間を n 回描いて平均する"""
+        if self.real and "arch" in self.sprites:
+            return self.frame_real(t, events)
         poses = []
         for ev in events:
             moving = ev[2] <= t < ev[3]
@@ -2378,7 +2481,18 @@ def balcony_woman():
     ma, mb = figure_mask(e, a), figure_mask(e, b)
     x0, y0, x1, y1 = WINDOW
     if not draft:
-        return finish_woman(FallingWoman(e, a, b, ma, mb, RAIL_REAL, FLOOR_REAL, real=True), e, draft)
+        arch = None
+        if BALCONY_ARCH.exists():
+            f = toned(BALCONY_ARCH)
+            from scipy.ndimage import binary_closing, binary_fill_holes
+            mk = figure_mask(e, f)
+            ys, xs = np.where(mk)
+            fl, el = f.astype(np.float32).mean(-1), e.astype(np.float32).mean(-1)
+            box = np.zeros_like(mk)
+            box[ys.min():ys.max() + 1, xs.min():xs.max() + 1] = True
+            mk = mk | (box & (fl < 9) & (el > 15))                               # 手すりに重なって差が出にくい頭・胴も拾う
+            arch = (f, binary_fill_holes(binary_closing(mk, iterations=3)))
+        return finish_woman(FallingWoman(e, a, b, ma, mb, RAIL_REAL, FLOOR_REAL, real=True, arch=arch), e, draft)
     # 手すりの高さ：窓の高さの 45〜80% の範囲で、横に強い線がいちばん目立つ行（窓の下枠を拾わないように範囲を絞る）
     g = np.abs(np.diff(e[y0:y1, x0:x1].astype(np.float32).mean(-1), axis=0)).mean(1)
     lo, hi = int(len(g) * 0.45), int(len(g) * 0.8)
@@ -2408,7 +2522,7 @@ def balcony_loop():
     rail = fw.rail
     fps, L = FPS, 6.0
     n_fr = int(L * fps)
-    events = [(0.0, 2.0, 2.8, 3.7, 22, 0)]                           # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
+    events = [(0.0, 2.4, 3.1, 4.0, 22, 0)] if "arch" in fw.sprites else [(0.0, 2.0, 2.8, 3.7, 22, 0)]                          # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
     frames, mosaic = [], None
     rg = np.random.default_rng(86)
     for i in range(n_fr):
