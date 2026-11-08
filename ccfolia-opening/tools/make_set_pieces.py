@@ -297,18 +297,22 @@ def nandomo():
         im = halo(im, 5, 6, 1.1)
         return im.rotate(ang, resample=Image.BICUBIC, expand=True)
 
-    # 落ちる回の予定：ベランダと同じ「振る → 止まる → 反る → まっすぐ落ちる」。はじめは間をおいて1回ずつ、
-    # 文字が増えるにつれて間が縮み、後半は前の回が落ちきる前に次の女がもう立っている
+    # 落ちる回の予定：1回目はベランダと同じ「振る → 止まる → 物理の女へ受け渡し → 手すりまで下がって越え、落ちる」。
+    # 2回目からは、物理の途中（もう手すりの前に立っている所）からいきなり始まり、文字が増えるにつれて間が縮み、
+    # 始まる所も後ろへずれていく（立つ → すぐ腰かける → すぐ倒れる）。後半は前の回が落ちきる前に次の女がもう立っている。
+    # 横にずらすと手すりの holdout とずれるので、どの回も同じ位置
+    from scipy.ndimage import gaussian_filter
     fw, e, outside, _ = balcony_woman()
-    events, ts = [], 0.25
-    while ts < dur:
-        prog = ts / dur
-        speed = 1 + 1.8 * prog ** 1.3
-        wave = max(0.15, 1.5 * np.exp(-prog * 3.2)) * (0.85 + 0.3 * rg.random())
-        tl = ts + wave
-        tf = tl + 0.15 + 0.35 / speed
-        events.append((ts, tl, tf, rg.normal(0, 3 + 6 * prog)))
-        ts = tf + DROP_T - (0.25 * prog ** 0.7 if prog > 0.4 else -0.5 * (1 - prog))
+    sim = SimFall(fw)
+    light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
+    t_rel = sim.meta["t_release"]
+    events = [(0.25, 0.95, 0, 0)]
+    ts, gap, off = 3.4, 1.5, sim.meta["t_walk"][1] - 0.35
+    while ts < dur - 0.4:
+        events.append((ts, ts, off, 0))
+        ts += gap
+        gap = max(0.28, gap * 0.76)
+        off = min(t_rel - 0.12, off + 0.14)
     print("落ちる回数", len(events))
     cp = CurtainPlate(e)
     mos = BalconyMosaic(e, outside, seed=84)
@@ -323,7 +327,7 @@ def nandomo():
         if i % 2 == 0 or wcache is None:                                    # 絵（カーテン・女）は1秒15コマ（容量のため。落ちる所は縦のブレでつながる）
             if i % 6 == 0:
                 mos.step()
-            img = over(cp.warp(over(e.astype(np.float32), mos.cur), tt), drop_layer(fw, tt, events, shutter=1 / 30))
+            img = over(cp.warp(over(e.astype(np.float32), mos.cur), tt), sim_layer(fw, sim, tt, events, light))
             wcache = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA")
         fr = Image.alpha_composite(wcache, layer)                           # 明るい絵のまま（暗くしない）。暗くなるのは最後の真っ黒だけ
         if tt > dur - 0.5:
@@ -2668,6 +2672,103 @@ def drop_layer(fw, t, events, shutter=1 / 50, n=6):
     return rgb, a
 
 
+# ---------------------------------------------------------------- 第八話：Blender の物理で作った落下（tools/fall_sim_blender.py）
+# 背景の絵に合わせたカメラ（f=605px・地平線 y365・高さ 0.56m）で、女が後ろ向きに手すりまで下がり、跳んで手すりに腰かけ、
+# 腕を上げて反ったところから重力で後ろへ倒れ、脚が手すりを越えて、ベランダの床の縁の向こうへ落ちる。
+# 影のアルファ（30fps・1/120 秒おきの3回平均のブレ・手すりと床の holdout 込み）を build/cache/fall_sim/ から読む
+FALL_SIM = ROOT / "build" / "cache" / "fall_sim"
+HANDOFF_FADE = 3                                                       # 絵の女 → 物理の女へ、重ねて移すコマ数
+
+
+class SimFall:
+    """物理の落下の影。frame(i) は 1280×720 のアルファ 0..1（受け渡しのコマで、絵の女と大きさ・位置がそろうよう、最初の 0.6 秒だけ寄せる）"""
+
+    def __init__(self, fw):
+        from scipy.ndimage import gaussian_filter
+        meta_p = FALL_SIM / "meta.json"
+        if not meta_p.exists():
+            subprocess.run([sys.executable, str(ROOT / "tools" / "fall_sim_blender.py")], check=True)
+        self.meta = json.loads(meta_p.read_text())
+        self.n = self.meta["frames"]
+        self.gone = self.meta["gone_frame"]                              # このコマで見えなくなる
+        self.release = self.meta["release_frame"]
+        self.gf = gaussian_filter
+        self.cache = {}
+        # 受け渡し：絵の女（手を振る姿の最後）と、物理の女の最初のコマの、足もと・身長・真ん中をそろえる
+        st = fw._pre(("real", "wave", (0.0, 0.0), 0, None))[..., 3]
+        bx0, by0 = fw.box[:2]
+        ys, xs = np.where(st > 0.5)
+        a0 = self._load(0)
+        ys2, xs2 = np.where(a0 > 0.5)
+        self.k_s = (ys.max() - ys.min()) / max(1, ys2.max() - ys2.min())
+        self.k_foot = np.array([ys.max() + by0, np.median(xs) + bx0], np.float64)
+        self.k_foot2 = np.array([ys2.max(), np.median(xs2)], np.float64)
+        print("受け渡しの合わせ：大きさ", round(self.k_s, 3), "足もとのずれ", (self.k_foot - self.k_foot2).round(1))
+
+    def _load(self, i):
+        if i not in self.cache:
+            self.cache[i] = np.asarray(Image.open(FALL_SIM / "main" / f"{i:04d}.png"), np.float32) / 255
+        return self.cache[i]
+
+    def frame(self, i):
+        from scipy.ndimage import affine_transform
+        if i < 0 or i >= self.n:
+            return None
+        a = self._load(i)
+        k = 1 - smoothstep(0, 0.6 * FPS, i)                              # 最初の 0.6 秒だけ、絵の女の大きさ・位置へ寄せる（以後はカメラの合わせのまま）
+        if k > 0:
+            s = 1 + (self.k_s - 1) * k
+            t = self.k_foot2 + (self.k_foot - self.k_foot2) * k
+            M = np.eye(2) / s                                            # 出力 → 入力
+            off = self.k_foot2 - M @ t
+            a = affine_transform(a, M, offset=off, order=1)
+        return self.gf(a, 0.45)                                          # 縁のやわらかさを絵の女（ぼかし 1.1 のマット）に近づける
+
+
+def sim_layer(fw, sim, t, events, light):
+    """events: (立ち始め, 受け渡し, 物理の何秒目から, 横のずれ) の並び。
+    物理の何秒目から＝0 なら：手を振る（絵の女）→ 手が止まる → 受け渡し（数コマ重ねる）→ 物理の影。
+    0 より大きければ（「何度も」の後半）：立ち始めの時刻に、物理の途中（手すりの前に立っている所など）からいきなり始まる。
+    返すのは全画面の (色, アルファ) か None。影の色は逆光の黒、縁には窓の光を回し、絵と同じ粒子を乗せる"""
+    a = np.zeros((720, 1280), np.float32)
+    bx0, by0, bx1, by1 = fw.box
+    for ts, th, off, dx in events:
+        if t < ts:
+            continue
+        if off > 0:
+            i = int(round((t - ts + off) * FPS))
+            pa = sim.frame(i) if i <= sim.gone + 1 else None
+            if pa is not None and dx:
+                pa = np.roll(pa, int(dx), axis=1)
+        else:
+            i = int(round((t - th) * FPS))
+            pa = None
+            if i < HANDOFF_FADE:
+                if t < th - 0.15:
+                    ph = 2 * np.pi * 1.4 * (t - ts)
+                    pose = ("real", "wave", (12 * np.sin(ph), 6 * np.sin(ph - 0.9)), dx, None)
+                else:
+                    pose = ("real", "wave", (0.0, 0.0), dx, None)            # 手が止まる
+                pa = np.zeros((720, 1280), np.float32)
+                pa[by0:by1, bx0:bx1] = np.clip(fw._pre(pose)[..., 3], 0, 1)
+                if i >= 0:                                                   # 受け渡し：数コマ重ねて移す
+                    q = (i + 1) / (HANDOFF_FADE + 1)
+                    pa = pa * (1 - q) + sim.frame(i) * q
+            elif i <= sim.gone + 1:
+                pa = sim.frame(i)
+        if pa is not None:
+            a = pa + a * (1 - pa)
+    if not a.any():
+        return None
+    inner = fw.gf(a, 2.2)
+    wrap = np.clip(np.clip(a - inner, 0, 1) * 2.2, 0, 0.75)[..., None]
+    col = fw.black * (1 - wrap) + light * wrap
+    col = col + fw.rg.normal(0, fw.grain, a.shape)[..., None]
+    a = np.where(a < 1 / 255, 0, a)
+    col = np.where(a[..., None] > 0, np.clip(col, 0, 255), 0)
+    return col, a
+
+
 def over(base, layer):
     """base（H×W×3 float）に (色, アルファ) を重ねる"""
     if layer is None:
@@ -2737,19 +2838,28 @@ def finish_woman(fw, e, draft):
     return fw, e, outside, draft
 
 
+BALCONY_HANDOFF = 1.7                                                   # ベランダのループで、絵の女（手を振る）から物理の女へ移る時刻（秒）
+
+
 def balcony_loop():
-    """ベランダ（全面の前景、ループ 9.2 秒）：手を振る → 一瞬止まる → 反らせた姿 → まっすぐ落ちて消える → 誰もいない窓（カーテンは息をし続ける）
-    → 下をのぞきこみたくなるように、窓へゆっくり寄る → 寄りきった所から、立っている女のいる引きの画へ溶けて戻る。
-    音（別のカットイン）との合わせ：消える瞬間 BALCONY_GONE 秒で風を切り、そこから 1.0〜1.5 秒あとに遠く下で重い音"""
+    """ベランダ（全面の前景、ループ 9.2 秒）：手を振る → 手が止まる → 物理の女へ受け渡し → 後ろ向きに手すりまで下がる → 跳んで手すりに腰かける
+    → 腕を上げて反り、重力で後ろへ倒れ、脚が手すりを越えて、ベランダの床の縁の向こうへ落ちて消える（Blender の物理。tools/fall_sim_blender.py）
+    → 誰もいない窓（カーテンは息をし続ける）→ 下をのぞきこみたくなるように、窓へゆっくり寄る → 寄りきった所から、立っている女のいる引きの画へ溶けて戻る。
+    音（別のカットイン）との合わせ：消える瞬間 balcony_gone() 秒で風を切り、同時に 86b（頭 1.2 秒は無音）を鳴らす"""
+    from scipy.ndimage import gaussian_filter
     from fxlib import parallax_frame, plate_depth
     fw, e, outside, draft = balcony_woman()
+    sim = SimFall(fw)
+    light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
     fps, L = FPS, 9.2
     n_fr = int(round(L * fps))
-    ev = [(0.0, 2.2, 2.75, 0)]
+    ev = [(0.0, BALCONY_HANDOFF, 0, 0)]
+    gone = BALCONY_HANDOFF + sim.gone / FPS
+    print("ベランダ：消える時刻", round(gone, 2), "秒（", int(round(gone * fps)), "コマ目）")
     cp = CurtainPlate(e)
     mos = BalconyMosaic(e, outside)
     depth = plate_depth(BALCONY[0])
-    push0, push1, fade0 = 5.6, 8.6, 8.6
+    push0, push1, fade0 = gone + 0.5, 8.6, 8.6
     frames = []
     for i in range(n_fr):
         tt = i / fps
@@ -2757,14 +2867,14 @@ def balcony_loop():
             mos.step()
         mr, ma = mos.cur
         base = over(e.astype(np.float32), (mr, ma))
-        img = over(cp.warp(base, tt), drop_layer(fw, tt, ev))
+        img = over(cp.warp(base, tt), sim_layer(fw, sim, tt, ev, light))
         if tt >= push0:
             k = smoothstep(push0, push1 + 0.6, tt)
             img = parallax_frame(img, depth, k, push=0.22, drift=(0.0, 0.0), near_gain=0.8,
                                  center=(330, 300 + 70 * k))
             if tt >= fade0:                                            # 溶けて引きの画（立っている女）へ戻る＝ループの継ぎ目
                 q = smoothstep(fade0, L, tt)
-                wide = over(cp.warp(base, tt), drop_layer(fw, 0.0, ev))
+                wide = over(cp.warp(base, tt), sim_layer(fw, sim, 0.0, ev, light))
                 img = img * (1 - q) + wide * q
         frames.append(Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA"))
     sfx = "_draft" if draft else ""
@@ -2774,7 +2884,12 @@ def balcony_loop():
     return frames, OUT / "ep8" / f"86_balcony_bg{sfx}.jpg"
 
 
-BALCONY_GONE = 2.75 + DROP_T                                               # ベランダのループで女が手すりの下へ消えきる時刻（秒）
+def balcony_gone():
+    """ベランダのループで女が見えなくなる時刻（秒）。物理のシミュレーションの結果から"""
+    meta = json.loads((FALL_SIM / "meta.json").read_text())
+    return BALCONY_HANDOFF + meta["gone_frame"] / FPS
+
+
 
 
 def paste_clip(dst, im, x, y):
@@ -2797,12 +2912,19 @@ def to_rgba(rgb, a):
 
 def balcony():
     fr, bg = balcony_loop()
-    write_mp3(OUT / "preview" / "silence.mp3", silence(13))
-    preview(bg, fr * 2, OUT / "preview" / "silence.mp3", "ep8_balcony_loop", tail=0)
+    # 確認用の音：風（82）は消える瞬間で切り、同時に 86b（頭 1.2 秒は無音）を鳴らす（DIRECTION の合わせ方そのまま）
+    gone = balcony_gone()
+    tmp = OUT / "preview" / "tmp_balcony.mp3"
+    ms = int(round(gone * 1000))
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "ep8" / "82_bang_gust.mp3"), "-i", str(OUT / "ep8" / "86b_far_thud.mp3"),
+                    "-filter_complex", f"[0]atrim=0:{gone:.3f},afade=t=out:st={gone - 0.03:.3f}:d=0.03,apad[w];[1]adelay={ms}|{ms}[t];"
+                    "[w][t]amix=inputs=2:duration=longest:normalize=0", "-t", f"{len(fr) * 2 / FPS:.2f}", str(tmp)], check=True)
+    preview(bg, fr * 2, tmp, "ep8_balcony_loop", tail=0)
     ep8_nandomo()                                                  # 「何度も」の窓の向こうも同じ絵から作るので、いっしょに作り直す
-
-
-
+    (OUT / "ep9").mkdir(parents=True, exist_ok=True)
+    eb = endb_fall()                                               # エンドB も同じ物理の落ちる所から
+    write_mp3(OUT / "preview" / "silence.mp3", silence(13))
+    preview(SCENES / "ep6_01_restaurant.jpg", eb, OUT / "preview" / "silence.mp3", "ep9_endb_fall", tail=0.5)
 
 
 # ================================================================ 第七話：ハゲタカの目（絵が届いたら本番）
@@ -2940,54 +3062,46 @@ ENDB_GLASS = (0, 0, 430, 262)                                      # ファミ�
 
 
 def endb_fall():
-    """ベランダと同じ物理：反らせた姿（回さない・手足も動かさない）が、ガラスの外をまっすぐ重力で一瞬落ちる。縦のブレと、わずかな縮み"""
+    """ベランダと同じ物理（tools/fall_sim_blender.py）の、落ちていく所だけを使う：2つ下の階の窓の高さに置いたカメラから見た体の影を、
+    ファミレスの左の窓（明るいガラスだけ）に一瞬だけ通す。上から入ってきた時にはもう速い（約 6m 落ちたあと）。シャッター 180° のブレ込み"""
     from PIL import ImageFilter
-    from scipy.ndimage import binary_closing, binary_fill_holes, shift
     (e, _, _), draft = balcony_inputs()
-    if BALCONY_ARCH.exists():
-        f = toned(BALCONY_ARCH, bright=True)
-        mk = binary_fill_holes(binary_closing(figure_mask(e, f), iterations=3))
-    else:
-        f = balcony_inputs()[0][2]
-        mk = figure_mask(e, f)
-    ys, xs = np.where(mk)
-    fig = Image.fromarray(np.dstack([np.broadcast_to(np.array([22, 15, 11], np.uint8), f.shape),         # 逆光の影（ほぼ黒）
-                                     (mk * 255).astype(np.uint8)]), "RGBA").crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
-    h = 230
-    fig = fig.resize((int(fig.width * h / fig.height), h), Image.LANCZOS).filter(ImageFilter.GaussianBlur(0.8))
+    meta_p = FALL_SIM / "meta.json"
+    if not meta_p.exists():
+        subprocess.run([sys.executable, str(ROOT / "tools" / "fall_sim_blender.py")], check=True)
+    meta = json.loads(meta_p.read_text())
+    idx = meta["endb_frames"]
     rest = np.asarray(Image.open(SCENES / "ep6_01_restaurant.jpg").convert("L").resize((1280, 720)), np.float32)
     x0, y0, x1, y1 = ENDB_GLASS
     glass = np.zeros((720, 1280), np.float32)
     glass[y0:y1, x0:x1] = smoothstep(115, 150, rest[y0:y1, x0:x1])      # 明るいガラスだけ（窓枠・植木・人の頭は残す）
     glass = np.asarray(Image.fromarray((glass * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5)), np.float32) / 255
     pre, post = int(0.4 * FPS), int(0.6 * FPS)
-    T = 0.36                                                            # 窓の上から下まで（ベランダの DROP_T と同じ）
-    y_start, y_end = -h - 40, y1 + 10                                   # 上から入ってきて、すでに速い（上の階から落ちてきた）
-    v0 = 0.6 * (y_end - y_start) / T                                     # y = y_start + v0 t + a t²/2
-    acc = 2 * ((y_end - y_start) - v0 * T) / T ** 2
-    fall = int(round(T * FPS)) + 1
-    frames = []
-    for i in range(pre + fall + post):
-        u = (i - pre) / FPS
-        if 0 <= u <= T + 1e-6:
-            acc_a = np.zeros((720, 1280, 4), np.float32)
-            n = 6
-            for j in range(n):                                          # シャッターの間を重ねる＝縦のブレ
-                uu = max(0.0, u - j / n / 50)
-                s = 1 - 0.06 * uu / T
-                im = fig.resize((max(1, int(fig.width * s)), max(1, int(h * s))), Image.BILINEAR)
-                lay = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
-                paste_clip(lay, im, 80, int(y_start + v0 * uu + 0.5 * acc * uu * uu))
-                a = np.asarray(lay, np.float32)
-                a[..., :3] *= a[..., 3:] / 255
-                acc_a += a
-            acc_a /= n
-            al = acc_a[..., 3] * glass
-            col = np.where(acc_a[..., 3:] > 0, acc_a[..., :3] / np.maximum(acc_a[..., 3:], 1e-4) * 255, 0)
-            fr = Image.fromarray(np.dstack([np.clip(col, 0, 255), np.clip(al, 0, 255)]).astype(np.uint8), "RGBA")
-        else:
-            fr = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
-        frames.append(clean_alpha(fr))
+    gw = x1 - x0
+    frames = [Image.new("RGBA", (1280, 720), (0, 0, 0, 0))] * pre
+    # 物理の体の形（ブレ込み）はそのまま使い、窓の中を通る速さだけ、約 6m 落ちたあとの速さ（約 11m/s）に合わせる：
+    # ガラスの高さ 262px をおよそ 1.6m とみて、体が上から入って下へ抜けるまで約 0.2 秒
+    sprites = []
+    for i in idx:
+        a = np.asarray(Image.open(FALL_SIM / "endb" / f"{i:04d}.png"), np.float32)
+        ys, xs = np.where(a > 8)
+        if len(ys) == 0 or ys.min() == 0 or ys.max() >= a.shape[0] - 1:
+            continue                                                    # 体が切れていないコマだけ
+        sprites.append(Image.fromarray(a[ys.min():ys.max() + 1, xs.min():xs.max() + 1].astype(np.uint8)))
+    hpx = 262 / 1.6 * 1.53                                              # 身長 1.53m のガラス上の大きさ
+    n_f = 7
+    for k in range(n_f):
+        sp = sprites[min(len(sprites) - 1, k * len(sprites) // n_f)]
+        sc = hpx / max(sp.height, sp.width) * 1.1
+        sp = sp.resize((max(1, int(sp.width * sc)), max(1, int(sp.height * sc))), Image.LANCZOS)
+        y = int(-sp.height + (y1 + sp.height + 20) * (k + 0.5) / n_f)
+        lay = Image.new("L", (1280, 720), 0)
+        lay.paste(sp, (int(215 - sp.width / 2), y))
+        al = np.asarray(lay, np.float32) * glass
+        col = np.zeros((720, 1280, 3), np.uint8)
+        col[al > 0] = (22, 15, 11)                                      # 逆光の影（ほぼ黒）
+        frames.append(clean_alpha(Image.fromarray(np.dstack([col, np.clip(al, 0, 255).astype(np.uint8)]), "RGBA")))
+    frames += [Image.new("RGBA", (1280, 720), (0, 0, 0, 0))] * post
     sfx = "_draft" if draft else ""
     path = OUT / "ep9" / f"89_endb_fall{sfx}.webp"
     save_webp_anim(frames, path, lossless=True, loop=1)
