@@ -2635,9 +2635,11 @@ def drop_layer(fw, t, events, shutter=1 / 50, n=6):
                 pose = ("real", "wave", (12 * np.sin(ph), 6 * np.sin(ph - 0.9)), dx, None)
             elif t < tl + 0.15:
                 pose = ("real", "wave", (0.0, 0.0), dx, None)             # 一瞬止まる
-            else:
-                pose = ("real", "arch", smoothstep(0, 1, (t - tl - 0.15) / max(tf - tl - 0.15, 1e-3)), dx, None)
+            else:                                                         # 1コマでぱっと反らせた姿に変わる（補間しない。一瞬で姿勢が変わる不気味さ）
+                pose = ("real", "arch", 1.0, dx, None)
             pre = fw._pre(pose)
+            if tl + 0.15 <= t < tl + 0.15 + 1 / FPS:                      # 切り替わったコマだけ、軽い縦ブレ
+                pre = np.dstack([fw.gf(pre[..., k], (4, 0.6)) for k in range(4)])
         else:
             pre = np.zeros_like(A)
             for j in range(n):                                            # シャッターの開いている間を重ねる（縦のブレ）
