@@ -1864,7 +1864,7 @@ DONORS = [(190, 345), (932, 1092)]                                  # 同じ列�
 
 def hall_for(players):
     from PIL import ImageFilter
-    src = Image.open(SCENES / "ep9_02_hall.jpg").convert("RGB")
+    src = Image.open(lifted("ep9_02_hall.jpg", t=0.3, a=2.6)).convert("RGB")   # ホールの背景・映画と同じ、暗部を持ち上げた絵
     fill = {1: [0, 2, 3], 2: [0, 3], 3: [3], 4: []}[players]          # 残す空席が真ん中に寄るように埋める
     out = src.copy()
     for i, s in enumerate(fill):
