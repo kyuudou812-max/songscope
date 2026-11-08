@@ -371,3 +371,12 @@ def filament_color(level, warm=(255, 196, 140)):
     deep = np.array([255, 110, 40], np.float32)                     # 1000K 前後の、消えかけのフィラメントの色
     return deep + (np.array(warm, np.float32) - deep) * level ** 0.5
 
+
+
+def lift_shadows(img, t=0.25, a=1.2):
+    """暗いモニタでも形が読めるよう、暗部だけを持ち上げるトーンカーブ。黒（0）は黒のまま、t より明るい所は変えない。
+    y = x + a·x·(1 − x/t)²（x < t）。10/255 → 約19/255、t でなめらかにつながる"""
+    x = np.asarray(img, np.float32) / 255
+    k = np.clip(1 - x / t, 0, 1)
+    y = x + a * x * k * k
+    return Image.fromarray((np.clip(y, 0, 1) * 255 + 0.5).astype(np.uint8))

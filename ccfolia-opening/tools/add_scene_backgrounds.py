@@ -36,7 +36,7 @@ SCENES = {   # 話 → [(シーン名, 背景, 前景)]
     7: [("雨の町と行列", S / "ep7_01_rain.jpg", None), ("高架下と階段", S / "ep7_02_underpass.jpg", None),
         ("地下水路", S / "ep7_03_channel.jpg", None), ("水路の合流地点", S / "ep7_04_junction.jpg", None)],
     8: [("家具のない部屋", S / "ep8_01_room.jpg", None)],
-    9: [("廃劇場のロビー", S / "ep9_01_lobby.jpg", None), ("劇場のホール", S / "ep9_02_hall.jpg", None)],
+    9: [("廃劇場のロビー", S / "ep9_01_lobby_lift.jpg", None), ("劇場のホール", S / "ep9_02_hall_lift.jpg", None)],
 }
 TYPES = {".jpg": "image/jpeg", ".webp": "image/webp", ".png": "image/png"}
 

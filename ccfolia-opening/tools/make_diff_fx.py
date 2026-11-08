@@ -166,7 +166,10 @@ def gap_shadow(n=72, fps=15):
         sx = 14 * np.sin(ph) + 5 * np.sin(ph * 3 + 1)        # 向こうを何かが行き来する
         # 影は隙間の線の上で横にずれる（光の床への反射も同じだけ）
         bs = np.stack([map_coordinates(b[..., c], [yy, xx - sx], order=1, mode="nearest") for c in range(3)], -1)
-        al = m * vis[i] * (0.85 + 0.15 * np.sin(ph * 5))
+        as_ = np.stack([map_coordinates(a[..., c], [yy, xx - sx], order=1, mode="nearest") for c in range(3)], -1)
+        # 320px でも「光が影で欠ける」のが読めるよう、door_b の暗くなった分（a−b）を 1.8 倍に強め、出ている間はほぼ不透明に
+        bs = np.clip(as_ - np.clip(as_ - bs, 0, 1) * 1.8, 0, 1)
+        al = np.clip(m * 1.3, 0, 1) * np.clip(vis[i] * 1.25, 0, 1) * (0.9 + 0.1 * np.sin(ph * 5))
         frames.append(rgba(bs, al))
     path = OUT / "ep1" / "15_gap_shadow_loop.webp"
     save_webp_anim(frames, path, fps=fps, lossless=False, quality=80, loop=0)
