@@ -42,7 +42,7 @@
   ep8/81_room_tone_loop.mp3     … 家具のない部屋の空気（BGM、ループ）。「妙に静かだ」で KP が止める
   ep8/82_bang_gust.mp3          … 窓が開く「バン」→ 突風とカーテンのはためき（BGM。頭の一撃はシーンの切り替えと同時）
   ep8/83_card_1〜4.webp         … 四択のカード（スクリーンパネル、38×10 マス）
-  ep8/86_balcony_bg.jpg / 86_balcony_loop.webp … ベランダ（背景）と、手を振る → のけぞる → 沈んで消える女＋白いモザイクのループ（前景）。
+  ep8/86_balcony_bg.jpg / 86_balcony_loop.webp … ベランダ（背景）と、手を振る → 反る → まっすぐ落ちて消える → 窓へ寄る（全面の前景ループ、カーテンは絵の布ごと風で動く）。
                                   絵が届くまでは _draft（家具のない部屋に仮の影）
   ep8/84_nandomo.webp           … 「何度も」が画面を埋めて真っ黒になる。奥の窓では女が何度も落ち続ける（前景、1回再生。balcony でも作り直す）
   ep8/85_shepard_then_silence.mp3 … 上がり続ける音 → 真っ黒になるコマで無音（BGM。前景と同時に始まる）
@@ -138,14 +138,14 @@ def lids(open_, w=640, h=360, feather=0.3):
     u = xx / w
     wob = 0.025 * np.sin(u * 23.0 + 1.3) + 0.018 * np.sin(u * 51.0 + 0.4) + 0.012 * np.sin(u * 97.0)   # まつ毛の不揃い
     cy = h * (0.50 - 0.04 * min(open_, 1))                          # 開くにつれて、すき間の中心が少し上へ
-    a = w * (0.55 + 0.6 * open_)
+    a = w * (1.25 + 0.4 * open_)                                    # 細いすき間でも視野の端から端まで続く（左右の角を黒くしない）
     b_up = max(h * 0.70 * open_, 0.5)                              # 上まぶた（よく動く）
     b_dn = max(h * 0.48 * open_, 0.5)                              # 下まぶた（あまり動かない）
     b = np.where(yy < cy, b_up, b_dn)
     r = np.sqrt(((xx - w / 2) / a) ** 2 + ((yy - cy) / b) ** 2) * (1 + wob * (yy < cy))
     alpha = smoothstep(1 - feather, 1 + feather, r)
-    lash = np.exp(-((r - (1 - feather * 0.9)) / 0.07) ** 2) * (yy < cy) * 0.22 * float(np.clip(1.25 - open_, 0, 1))
-    alpha = np.clip(np.maximum(alpha, lash), 0, 1)
+    # まつ毛の線は描かない：まぶたの縁は目に近すぎて大きくぼけ、主観では線として見えない（以前はすき間の内側に二重の縁が出ていた）
+    alpha = np.clip(alpha, 0, 1)
     veil = 0.10 * np.clip(1 - open_ / 0.9, 0, 1) * (1 - alpha)         # 慣れていない明るさ
     im = np.zeros((h, w, 4), np.float32)
     im[..., :3] = (np.array(BLACK, np.float32) * alpha[..., None] + np.array([235, 215, 190], np.float32) * veil[..., None]) / np.maximum(alpha + veil, 1e-4)[..., None]
@@ -297,24 +297,21 @@ def nandomo():
         im = halo(im, 5, 6, 1.1)
         return im.rotate(ang, resample=Image.BICUBIC, expand=True)
 
-    # 落ちる回の予定：はじめは間をおいて1回ずつ。文字が増えるにつれて周期が縮み、のけぞり・落下も速くなる
-    fw, e, _, _ = balcony_woman()
+    # 落ちる回の予定：ベランダと同じ「振る → 止まる → 反る → まっすぐ落ちる」。はじめは間をおいて1回ずつ、
+    # 文字が増えるにつれて間が縮み、後半は前の回が落ちきる前に次の女がもう立っている
+    fw, e, outside, _ = balcony_woman()
     events, ts = [], 0.25
     while ts < dur:
         prog = ts / dur
-        period = max(0.42, 3.1 * np.exp(-prog * 3.4))
-        speed = 1 + 1.6 * prog ** 1.5
-        stand = max(0.06, period - (0.5 + 0.55) / speed) * (0.85 + 0.3 * rg.random())
-        tl = ts + stand
-        tf = tl + 0.5 / speed * (0.9 + 0.2 * rg.random())
-        te = tf + 0.9 / speed
-        events.append((ts, tl, tf, te, 20 + 6 * rg.random() + 6 * prog, rg.normal(0, 3 + 6 * prog)))
-        ts = te - (0.32 / speed if prog > 0.45 else -0.12 / speed)        # 後半は、落ちきる前に次が立っている
+        speed = 1 + 1.8 * prog ** 1.3
+        wave = max(0.15, 1.5 * np.exp(-prog * 3.2)) * (0.85 + 0.3 * rg.random())
+        tl = ts + wave
+        tf = tl + 0.15 + 0.35 / speed
+        events.append((ts, tl, tf, rg.normal(0, 3 + 6 * prog)))
+        ts = tf + DROP_T - (0.25 * prog ** 0.7 if prog > 0.4 else -0.5 * (1 - prog))
     print("落ちる回数", len(events))
-    from PIL import ImageFilter
-    wm = Image.new("L", (1280, 720), 0)
-    ImageDraw.Draw(wm).rectangle((x0 + 10, y0 + 10, x1 - 10, fw.rail + 30), fill=255)
-    wm = np.asarray(wm.filter(ImageFilter.GaussianBlur(40)), np.float32) / 255
+    cp = CurtainPlate(e)
+    mos = BalconyMosaic(e, outside, seed=84)
     layer = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
     frames, si, wcache = [], 0, None
     for i in range(n_fr):
@@ -323,22 +320,20 @@ def nandomo():
             _, txt, sz, col, a, ang, x, y = strokes[si]
             paste_clip(layer, stroke_img(txt, sz, col, a, ang), int(x), int(y))
             si += 1
-        k = min(1, np.ceil(tt * 6) / 6)                                     # 最初の1秒で沈める（6段。毎コマ全面を変えると容量が膨らむ）
-        late = 0.5 if tt > dur - 0.5 else 0.0                               # 最後の0.5秒で一段暗く（全面を変えるのは1回だけ）
-        dim = (150 - 95 * wm) / 255 * k
-        dim = dim + (1 - dim) * late * 0.8
-        if i % 4 == 0 or wcache is None:                                    # 窓の女とカーテンは1秒7.5コマ（容量を 5MB に収めるため。モーションブラーでカクつきは目立たない）
-            w = fw.frame(tt, events, shutter=1 / 14)
-            wcache = w if w is not None else (np.zeros((720, 1280, 3), np.float32), np.zeros((720, 1280), np.float32))
-        rgb, a = wcache
-        na = dim + a * (1 - dim)
-        rgb = (np.array(BLACK, np.float32) * dim[..., None] + rgb * (a * (1 - dim))[..., None]) / np.maximum(na[..., None], 1e-4)
-        frames.append(Image.alpha_composite(to_rgba(rgb, na), layer))
+        if i % 2 == 0 or wcache is None:                                    # 絵（カーテン・女）は1秒15コマ（容量のため。落ちる所は縦のブレでつながる）
+            if i % 6 == 0:
+                mos.step()
+            img = over(cp.warp(over(e.astype(np.float32), mos.cur), tt), drop_layer(fw, tt, events, shutter=1 / 30))
+            wcache = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA")
+        fr = Image.alpha_composite(wcache, layer)                           # 明るい絵のまま（暗くしない）。暗くなるのは最後の真っ黒だけ
+        if tt > dur - 0.5:
+            fr = Image.blend(fr, Image.new("RGBA", (1280, 720), BLACK + (255,)), 0.5)
+        frames.append(fr)
     hold = int(0.2 * FPS)
     frames += [frames[-1]] * hold
     frames.append(Image.new("RGBA", (1280, 720), BLACK + (255,)))     # 真っ黒（ここで音も止まる）
-    small = [f.resize((854, 480), Image.LANCZOS) for f in frames]       # 横切るカーテンの面積が大きいので、854×480 で書き出して 5MB に収める（ココフォリアが画面に引き伸ばす）
-    save_webp_anim(small, OUT / "ep8" / "84_nandomo.webp", lossless=False, quality=32)
+    small = [f.resize((854, 480), Image.LANCZOS) for f in frames]       # 全面が動くので、854×480 で書き出して 5MB に収める（ココフォリアが画面に引き伸ばす）
+    save_webp_anim(small, OUT / "ep8" / "84_nandomo.webp", lossless=False, quality=55)
     return frames
 
 
@@ -2505,6 +2500,165 @@ class FallingWoman:
         return rgb, a
 
 
+# ---------------------------------------------------------------- 第八話：カーテン（絵の布をそのまま動かす）と、まっすぐ落ちる女
+# カーテンの動きは Blender の布シミュレーション（tools/curtain_sim_blender.py：上辺をレールに固定した 1.4×2.3m の薄布に、
+# 外から部屋の中へ 4 秒周期の突風）で確かめた数値に合わせる：
+#   ・振れ幅は高さ h（0=レール, 1=裾）の h^1.25 に比例（シミュレーション 0.055/0.111/0.192/0.307m @ h=.25/.5/.75/1）
+#   ・平均のふくらみは h について上に凸（0.25/0.39/0.48/0.51m）：上の方がすぐ部屋側へ出て、裾は寝る
+#   ・突風に対する遅れ：レール近く 1.33s → 裾 2.0s（レール→裾へ 約0.7s で伝わる。2.3m なら 約3m/s）
+#   ・裾は布が寄って幅が 1.4 → 約1.0m に狭まる
+# 絵の中では「部屋の中へ」ふくらむ向き＝カメラ側なので、画面では布の流れる向き（左は右下、右は右）への伸びと持ち上がりとして見える
+CURTAIN_GUST = 4.6                                                     # 突風の周期（秒）。ループ 9.2 秒にちょうど 2 回
+CURTAIN_LAG = 0.7                                                      # レール→裾へ突風が伝わる時間（秒）
+CURTAINS = (                                                           # (布の範囲, レールの線（2点）, 裾までの長さ px, 突風で動く向き, 振れ幅 px)
+    ([(0, 0), (125, 0), (150, 190), (260, 360), (420, 500), (400, 560), (0, 560)], ((0, 0), (115, 0)), 530, (1.0, -0.45), 26),
+    ([(405, 95), (615, 150), (960, 110), (975, 470), (425, 470)], ((418, 115), (612, 172)), 520, (0.35, -1.0), 24),
+)
+
+
+def curtain_gust(t):
+    """突風の強さ 0..1（速く立ち上がり、ゆっくり抜ける）。CURTAIN_GUST 秒ごとに繰り返す"""
+    ph = ((t - 1.45) % CURTAIN_GUST) / CURTAIN_GUST                    # 2.6 秒あたり（女が反る所）で最も強い
+    return float(np.where(ph < 0.25, np.sin(ph / 0.25 * np.pi / 2) ** 2, np.exp(-(ph - 0.25) * 5.0)))
+
+
+class CurtainPlate:
+    """背景の絵（カーテンの画素ごと）を、カーテンの範囲だけゆがめて動かす。布を別に貼らない"""
+
+    def __init__(self, e):
+        from scipy.ndimage import gaussian_filter
+        self.e = e.astype(np.float32)
+        yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
+        self.yy, self.xx = yy, xx
+        self.parts = []
+        for poly, (p0, p1), length, dirv, amp in CURTAINS:
+            m = Image.new("L", (1280, 720), 0)
+            ImageDraw.Draw(m).polygon(poly, fill=255)
+            m = gaussian_filter(np.asarray(m, np.float32) / 255, 18)
+            ax, ay = np.subtract(p1, p0)                                  # レールからの距離＝高さ h（レールの線への垂直距離）
+            nx, ny = -ay, ax
+            nn = np.hypot(nx, ny)
+            nx, ny = nx / nn, ny / nn
+            if ny < 0:
+                nx, ny = -nx, -ny
+            dist = (xx - p0[0]) * nx + (yy - p0[1]) * ny
+            if length == 520:                                             # 右：レールから右へ流れている布なので、流れの向きの距離
+                dist = np.hypot(xx - (p0[0] + p1[0]) / 2, (yy - (p0[1] + p1[1]) / 2) * 0.6)
+            h = np.clip(dist / length, 0, 1)
+            d = np.array(dirv, np.float32)
+            d /= np.linalg.norm(d)
+            self.parts.append((m, h, d, amp))
+
+    def field(self, t):
+        """時刻 t の変位（dy, dx）"""
+        dy = np.zeros((720, 1280), np.float32)
+        dx = np.zeros((720, 1280), np.float32)
+        for m, h, d, amp in self.parts:
+            hw = h ** 1.25
+            g = np.zeros_like(h)
+            for k in range(6):                                            # 高さごとに遅れた突風（6 段で補間）
+                hk = k / 5
+                w = np.clip(1 - np.abs(h - hk) * 5, 0, 1)
+                g += w * (curtain_gust(t - CURTAIN_LAG * hk) - 0.4)
+            ph = 2 * np.pi * (0.8 * t - 0.8 * CURTAIN_LAG * h)            # 小さなさざ波：レールから裾へ伝わる
+            rip = 0.28 * np.sin(ph) + 0.12 * np.sin(2.1 * ph + 1.3 + self.xx / 90)
+            s = m * hw * amp * (g + rip)
+            dx += s * d[0] + m * hw * amp * 0.18 * np.sin(ph + 0.8) * -d[1]
+            dy += s * d[1] + m * hw * amp * 0.18 * np.sin(ph + 0.8) * d[0]
+        return dy, dx
+
+    def warp(self, img, t):
+        """img（H×W×3 float）のカーテンの所を、時刻 t の形にゆがめる"""
+        from scipy.ndimage import map_coordinates
+        dy, dx = self.field(t)
+        sy, sx = self.yy - dy, self.xx - dx
+        return np.dstack([map_coordinates(img[..., k], [sy, sx], order=1, mode="nearest") for k in range(3)])
+
+
+RAIL_BASE = 428                                                        # 手すりの下端（ベランダの床の縁）。落ちた体はここより下は見えない
+DROP_T = 0.36                                                          # 消えるまでの時間（秒）
+
+
+def drop_layer(fw, t, events, shutter=1 / 50, n=6):
+    """手を振る → 一瞬止まる → 反らせた姿へ（重心は上げない）→ まっすぐ下へ重力で落ちて手すりの下に消える。
+    ev = (立ち始め, 手を止める, 落ち始め, 横のずれ)。落ちる間は回さない・手足も動かさない（縦のモーションブラーと、遠ざかるぶんわずかに縮むだけ）。
+    重なった回（何度も）は、新しい回を手前に。返すのは全画面の (色, アルファ) か None"""
+    from scipy.ndimage import affine_transform
+    bx0, by0, bx1, by1 = fw.box
+    rgb = np.zeros((720, 1280, 3), np.float32)
+    a = np.zeros((720, 1280), np.float32)
+    A = fw.sprites["arch"][0]
+    al = A[..., 3]
+    ys, xs = np.where(al > 0.5)
+    ctr = np.array([ys.mean(), xs.mean()])
+    span = RAIL_BASE - by0 - ys.min() + 10                                 # 腕の先まで手すりの下へ抜ける距離
+    acc_g = 2 * span / DROP_T ** 2
+    yb = np.arange(by0, by1)[:, None, None]
+    for ts, tl, tf, dx in events:
+        if not ts <= t < tf + DROP_T:
+            continue
+        if t < tf:
+            if t < tl:
+                ph = 2 * np.pi * 1.4 * (t - ts)
+                pose = ("real", "wave", (12 * np.sin(ph), 6 * np.sin(ph - 0.9)), dx, None)
+            elif t < tl + 0.15:
+                pose = ("real", "wave", (0.0, 0.0), dx, None)             # 一瞬止まる
+            else:
+                pose = ("real", "arch", smoothstep(0, 1, (t - tl - 0.15) / max(tf - tl - 0.15, 1e-3)), dx, None)
+            pre = fw._pre(pose)
+        else:
+            pre = np.zeros_like(A)
+            for j in range(n):                                            # シャッターの開いている間を重ねる（縦のブレ）
+                u = max(0.0, t - tf - shutter * j / (n - 1))
+                drop = 0.5 * acc_g * u * u
+                s = 1 - 0.08 * u / DROP_T                                 # 遠ざかるぶん、わずかに縮む
+                M = np.array([[1 / s, 0], [0, 1 / s]])
+                off = ctr - M @ (ctr + np.array([drop, dx]))
+                pre += np.dstack([affine_transform(A[..., k], M, offset=off, order=1, mode="constant") for k in range(4)])
+            pre /= n
+            pre = pre * np.clip((RAIL_BASE - yb) / 2.0, 0, 1)            # 手すりの下（ベランダの床の向こう）は見えない
+        al2 = np.clip(pre[..., 3], 0, 1)
+        col = pre[..., :3] / np.maximum(pre[..., 3:], 1e-4)
+        inner = fw.gf(al2, 2.2)                                           # ライトラップ（render と同じ）
+        wrap = np.clip(np.clip(al2 - inner, 0, 1) * 2.2, 0, 0.75)[..., None]
+        col = col * (1 - wrap) + fw.light * wrap
+        wa = np.zeros((720, 1280), np.float32)
+        wr = np.zeros((720, 1280, 3), np.float32)
+        wa[by0:by1, bx0:bx1] = al2
+        wr[by0:by1, bx0:bx1] = col
+        na = wa + a * (1 - wa)
+        rgb = (wr * wa[..., None] + rgb * (a * (1 - wa))[..., None]) / np.maximum(na[..., None], 1e-4)
+        a = na
+    if not a.any():
+        return None
+    return rgb, a
+
+
+def over(base, layer):
+    """base（H×W×3 float）に (色, アルファ) を重ねる"""
+    if layer is None:
+        return base
+    r, a = layer
+    return r * a[..., None] + base * (1 - a[..., None])
+
+
+class BalconyMosaic:
+    """窓の外の白いモザイク（1秒に10回変える）"""
+
+    def __init__(self, e, outside, seed=86):
+        self.e, self.outside, self.rg, self.cur = e, outside, np.random.default_rng(seed), None
+
+    def step(self):
+        blk = int(self.rg.uniform(14, 30))
+        sx = int(self.rg.normal(0, 6))
+        src = np.roll(self.e, sx, axis=1).astype(np.float32)
+        small = Image.fromarray(src.astype(np.uint8)).resize((1280 // blk, 720 // blk), Image.BILINEAR)
+        big = np.asarray(small.resize((1280, 720), Image.NEAREST)).astype(np.float32) * 0.55 + 200 * 0.45
+        self.cur = (np.clip(big * lut()[np.clip(big.mean(-1), 0, 255).astype(int)] / np.maximum(lut()[200], 1e-3) * 0.85, 0, 255),
+                    self.outside * 0.7)
+        return self.cur
+
+
 def balcony_woman():
     """ベランダの3枚（届くまでは仮の3枚）から、落ちる女と手すりの高さ・窓の外のマスクを用意する"""
     (e, a, b), draft = balcony_inputs()
@@ -2548,36 +2702,43 @@ def finish_woman(fw, e, draft):
 
 
 def balcony_loop():
+    """ベランダ（全面の前景、ループ 9.2 秒）：手を振る → 一瞬止まる → 反らせた姿 → まっすぐ落ちて消える → 誰もいない窓（カーテンは息をし続ける）
+    → 下をのぞきこみたくなるように、窓へゆっくり寄る → 寄りきった所から、立っている女のいる引きの画へ溶けて戻る。
+    音（別のカットイン）との合わせ：消える瞬間 BALCONY_GONE 秒で風を切り、そこから 1.0〜1.5 秒あとに遠く下で重い音"""
+    from fxlib import parallax_frame, plate_depth
     fw, e, outside, draft = balcony_woman()
-    rail = fw.rail
-    fps, L = FPS, 6.0
-    n_fr = int(L * fps)
-    events = [(0.0, 2.4, 3.1, 4.0, 22, 0)] if "arch" in fw.sprites else [(0.0, 2.0, 2.8, 3.7, 22, 0)]                          # 手を振って立つ → のけぞる → 沈んで消える → 誰もいない
-    frames, mosaic = [], None
-    rg = np.random.default_rng(86)
+    fps, L = FPS, 9.2
+    n_fr = int(round(L * fps))
+    ev = [(0.0, 2.2, 2.75, 0)]
+    cp = CurtainPlate(e)
+    mos = BalconyMosaic(e, outside)
+    depth = plate_depth(BALCONY[0])
+    push0, push1, fade0 = 5.6, 8.6, 8.6
+    frames = []
     for i in range(n_fr):
         tt = i / fps
-        if i % 3 == 0:                                            # モザイクは1秒に10回だけ変える（容量のため）
-            blk = int(rg.uniform(14, 30))
-            sx = int(rg.normal(0, 6))
-            src = np.roll(e, sx, axis=1).astype(np.float32)
-            small = Image.fromarray(src.astype(np.uint8)).resize((1280 // blk, 720 // blk), Image.BILINEAR)
-            big = np.asarray(small.resize((1280, 720), Image.NEAREST)).astype(np.float32)
-            big = big * 0.55 + src * 0.0 + 200 * 0.45               # 白っぽく飛ばす（絵の明るさから離れすぎない）
-            mos_rgb = np.clip(big * lut()[np.clip(big.mean(-1), 0, 255).astype(int)] / np.maximum(lut()[200], 1e-3) * 0.85, 0, 255)
-            mos_a = outside * 0.7
-        rgb, a = mos_rgb, mos_a
-        w = fw.frame(tt, events)
-        if w is not None:
-            wr, wa = w
-            a = wa + mos_a * (1 - wa)
-            rgb = (wr * wa[..., None] + mos_rgb * (mos_a * (1 - wa))[..., None]) / np.maximum(a[..., None], 1e-4)
-        frames.append(to_rgba(rgb, a))
-    print("手すりの高さ", rail)
+        if i % 3 == 0:
+            mos.step()
+        mr, ma = mos.cur
+        base = over(e.astype(np.float32), (mr, ma))
+        img = over(cp.warp(base, tt), drop_layer(fw, tt, ev))
+        if tt >= push0:
+            k = smoothstep(push0, push1 + 0.6, tt)
+            img = parallax_frame(img, depth, k, push=0.22, drift=(0.0, 0.0), near_gain=0.8,
+                                 center=(330, 300 + 70 * k))
+            if tt >= fade0:                                            # 溶けて引きの画（立っている女）へ戻る＝ループの継ぎ目
+                q = smoothstep(fade0, L, tt)
+                wide = over(cp.warp(base, tt), drop_layer(fw, 0.0, ev))
+                img = img * (1 - q) + wide * q
+        frames.append(Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA"))
     sfx = "_draft" if draft else ""
-    save_webp_anim(frames, OUT / "ep8" / f"86_balcony_loop{sfx}.webp", lossless=False, quality=80, loop=0)
+    small = [f.resize((960, 540), Image.LANCZOS) for f in frames]          # 全面が動くので 960×540 で書き出して 5MB に収める
+    save_webp_anim(small, OUT / "ep8" / f"86_balcony_loop{sfx}.webp", lossless=False, quality=55, loop=0)
     Image.fromarray(e).save(OUT / "ep8" / f"86_balcony_bg{sfx}.jpg", quality=88)
     return frames, OUT / "ep8" / f"86_balcony_bg{sfx}.jpg"
+
+
+BALCONY_GONE = 2.75 + DROP_T                                               # ベランダのループで女が手すりの下へ消えきる時刻（秒）
 
 
 def paste_clip(dst, im, x, y):
@@ -2743,34 +2904,53 @@ ENDB_GLASS = (0, 0, 430, 262)                                      # ファミ�
 
 
 def endb_fall():
+    """ベランダと同じ物理：反らせた姿（回さない・手足も動かさない）が、ガラスの外をまっすぐ重力で一瞬落ちる。縦のブレと、わずかな縮み"""
     from PIL import ImageFilter
-    (e, _, b), draft = balcony_inputs()
-    mb = figure_mask(e, b)
-    ys, xs = np.where(mb)
-    fig = Image.fromarray(np.dstack([b,
-                                     (mb * 255).astype(np.uint8)]), "RGBA").crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
-    fig = fig.rotate(160, resample=Image.BICUBIC, expand=True)          # 頭から落ちる
-    h = 210
-    fig = fig.resize((int(fig.width * h / fig.height), h), Image.LANCZOS)
-    arr = np.asarray(fig).copy()
-    arr[..., :3] = (np.asarray(arr[..., :3], np.float32) * 0.2).astype(np.uint8)   # 逆光の暗い影
-    fig = Image.fromarray(arr, "RGBA").filter(ImageFilter.GaussianBlur(1.2))      # 速さでわずかにぶれる
+    from scipy.ndimage import binary_closing, binary_fill_holes, shift
+    (e, _, _), draft = balcony_inputs()
+    if BALCONY_ARCH.exists():
+        f = toned(BALCONY_ARCH)
+        mk = binary_fill_holes(binary_closing(figure_mask(e, f), iterations=3))
+    else:
+        f = balcony_inputs()[0][2]
+        mk = figure_mask(e, f)
+    ys, xs = np.where(mk)
+    fig = Image.fromarray(np.dstack([np.broadcast_to(np.array([22, 15, 11], np.uint8), f.shape),         # 逆光の影（ほぼ黒）
+                                     (mk * 255).astype(np.uint8)]), "RGBA").crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
+    h = 230
+    fig = fig.resize((int(fig.width * h / fig.height), h), Image.LANCZOS).filter(ImageFilter.GaussianBlur(0.8))
     rest = np.asarray(Image.open(SCENES / "ep6_01_restaurant.jpg").convert("L").resize((1280, 720)), np.float32)
     x0, y0, x1, y1 = ENDB_GLASS
     glass = np.zeros((720, 1280), np.float32)
     glass[y0:y1, x0:x1] = smoothstep(115, 150, rest[y0:y1, x0:x1])      # 明るいガラスだけ（窓枠・植木・人の頭は残す）
     glass = np.asarray(Image.fromarray((glass * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5)), np.float32) / 255
+    pre, post = int(0.4 * FPS), int(0.6 * FPS)
+    T = 0.36                                                            # 窓の上から下まで（ベランダの DROP_T と同じ）
+    y_start, y_end = -h - 40, y1 + 10                                   # 上から入ってきて、すでに速い（上の階から落ちてきた）
+    v0 = 0.6 * (y_end - y_start) / T                                     # y = y_start + v0 t + a t²/2
+    acc = 2 * ((y_end - y_start) - v0 * T) / T ** 2
+    fall = int(round(T * FPS)) + 1
     frames = []
-    pre, fall, post = int(0.4 * FPS), 9, int(0.6 * FPS)                 # 落ちるのは 9 コマ（0.3 秒）
     for i in range(pre + fall + post):
-        fr = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
-        k = (i - pre) / (fall - 1)
-        if 0 <= k <= 1:
-            lay = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
-            lay.alpha_composite(fig, (70, int(-h * 0.7 + (y1 + h * 0.4) * k * (0.6 + 0.4 * k))))
-            a = np.asarray(lay).copy()
-            a[..., 3] = (a[..., 3] * glass).astype(np.uint8)
-            fr = Image.fromarray(a, "RGBA")
+        u = (i - pre) / FPS
+        if 0 <= u <= T + 1e-6:
+            acc_a = np.zeros((720, 1280, 4), np.float32)
+            n = 6
+            for j in range(n):                                          # シャッターの間を重ねる＝縦のブレ
+                uu = max(0.0, u - j / n / 50)
+                s = 1 - 0.06 * uu / T
+                im = fig.resize((max(1, int(fig.width * s)), max(1, int(h * s))), Image.BILINEAR)
+                lay = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
+                paste_clip(lay, im, 80, int(y_start + v0 * uu + 0.5 * acc * uu * uu))
+                a = np.asarray(lay, np.float32)
+                a[..., :3] *= a[..., 3:] / 255
+                acc_a += a
+            acc_a /= n
+            al = acc_a[..., 3] * glass
+            col = np.where(acc_a[..., 3:] > 0, acc_a[..., :3] / np.maximum(acc_a[..., 3:], 1e-4) * 255, 0)
+            fr = Image.fromarray(np.dstack([np.clip(col, 0, 255), np.clip(al, 0, 255)]).astype(np.uint8), "RGBA")
+        else:
+            fr = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
         frames.append(clean_alpha(fr))
     sfx = "_draft" if draft else ""
     path = OUT / "ep9" / f"89_endb_fall{sfx}.webp"

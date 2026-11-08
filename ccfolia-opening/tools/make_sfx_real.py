@@ -770,6 +770,21 @@ def install():
     print(f"本番に {len(used)} 本を入れた（SFX-CREDITS.txt を更新）")
 
 
+def far_thud():
+    """第八話ベランダ：女が手すりの下へ消えた瞬間（風を切る所）から鳴らすカットイン。頭 1.2 秒は無音、
+    そのあと遠く下で、こもった重い音がひとつ（何階も下の地面。高い音は削り、低いところだけが壁越しに届く）"""
+    d = OUT / "ep8"
+    for v, (src, sp, delay) in (("A", ("impact_soft_heavy_002", 0.55, 1.2)), ("B", ("impact_wood_heavy_001", 0.5, 1.3)),
+                                ("C", ("impact_soft_heavy_003", 0.6, 1.1))):
+        begin()
+        hit = speed(trim(load(IMP / f"{src}.ogg")), sp)               # 遅くして低く重く
+        hit = filt(hit, 35, 420, order=4) + filt(hit, hi=1200) * 0.08     # ずっと下で：こもる
+        hit = reverb(hit, 1.4, 0.55, 600)                                 # 建物の間に響く
+        x = np.zeros(sec(delay + 2.5), np.float32)
+        place(x, norm(hit) * 0.9, delay)
+        mono(d / f"86b_far_thud_{v}.mp3", x, peak=0.7, q=4)
+
+
 def main():
     for k in ("ep1", "ep2", "ep4", "ep5", "ep6", "ep7", "ep8", "ep9", "shared"):
         (OUT / k).mkdir(parents=True, exist_ok=True)
@@ -777,6 +792,7 @@ def main():
     ep4()
     ep5()
     ep8()
+    far_thud()
     ep9()
     ambiences()
     avenue()

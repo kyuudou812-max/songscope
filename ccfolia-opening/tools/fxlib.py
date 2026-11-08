@@ -213,13 +213,13 @@ def depth_map(img, onnx_path, size=518):
     return np.asarray(Image.fromarray(d.astype(np.float32)).resize((W, H), Image.BICUBIC), np.float32)
 
 
-def parallax_frame(img_arr, depth, t, push=0.06, drift=(10.0, 4.0), near_gain=1.0):
+def parallax_frame(img_arr, depth, t, push=0.06, drift=(10.0, 4.0), near_gain=1.0, center=None):
     """奥行きで画素をずらす 2.5D カメラ。t=0..1。push は奥への寄り（手前ほど大きく拡大）、
-    drift は手前の横揺れ px。逆写像（背景から引く）なので穴が開かず、端は複製で埋まる"""
+    drift は手前の横揺れ px。center (x, y) は寄る先（既定は画面の真ん中やや上）。逆写像（背景から引く）なので穴が開かず、端は複製で埋まる"""
     from scipy.ndimage import map_coordinates
     H, W = depth.shape
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    cx, cy = W / 2, H * 0.45
+    cx, cy = center if center is not None else (W / 2, H * 0.45)
     z = 1 + push * t * (0.35 + near_gain * depth)
     dx = drift[0] * np.sin(t * np.pi) * depth
     dy = drift[1] * np.sin(t * np.pi * 0.5) * depth
