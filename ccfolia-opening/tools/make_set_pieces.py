@@ -2855,7 +2855,7 @@ class CurtainLayer:
     def get(self, i):
         im = np.asarray(Image.open(FALL_SIM / self.kind / f"{int(i) % self.n:04d}.png"), np.float32) / 255
         a = im[..., 3] * 0.82
-        lum = np.clip(im[..., :3].mean(-1) / np.maximum(im[..., 3], 1e-3), 0, 1) * 250
+        lum = im[..., :3].mean(-1) * 215                                   # 書き出しはアルファで割らない色。白い空の前でもひだの陰影が見えるよう、少し落とす
         lum = lum + self.rg.normal(0, 3.0, lum.shape)                     # 絵と同じ粒子
         c = self.tint[np.clip(lum, 0, 255).astype(int)]
         c = c / np.maximum(c @ np.array([0.299, 0.587, 0.114], np.float32), 1e-4)[..., None]

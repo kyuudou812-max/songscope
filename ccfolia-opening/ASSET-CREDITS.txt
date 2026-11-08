@@ -1,0 +1,15 @@
+# 取得した 3D 素材の出典とライセンス
+
+## 第八話ベランダの落ちる女の体（tools/mh_body.py・tools/fall_sim_blender.py）
+
+- MakeHuman 基本メッシュ hm08（makehuman/data/3dobjs/base.obj）
+- 体型のターゲット：macrodetails/asian-female-young.target、macrodetails/universal-female-young-averagemuscle-minweight.target
+- 骨格と皮膚の重み：rigs/default.mhskel、rigs/default_weights.mhw
+- 出典：https://github.com/makehumancommunity/makehuman （makehuman/data/ 以下。初回の実行で build/models/makehuman/ に取得）
+- ライセンス：CC0 1.0（各ファイルの見出しに「This asset was explicitly released as CC0 in september 2020」、リポジトリの LICENSE.ASSETS.md）
+- 著作権者（CC0 で放棄）：Data Collection AB, Joel Palmius, Jonas Hauquier
+- 手を加えたこと：女性・細身・身長 1.53m に変形、腕を下ろし脚を閉じた立ち姿に直し、12 部品へ重みを集めて剛体の物理に追従させた。髪は自作（ひものシミュレーション）
+
+## 第八話ベランダの背景（カーテンのない部屋）
+
+- assets/ep8_balcony_nocurtain.png：ChatGPT で生成（他の ep8_balcony_* と同じ）。右端の引き伸ばされた筋を鏡写しで補い、明るさを ep8_balcony_0 にそろえた

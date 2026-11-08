@@ -42,7 +42,7 @@ MAX_TOTAL = 400 * 1024 * 1024
 ITEMS = {
     1: ("01_conference.jpg", "ab", False, False),
     2: ("02_underpass.jpg", "ab", True, False),
-    3: ("03_room.jpg", "abcd", True, False),               # d = 03_fall_1（反らせて後ろへ倒れはじめる姿。無ければ従来どおり）
+    3: ("03_room.jpg", "abcde", True, False),              # d = 03_fall_1（反らせて後ろへ倒れはじめる姿）、e = 03_nocurtain（カーテンを外した同じ部屋。Blender のカーテンを重ねる背景）
     4: ("04_corridor.png", "", True, False),
     5: ("05_style_only.jpg", "ab", False, False),
     6: ("06_bluesheet.jpg", "", True, False),
@@ -56,6 +56,7 @@ OUTPUTS = {
     (1, "a"): S / "ep1_01_door_a.jpg", (1, "b"): S / "ep1_01_door_b.jpg",
     (2, "a"): A / "ep7_vulture_1.png", (2, "b"): A / "ep7_vulture_2.png",
     (3, "a"): A / "ep8_balcony_0.png", (3, "b"): A / "ep8_balcony_1.png", (3, "c"): A / "ep8_balcony_2.png", (3, "d"): A / "ep8_balcony_3.png",
+    (3, "e"): A / "ep8_balcony_nocurtain.png",
     (4, ""): A / "door" / "stage5_full.png",
     (5, "a"): A / "ep9_film_1.png", (5, "b"): A / "ep9_film_2.png",
     (6, ""): S / "ep4_02_bluesheet_items.jpg",
@@ -111,6 +112,8 @@ def parse(name):
         num, s = int(m.group(1)), s[:m.start()] + " " + s[m.end():]
     else:
         num = next((n for n, base in sorted(NAMES.items(), key=lambda t: -len(t[1])) if base[3:] in s.replace("-", "_")), None)
+    if "nocurtain" in s or "no_curtain" in s:                    # 03_nocurtain → 3-e（カーテンのない部屋）
+        return num, "e"
     if "fall" in s:                                               # 03_fall_1 → 3-d（ベランダの4枚目）
         return num, "d"
     letters = re.findall(r"(?<![a-z])([abc])(?![a-z])", s) or ["abc"[int(d) - 1] for d in re.findall(r"(?<!\d)([123])(?!\d)", s)]
