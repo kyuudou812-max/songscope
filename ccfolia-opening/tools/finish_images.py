@@ -198,8 +198,15 @@ def color_curve(ref):
     return curve.astype(np.float32)
 
 
-def match_tone(img, ref, keep_chroma=0.0):
+def match_tone(img, ref, keep_chroma=0.0, keep_lum=False):
+    """keep_lum=True（③ベランダ）：明るさの分布は元の絵のまま（白く飛んだ窓・黒い影を残す）、色味だけ参考画像の赤茶に寄せる"""
     li, lr = lum(img), lum(ref)
+    if keep_lum:
+        c = color_curve(ref)[np.clip(li, 0, 255).astype(int)]
+        c = c / np.maximum(lum(c), 1e-3)[..., None]
+        hi = np.clip((li - 200) / 50, 0, 1)[..., None]                 # 白い窓はほとんど白のまま
+        c = c * (1 - 0.7 * hi) + 0.7 * hi
+        return np.clip(li[..., None] * c, 0, 255).astype(np.uint8)
     qs = np.linspace(0, 100, 257)                                 # 明るさの分布を参考画像にそろえる
     mapped = np.interp(li, np.percentile(li, qs), np.percentile(lr, qs))
     out = color_curve(ref)[np.clip(mapped, 0, 255).astype(int)]
@@ -304,7 +311,7 @@ def main():
             anchor = ref if align else first                     # 構図の基準：参考画像、または同じ項目の1枚目
             dx, dy = shift_between(anchor, img) if anchor is not None else (0, 0)
             img = translate(img, dx, dy)
-            img = match_tone(img, ref, keep_chroma=0.6 if irid else 0.0)
+            img = match_tone(img, ref, keep_chroma=0.6 if irid else 0.0, keep_lum=(num == 3))
             if first is None:
                 first = img
             out = OUTPUTS[(num, letter)]

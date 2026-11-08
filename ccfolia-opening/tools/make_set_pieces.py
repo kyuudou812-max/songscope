@@ -1320,6 +1320,16 @@ def film_frame(src, i, rg, size=(960, 720)):
     return Image.fromarray(rgb).filter(ImageFilter.GaussianBlur(0.6)), gain
 
 
+def lifted(name, **kw):
+    """暗すぎて暗いモニタで黒に潰れる背景（ロビー・ホール）の、暗部だけを持ち上げた版（scenes/〜_lift.jpg）。元の絵は上書きしない。
+    ルームの背景もこちらに差し替える（add_set_pieces / add_scene_backgrounds。ファイル名はハッシュなので自動で新しくなる）"""
+    from fxlib import lift_shadows
+    src = SCENES / name
+    dst = src.with_name(src.stem + "_lift.jpg")
+    lift_shadows(Image.open(src).convert("RGB"), **kw).save(dst, quality=92)
+    return dst
+
+
 # ホールの絵（ep9_02_hall.jpg）のスクリーン：左上・右上・右下・左下。4:3 のフィルムは真ん中に映り、左右は暗いまま
 HALL_SCREEN = [(476, 39), (804, 39), (803, 188), (477, 188)]
 
@@ -1331,7 +1341,7 @@ class Projection:
     def __init__(self):
         from PIL import ImageFilter
         from fxlib import grain_tex
-        hall = Image.open(SCENES / "ep9_02_hall.jpg").convert("RGB").resize((1280, 720))
+        hall = Image.open(lifted("ep9_02_hall.jpg", t=0.3, a=2.6))   # ホールはロビーより暗い（20/255 未満が 82%）ので強めに.convert("RGB").resize((1280, 720))
         self.plate = np.asarray(hall, np.float32) / 255
         lum = self.plate.mean(-1)
         (ax, ay), (bx, _), (cx, cy), _ = HALL_SCREEN
@@ -1386,7 +1396,7 @@ def gaussian_noise_1d(n, seed):
 
 
 PUSH_FPS = 12                       # 寄りは動きがゆっくりでぶれがないので 12fps で足りる（容量を抑える）
-PUSH_SIZE = (960, 540)              # 前景は全面・不透明。ホールの絵は 1280×720 しかないので、出力も小さめに
+PUSH_SIZE = (768, 432)  # 寄りきった後も 12fps で映し続けて 5MB 以下に収めるため 960×540 から下げた。            # 前景は全面・不透明。ホールの絵は 1280×720 しかないので、出力も小さめに
 
 
 class PushCamera:
@@ -1465,10 +1475,10 @@ def old_film():
     n_push, n_hold = int(9 * F), int(22 * F)                        # 9秒で寄り、22秒映し続ける（台詞4行×4秒＋間）。最後のコマで止まる
     loop = [cam.frame(i / (n_push - 1), film_frame(a, i, rg)[0], i=i) for i in range(n_push)]
     cam._bg = cam.warp(cam.lit, 1.0)
-    for i in range(0, n_hold, 3):                                   # 映し続ける間は3コマずつ同じ画（同じコマが続くと容量はほぼ0）
-        loop += [cam.frame(1.0, film_frame(a, i, rg)[0], i=i // 3, hall=False)] * 3
+    for i in range(n_hold):                                         # 映し続ける間も 12fps（以前は3コマずつ同じ画＝実質 4fps で、寄りの途中から急にカクついた）
+        loop.append(cam.frame(1.0, film_frame(a, i, rg)[0], i=0, hall=False))   # ホールの粒子は止める（フィルムの粒子は毎コマ動く）。全面が毎コマ変わると 5MB を超える
     sfx = "_draft" if draft else ""
-    save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", fps=F, lossless=False, quality=46, loop=1)   # 映写の画を明るくした分、品質を下げて 5MB 未満に
+    save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", fps=F, lossless=False, quality=30, loop=1)   # 12fps で映し続けても 5MB 未満に
     cut = []
     for i in range(int(1.2 * F)):                                   # ちらつきが強くなる
         f, g = film_frame(a, i, rg)
@@ -1525,7 +1535,7 @@ def ep9():
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "ep9" / "94_projector_loop.mp3"), "-t", "14",
                     "-i", str(OUT / "ep9" / "95_projector_stop_then_silence.mp3"), "-filter_complex",
                     "[0:a]atrim=0:14[a];[1:a]atrim=0:4[b];[a][b]concat=n=2:v=0:a=1", str(t2)], check=True)
-    preview(SCENES / "ep9_02_hall.jpg", loop[:int(14 * PUSH_FPS)] + cut, t2, "ep9_old_film", fps=PUSH_FPS, tail=2)
+    preview(SCENES / "ep9_02_hall_lift.jpg", loop[:int(14 * PUSH_FPS)] + cut, t2, "ep9_old_film", fps=PUSH_FPS, tail=2)
 
 
 
@@ -1905,7 +1915,7 @@ def lobby_flicker(L=10.0):
     消えた灯りの周り（その灯りが照らしていた壁・床）ほど暗く沈み、点いている灯りには光のにじみ（ブルーム）が乗る"""
     from scipy.ndimage import gaussian_filter
     W, H = 640, 360
-    plate = np.asarray(Image.open(SCENES / "ep9_01_lobby.jpg").convert("RGB").resize((W, H), Image.LANCZOS), np.float32) / 255
+    plate = np.asarray(Image.open(lifted("ep9_01_lobby.jpg")).convert("RGB").resize((W, H), Image.LANCZOS), np.float32) / 255
     lum = plate.mean(-1)
     core = np.clip((lum - np.percentile(lum, 99.3)) * 12, 0, 1)    # 灯りの芯（いちばん明るい点々）
     xx = np.arange(W)[None, :].repeat(H, 0) / W
@@ -2131,11 +2141,23 @@ RAIL_REAL, FLOOR_REAL = 312, 425                                       # 届い�
 WINDOW = WINDOW_REAL if all(p.exists() for p in BALCONY) else WINDOW_DRAFT
 
 
-def toned(src):
-    """届いた絵を、部屋と同じ赤茶にそろえる（make_scene_bg と同じ物差し）"""
+def toned(src, bright=False):
+    """届いた絵を、部屋と同じ赤茶にそろえる（make_scene_bg と同じ物差し）。
+    bright=True（ベランダ）：明るさは沈めず元の絵の分布を保つ（窓は白く飛ばし、女の影が黒く浮く）。色味だけ赤茶に寄せる。
+    いまの assets は finish_images で暗い部屋の参考に寄せてあるので、窓のハイライトが 245 になるよう、4枚に同じ伸ばしをかける"""
     from PIL import ImageOps
     img = ImageOps.fit(Image.open(src).convert("RGB"), (1280, 720), Image.LANCZOS)
     a = np.asarray(img).astype(np.float32)
+    if bright:
+        ref = np.asarray(ImageOps.fit(Image.open(BALCONY[0]).convert("RGB"), (1280, 720)), np.float32) @ np.array([0.299, 0.587, 0.114], np.float32)
+        top = max(float(np.percentile(ref, 99.5)), 1.0)
+        lum = a @ np.array([0.299, 0.587, 0.114], np.float32)
+        lum = 245 * np.clip(lum / top, 0, 1.05) ** 0.8 if top < 230 else lum
+        c = lut()[np.clip(lum, 0, 255).astype(int)]
+        c = c / np.maximum(c @ np.array([0.299, 0.587, 0.114], np.float32), 1e-4)[..., None]   # 色味だけ（明るさは変えない）
+        hi = smoothstep(200, 250, lum)[..., None]                                                # 白い窓は、ほとんど白のまま
+        c = c * (1 - 0.7 * hi) + 0.7 * hi
+        return np.clip(lum[..., None] * c, 0, 255).astype(np.uint8)
     lum = (a @ np.array([0.299, 0.587, 0.114], np.float32)) / 255 * 236 + 6
     yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
     lum = lum * 0.62 * np.clip(1 - 0.55 * (((xx - 640) / 760) ** 2 + ((yy - 340) / 470) ** 2), 0.35, 1)
@@ -2145,7 +2167,7 @@ def toned(src):
 def balcony_inputs():
     """本番は届いた3枚。届くまでは、家具のない部屋の窓の向こうに、女の立ち絵の影を置いた仮の3枚で動きを作る"""
     if all(p.exists() for p in BALCONY):
-        return [toned(p) for p in BALCONY], False
+        return [toned(p, bright=True) for p in BALCONY], False
     from PIL import ImageFilter
     e = np.asarray(Image.open(SCENES / "ep8_01_room.jpg").convert("RGB"))
     w_src = Image.open(ROOT / "build" / "ccfolia" / "npc" / "npc_woman.webp").getchannel("A")
@@ -2161,13 +2183,17 @@ def balcony_inputs():
     return out, True
 
 
-def figure_mask(base, other):
-    """2枚の差から、女の形だけを取り出す（いちばん大きくつながった部分）"""
+def figure_mask(base, other, region=None, thr=22):
+    """2枚の差から、女の形だけを取り出す（いちばん大きくつながった部分）。region=(x0, y0, x1, y1) の外は見ない"""
     from scipy.ndimage import binary_closing, binary_opening, label
     from scipy.ndimage import binary_fill_holes, gaussian_filter
     d = gaussian_filter(np.abs(other.astype(np.float32) - base.astype(np.float32)).mean(-1), 1.5)
     dark = gaussian_filter(other.astype(np.float32).mean(-1), 1.0) < base.astype(np.float32).mean(-1) * 0.8   # 女は逆光で、元の絵より暗い（粒子や揺れたカーテンの差を拾わない）
-    m = binary_fill_holes(binary_opening(binary_closing((d > 22) & dark, iterations=2), iterations=2))
+    if region is not None:
+        r = np.zeros(d.shape, bool)
+        r[region[1]:region[3], region[0]:region[2]] = True
+        dark &= r
+    m = binary_fill_holes(binary_opening(binary_closing((d > thr) & dark, iterations=2), iterations=2))
     lab, n = label(m)
     if n == 0:
         raise SystemExit("女の形が見つからない（3枚の構図がずれていないか確認）")
@@ -2198,6 +2224,8 @@ class FallingWoman:
         win = ef[y0:rail, x0:x1].reshape(-1, 3)
         lum = win.mean(-1)
         self.black = np.median(win[lum <= np.percentile(lum, 3)], 0)            # 窓枠の暗さ＝この絵の黒
+        if real:                                                                # 明るく保った絵では窓枠も明るいので、逆光の影はほぼ黒に（白い窓にくっきり浮く）
+            self.black = np.minimum(self.black, np.array([14, 9, 7], np.float32))
         self.light = gaussian_filter(ef[by0:by1, bx0:bx1], (9, 9, 0))           # 回り込ませる窓の光
         hp = ef[y0:rail, x0:x1].mean(-1) - gaussian_filter(ef[y0:rail, x0:x1].mean(-1), 1.5)
         self.grain = float(np.clip(np.std(hp), 1.2, 6.0))                       # 絵の粒子の強さ
@@ -2281,8 +2309,12 @@ class FallingWoman:
             m = v
             A = self.sprites["stand"][0]
             B = self.sprites["arch"][0]
-            am = (1 - m) * self.gf(A[..., 3], 2.5) + m * self.gf(B[..., 3], 2.5)
-            al = self.gf(np.clip((am - 0.5) * 9 + 0.5, 0, 1), 0.8)
+            if not hasattr(self, "_sdf"):                                       # 輪郭の符号付き距離（内側が負）。距離どうしを混ぜると形がなめらかに移る
+                from scipy.ndimage import distance_transform_edt as edt
+                sd = lambda q: edt(q[..., 3] <= 0.5) - edt(q[..., 3] > 0.5)
+                self._sdf = (sd(A), sd(B))
+            d = (1 - m) * self._sdf[0] + m * self._sdf[1]
+            al = self.gf(np.clip(0.5 - d, 0, 1), 0.9)
             col = (A[..., :3] * (1 - m) + B[..., :3] * m) / np.maximum(A[..., 3:] * (1 - m) + B[..., 3:] * m, 1e-4)
             return self._xform(np.dstack([col * al[..., None], al]), 0, self.hip["stand"], (0, dx))
         if kind == "back":                                                      # v = (構え 0..1, 落ちる 0..1)：画面の中では回さない。カメラから遠ざかる向きに倒れるので、縦に縮める
@@ -2653,8 +2685,8 @@ class BalconyMosaic:
         sx = int(self.rg.normal(0, 6))
         src = np.roll(self.e, sx, axis=1).astype(np.float32)
         small = Image.fromarray(src.astype(np.uint8)).resize((1280 // blk, 720 // blk), Image.BILINEAR)
-        big = np.asarray(small.resize((1280, 720), Image.NEAREST)).astype(np.float32) * 0.55 + 200 * 0.45
-        self.cur = (np.clip(big * lut()[np.clip(big.mean(-1), 0, 255).astype(int)] / np.maximum(lut()[200], 1e-3) * 0.85, 0, 255),
+        big = np.asarray(small.resize((1280, 720), Image.NEAREST)).astype(np.float32) * 0.55 + 235 * 0.45
+        self.cur = (np.clip(big * lut()[np.clip(big.mean(-1), 0, 255).astype(int)] / np.maximum(lut()[200], 1e-3) * 0.97, 0, 255),
                     self.outside * 0.7)
         return self.cur
 
@@ -2662,19 +2694,21 @@ class BalconyMosaic:
 def balcony_woman():
     """ベランダの3枚（届くまでは仮の3枚）から、落ちる女と手すりの高さ・窓の外のマスクを用意する"""
     (e, a, b), draft = balcony_inputs()
-    ma, mb = figure_mask(e, a), figure_mask(e, b)
+    reg = (WINDOW[0] - 40, 0, WINDOW[2] + 40, 462) if not draft else None    # 明るく伸ばした絵では、ドアやカーテンの差も拾うので窓のまわりだけ
+    thr = 22 if draft else 45
+    ma, mb = figure_mask(e, a, reg, thr), figure_mask(e, b, reg, thr)
     x0, y0, x1, y1 = WINDOW
     if not draft:
         arch = None
         if BALCONY_ARCH.exists():
-            f = toned(BALCONY_ARCH)
+            f = toned(BALCONY_ARCH, bright=True)
             from scipy.ndimage import binary_closing, binary_fill_holes
-            mk = figure_mask(e, f)
+            mk = figure_mask(e, f, reg, thr)
             ys, xs = np.where(mk)
             fl, el = f.astype(np.float32).mean(-1), e.astype(np.float32).mean(-1)
             box = np.zeros_like(mk)
             box[ys.min():ys.max() + 1, xs.min():xs.max() + 1] = True
-            mk = mk | (box & (fl < 9) & (el > 15))                               # 手すりに重なって差が出にくい頭・胴も拾う
+            mk = mk | (box & (fl < 22) & (el > 35))                             # 手すりに重なって差が出にくい頭・胴も拾う
             arch = (f, binary_fill_holes(binary_closing(mk, iterations=3)))
         return finish_woman(FallingWoman(e, a, b, ma, mb, RAIL_REAL, FLOOR_REAL, real=True, arch=arch), e, draft)
     # 手すりの高さ：窓の高さの 45〜80% の範囲で、横に強い線がいちばん目立つ行（窓の下枠を拾わないように範囲を絞る）
@@ -2909,7 +2943,7 @@ def endb_fall():
     from scipy.ndimage import binary_closing, binary_fill_holes, shift
     (e, _, _), draft = balcony_inputs()
     if BALCONY_ARCH.exists():
-        f = toned(BALCONY_ARCH)
+        f = toned(BALCONY_ARCH, bright=True)
         mk = binary_fill_holes(binary_closing(figure_mask(e, f), iterations=3))
     else:
         f = balcony_inputs()[0][2]
