@@ -327,7 +327,9 @@ def nandomo():
         gap = max(0.28, gap * 0.76)
         off = min(t_rel - 0.12, off + 0.14)
     print("落ちる回数", len(events))
-    cp = CurtainPlate(e)
+    e, outside = nocurtain_bg()                                         # ベランダと同じ：カーテンのない部屋 ＋ Blender のカーテン
+    light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
+    curt = CurtainLayer("curtain_only")
     mos = BalconyMosaic(e, outside, seed=84)
     layer = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
     frames, si, wcache = [], 0, None
@@ -340,7 +342,7 @@ def nandomo():
         if i % 2 == 0 or wcache is None:                                    # 絵（カーテン・女）は1秒15コマ（容量のため。落ちる所は縦のブレでつながる）
             if i % 6 == 0:
                 mos.step()
-            img = over(cp.warp(over(e.astype(np.float32), mos.cur), tt), sim_layer(fw, sim, tt, events, light))
+            img = over(over(over(e.astype(np.float32), mos.cur), sim_layer(fw, sim, tt, events, light)), curt.get(i))
             wcache = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA")
         fr = Image.alpha_composite(wcache, layer)                           # 明るい絵のまま（暗くしない）。暗くなるのは最後の真っ黒だけ
         if tt > dur - 0.5:
@@ -2797,16 +2799,9 @@ class SimFall:
         self.release = self.meta["release_frame"]
         self.gf = gaussian_filter
         self.cache = {}
-        # 受け渡し：絵の女（手を振る姿の最後）と、物理の女の最初のコマの、足もと・身長・真ん中をそろえる
-        st = fw._pre(("real", "wave", (0.0, 0.0), 0, None))[..., 3]
-        bx0, by0 = fw.box[:2]
-        ys, xs = np.where(st > 0.5)
-        a0 = self._load(0)
-        ys2, xs2 = np.where(a0 > 0.5)
-        self.k_s = (ys.max() - ys.min()) / max(1, ys2.max() - ys2.min())
-        self.k_foot = np.array([ys.max() + by0, np.median(xs) + bx0], np.float64)
-        self.k_foot2 = np.array([ys2.max(), np.median(xs2)], np.float64)
-        print("受け渡しの合わせ：大きさ", round(self.k_s, 3), "足もとのずれ", (self.k_foot - self.k_foot2).round(1))
+        # 受け渡し：fall_sim_blender の fit で _1 の影に合わせた画面上の寄せ（足もと (340,458) を中心に 大きさ s・縦 sy・ずれ tx,ty）
+        self.fit = self.meta.get("fit", {})
+        print("受け渡しの合わせ", {k: self.fit.get(k) for k in ("s", "sy", "tx", "ty")})
 
     def _load(self, i):
         if i not in self.cache:
@@ -2819,13 +2814,56 @@ class SimFall:
             return None
         a = self._load(i)
         k = 1 - smoothstep(0, 0.6 * FPS, i)                              # 最初の 0.6 秒だけ、絵の女の大きさ・位置へ寄せる（以後はカメラの合わせのまま）
-        if k > 0:
-            s = 1 + (self.k_s - 1) * k
-            t = self.k_foot2 + (self.k_foot - self.k_foot2) * k
-            M = np.eye(2) / s                                            # 出力 → 入力
-            off = self.k_foot2 - M @ t
+        f = self.fit
+        if k > 0 and f:
+            sx = 1 + (f.get("s", 1) - 1) * k
+            sy = 1 + (f.get("s", 1) * f.get("sy", 1) - 1) * k
+            tx, ty = f.get("tx", 0) * k, f.get("ty", 0) * k
+            fx, fy = 340.0, 458.0
+            M = np.diag([1 / sy, 1 / sx])                                # 出力 (y, x) → 入力
+            off = np.array([fy - (fy + ty) / sy, fx - (fx + tx) / sx])
             a = affine_transform(a, M, offset=off, order=1)
         return self.gf(a, 0.45)                                          # 縁のやわらかさを絵の女（ぼかし 1.1 のマット）に近づける
+
+
+BALCONY_NC = ROOT / "assets" / "ep8_balcony_nocurtain.png"           # カーテンを外した同じ部屋（Blender のカーテンを重ねる背景）
+
+
+def nocurtain_bg():
+    """カーテンのない部屋を、他のベランダの絵と同じ明るさ・色味に（窓は白く飛ばす。雲は白へ寄せて目立たなくする）"""
+    from scipy.ndimage import gaussian_filter
+    e = toned(BALCONY_NC, bright=True).astype(np.float32)
+    lum = e.mean(-1)
+    yy, xx = np.mgrid[0:720, 0:1280]
+    win = (xx > 28) & (xx < 578) & (yy < 300 + (xx - 30) * 0.05) & (yy > 10 + (xx - 30) * 0.29)
+    sky = gaussian_filter((win & (lum > 120)).astype(np.float32), 2)[..., None]
+    e = e * (1 - sky) + (np.minimum(255, 236 + (e - 236) * 0.35)) * sky   # 空の雲の濃淡を弱めて、白く飛んだ空に近づける
+    out = np.zeros((720, 1280), np.float32)
+    out[win] = smoothstep(150, 215, lum[win])
+    return np.clip(e, 0, 255).astype(np.uint8), gaussian_filter(out, 3)
+
+
+class CurtainLayer:
+    """Blender のクロスのカーテン（fall_sim_blender が書き出した RGBA）。絵と同じ赤茶の色味・粒子に寄せる"""
+
+    def __init__(self, kind="curtain"):
+        self.kind = kind
+        self.n = int(round(json.loads((FALL_SIM / "meta.json").read_text())["loop"] * FPS))
+        self.rg = np.random.default_rng(7)
+        self.tint = lut()[np.arange(256)]
+
+    def get(self, i):
+        im = np.asarray(Image.open(FALL_SIM / self.kind / f"{int(i) % self.n:04d}.png"), np.float32) / 255
+        a = im[..., 3] * 0.82
+        lum = np.clip(im[..., :3].mean(-1) / np.maximum(im[..., 3], 1e-3), 0, 1) * 250
+        lum = lum + self.rg.normal(0, 3.0, lum.shape)                     # 絵と同じ粒子
+        c = self.tint[np.clip(lum, 0, 255).astype(int)]
+        c = c / np.maximum(c @ np.array([0.299, 0.587, 0.114], np.float32), 1e-4)[..., None]
+        hi = smoothstep(200, 250, lum)[..., None]
+        c = c * (1 - 0.7 * hi) + 0.7 * hi
+        rgb = np.clip(lum[..., None] * c, 0, 255)
+        a = np.where(a < 1 / 255, 0, a)
+        return rgb, a
 
 
 def sim_layer(fw, sim, t, events, light):
@@ -2951,18 +2989,28 @@ def balcony_loop():
     音（別のカットイン）との合わせ：消える瞬間 balcony_gone() 秒で風を切り、同時に 86b（頭 1.2 秒は無音）を鳴らす"""
     from scipy.ndimage import gaussian_filter
     from fxlib import parallax_frame, plate_depth
-    fw, e, outside, draft = balcony_woman()
+    fw, _, _, draft = balcony_woman()
     sim = SimFall(fw)
+    e, outside = nocurtain_bg()                                         # 背景はカーテンのない部屋。カーテンは Blender のクロス
     light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
+    curt = CurtainLayer("curtain")
     fps, L = FPS, 9.2
     n_fr = int(round(L * fps))
     ev = [(0.0, BALCONY_HANDOFF, 0, 0)]
     gone = BALCONY_HANDOFF + sim.gone / FPS
     print("ベランダ：消える時刻", round(gone, 2), "秒（", int(round(gone * fps)), "コマ目）")
-    cp = CurtainPlate(e)
     mos = BalconyMosaic(e, outside)
-    depth = plate_depth(BALCONY[0])
+    depth = plate_depth(BALCONY_NC)
     push0, push1, fade0 = gone + 0.5, 8.6, 8.6
+
+    def comp(base, tt, i, t_w):
+        """背景 → 女とカーテンの前後：絵の女（受け渡しまで）は窓より手前なのでカーテンの上、物理の女はカーテンの holdout 込みなので下"""
+        w = sim_layer(fw, sim, t_w, ev, light)
+        c = curt.get(i)
+        if t_w < BALCONY_HANDOFF:
+            return over(over(base, c), w)
+        return over(over(base, w), c)
+
     frames = []
     for i in range(n_fr):
         tt = i / fps
@@ -2970,14 +3018,14 @@ def balcony_loop():
             mos.step()
         mr, ma = mos.cur
         base = over(e.astype(np.float32), (mr, ma))
-        img = over(cp.warp(base, tt), sim_layer(fw, sim, tt, ev, light))
+        img = comp(base, tt, i, tt)
         if tt >= push0:
             k = smoothstep(push0, push1 + 0.6, tt)
             img = parallax_frame(img, depth, k, push=0.22, drift=(0.0, 0.0), near_gain=0.8,
                                  center=(330, 300 + 70 * k))
             if tt >= fade0:                                            # 溶けて引きの画（立っている女）へ戻る＝ループの継ぎ目
                 q = smoothstep(fade0, L, tt)
-                wide = over(cp.warp(base, tt), sim_layer(fw, sim, 0.0, ev, light))
+                wide = comp(base, tt, i, 0.0)
                 img = img * (1 - q) + wide * q
         frames.append(Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA"))
     sfx = "_draft" if draft else ""
