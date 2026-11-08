@@ -7,6 +7,7 @@
 """
 import subprocess
 import wave
+import os
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,11 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from scipy.signal import butter, fftconvolve, sosfilt
 
 ROOT = Path(__file__).resolve().parent.parent
+# 学習済みモデル（Depth-Anything V2 small = da.onnx、rembg の u2net.onnx）の置き場。scratchpad が消えても困らないよう build/models を既定にし、
+# $CCFOLIA_MODELS で変えられる。da.onnx だけは $DEPTH_ONNX でも直接指せる
+MODELS = Path(os.environ.get("CCFOLIA_MODELS", ROOT / "build" / "models"))
+DEPTH_ONNX = Path(os.environ.get("DEPTH_ONNX", MODELS / "da.onnx"))
+U2NET_ONNX = MODELS / "u2net.onnx"
 SR = 48000
 MINCHO = ROOT / "fonts" / "ShipporiMincho-Medium.ttf"
 GOTHIC = ROOT / "fonts" / "ZenKakuGothicNew-Medium.ttf"
@@ -307,7 +313,7 @@ def fall_blur(fg_rgba, dy, steps=12):
 
 def plate_depth(path, onnx=None):
     """背景の絵の奥行き（0=奥〜1=手前）。一度計算したら build/cache に置く。
-    モデルは $DEPTH_ONNX か build/models/da.onnx（Depth-Anything V2 small）。無ければ「下ほど手前」で代用"""
+    モデルは DEPTH_ONNX（$DEPTH_ONNX か $CCFOLIA_MODELS/da.onnx、既定 build/models/da.onnx）（Depth-Anything V2 small）。無ければ「下ほど手前」で代用"""
     import hashlib
     import os
     path = Path(path)
@@ -315,7 +321,7 @@ def plate_depth(path, onnx=None):
     if cache.exists():
         return np.load(cache)
     img = Image.open(path).convert("RGB")
-    onnx = Path(onnx or os.environ.get("DEPTH_ONNX", ROOT / "build" / "models" / "da.onnx"))
+    onnx = Path(onnx or DEPTH_ONNX)
     if onnx.exists():
         d = depth_map(img, onnx)
         lo, hi = np.percentile(d, (1, 99))                           # 外れ値（カーテンの縁など）を切る

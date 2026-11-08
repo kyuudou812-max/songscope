@@ -1,15 +1,15 @@
-# VFX-STUDY.local.md の試作（出力は scratchpad/prototypes）。モデルは models/da.onnx（Depth-Anything V2 small ONNX）
+# VFX-STUDY.local.md の試作（出力は scratchpad/prototypes）。モデルは fxlib.DEPTH_ONNX（既定 build/models/da.onnx）（Depth-Anything V2 small ONNX）
 import sys, subprocess, numpy as np
 sys.path.insert(0, "/home/user/songscope/ccfolia-opening/tools")
 import fxlib as fx
 from PIL import Image, ImageDraw
 from scipy.ndimage import gaussian_filter
 S = "/tmp/claude-0/-home-user-songscope/055d0ebe-353c-5b70-98af-84d887ef3993/scratchpad"
-P = S + "/prototypes"; M = S + "/models"
+P = S + "/prototypes"
 bgimg = Image.open("/home/user/songscope/ccfolia-opening/build/ccfolia/scenes/ep8_01_room.jpg").convert("RGB")
 bg = np.asarray(bgimg, np.float32) / 255
 H, W = bg.shape[:2]
-D = fx.depth_map(bgimg, M + "/da.onnx"); np.save(P + "/depth.npy", D)
+D = fx.depth_map(bgimg, fx.DEPTH_ONNX); np.save(P + "/depth.npy", D)
 Image.fromarray((D * 255).astype(np.uint8)).save(P + "/A_depth.png")
 def u8(a): return Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8))
 def mp4(frames, name, fps=24):

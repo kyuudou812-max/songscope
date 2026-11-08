@@ -1107,7 +1107,7 @@ def oiwai_flood():
     return frames
 
 
-def reward_card():
+def reward_mojibake():
     """第七話の報酬：《どんな恩恵が欲しい？》が文字化けしたまま出る（辞書カードと同じ文字・大きさ）"""
     W, H = 760, 360
     im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -1134,7 +1134,7 @@ def reward_card():
 def ep7():
     (OUT / "ep7").mkdir(parents=True, exist_ok=True)
     fr = oiwai_flood()
-    reward_card()
+    reward_mojibake()
     tmp = OUT / "preview" / "silence.mp3"
     write_mp3(tmp, silence(len(fr) / FPS + 1))
     preview(SCENES / "ep7_04_junction.jpg", fr, tmp, "ep7_oiwai", tail=1)
@@ -1377,12 +1377,12 @@ class PushCamera:
     寄っても絵がぼけない"""
 
     def __init__(self, pj):
-        from fxlib import depth_map, grain_tex
+        from fxlib import DEPTH_ONNX, depth_map, grain_tex
         lit = pj.frame(Image.new("RGB", (960, 720), (0, 0, 0)), 0.0, 1.0)      # フィルムを抜いた、光だけのホール
         base = Image.alpha_composite(Image.fromarray((pj.plate * 255).astype(np.uint8)).convert("RGBA"), lit)
         self.lit = np.asarray(base.convert("RGB"), np.float32) / 255
         self.dark = self.lit * 0.0
-        onnx = ROOT / "build" / "models" / "da.onnx"
+        onnx = DEPTH_ONNX
         d = depth_map(Image.fromarray((pj.plate * 255).astype(np.uint8)), onnx)
         lo, hi = np.percentile(d, [2, 98])
         d = np.clip((d - lo) / (hi - lo + 1e-6), 0, 1)
