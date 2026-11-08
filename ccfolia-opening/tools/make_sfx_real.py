@@ -715,7 +715,7 @@ PICKS = {
     "ep4/42_tarp_run_loop": "A", "ep4/43_avenue_loop": "A", "ep4/44_gusha": "C",
     "ep5/51_tadaima_approach": "v2_C", "ep5/52_tadaima_arrive": "v2_C", "ep5/57_window_slap": "v3_C", "ep6/60_restaurant_ambience_loop": "v3_B", "ep5/53_zapping": "A",
     "ep7/74_rain_loop": "A", "ep7/75_channel_loop": "A",
-    "ep8/81_room_tone_loop": "A", "ep8/82_bang_gust": "C",
+    "ep8/81_room_tone_loop": "A", "ep8/82_bang_gust": "C", "ep8/86b_far_thud": "A",
     "ep9/94_projector_loop": "B", "ep9/96_knob_held": "B",
     "shared/79_presence_projector": "B",
 }
