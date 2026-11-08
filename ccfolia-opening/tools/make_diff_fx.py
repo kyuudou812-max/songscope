@@ -190,7 +190,7 @@ def blink_items():
     閉じている間に「景色が変わった」ことに、開いた瞬間に気づく"""
     from make_set_pieces import ease_out, lids
     fps = 30
-    frames = [lids(0.0)] * int(0.4 * fps)
+    frames = [lids(0.0, blood=0)] + [lids(0.0)] * (int(0.4 * fps) - 1)   # 最初の 1 コマだけ暗転の黒、閉じている間は一定の赤
     n = int(0.25 * fps)
     frames += [lids(0.35 * ease_out((i + 1) / n), feather=0.35) for i in range(n)]
     frames += [lids(0.35 * (1 - (i + 1) / 4)) for i in range(4)]

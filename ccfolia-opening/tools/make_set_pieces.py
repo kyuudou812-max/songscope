@@ -128,14 +128,20 @@ def preview(bg, frames, audio, name, fps=FPS, tail=1.0):
 
 
 # ================================================================ 共通：まぶた
-def lids(open_, w=640, h=360, feather=0.3):
+LID_RED = (36, 18, 14)                                              # 閉じたまぶたの血の透け（#3a1c14 を暗くした色）
+
+
+def lids(open_, w=640, h=360, feather=0.3, blood=1.0):
     """まぶたの形。open_=0 で閉じ、1.3 で画面の外まで開く。
     上まぶたは下より大きく動く。縁はゆるい弧（中央が先に降り、先に開く）で、目に近すぎて大きくぼける（半径は画面の高さの約 7%）。
     縁を細かく波打たせない（以前は雑音で波打たせていて、黒い布を降ろしたように見えた）。
-    閉じかけ（open<0.3）は、まぶたを透けた光で、暗がりがわずかに赤い（血の透け #3a1c14 前後）。
+    まぶたの色は、閉じている度合い（1−open）だけで決まる血の透け：閉じきりで最大の (36,18,14)。
+    blood=0 は暗転（光のない所で閉じている／まぶたの外も暗い）で、真っ黒 #040404。赤から黒へ移すときは blood を数コマかけて動かす。
     開ききる前は、目が明るさに慣れていないので、内側にうっすら暖色の白いもや（露出の順応）"""
+    shut = np.clip(1 - open_, 0, 1) * blood
+    lid = np.array(BLACK, np.float32) + (np.array(LID_RED, np.float32) - np.array(BLACK, np.float32)) * shut
     if open_ <= 0.01:
-        return Image.new("RGBA", (w, h), BLACK + (255,))
+        return Image.new("RGBA", (w, h), tuple(int(round(v)) for v in lid) + (255,))
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     uc = (xx - w / 2) / (w / 2)                                     # -1〜1
     cy = h * (0.50 - 0.04 * min(open_, 1))                          # 開くにつれて、すき間の中心が少し上へ
@@ -149,10 +155,8 @@ def lids(open_, w=640, h=360, feather=0.3):
     a_dn = smoothstep(-1.0, 1.0, (yy - dn) / (feather * b_dn + blur))
     alpha = np.clip(np.maximum(a_up, a_dn) + a_up * a_dn, 0, 1)
     # 閉じかけの血の透け（完全に閉じる直前でまた黒へ戻し、閉じた黒のコマとつながるように）
-    red = smoothstep(0.32, 0.12, open_) * smoothstep(0.0, 0.07, open_)
-    lid = np.array(BLACK, np.float32) * (1 - 0.6 * red) + np.array([58, 28, 20], np.float32) * 0.6 * red
     veil = 0.10 * np.clip(1 - open_ / 0.9, 0, 1) * (1 - alpha)         # 慣れていない明るさ
-    tint = 0.15 * red * (1 - alpha)                                     # すき間にも赤い透けを 15% 重ねる
+    tint = 0.15 * shut * smoothstep(0.35, 0.0, open_) * (1 - alpha)      # 閉じかけは、すき間にも赤い透けを重ねる
     vcol = (np.array([235, 215, 190], np.float32) * veil[..., None] + np.array([58, 28, 20], np.float32) * tint[..., None]) / np.maximum(veil + tint, 1e-4)[..., None]
     veil = veil + tint
     im = np.zeros((h, w, 4), np.float32)
@@ -185,9 +189,9 @@ def blink_open():
 
 def blink_reopen():
     """まばたき：閉じたところから、すっと開く（シーンの切り替えと同時に流すと、まばたきの間に景色が変わったように見える）"""
-    frames = [lids(0.0)] * 4
+    frames = [lids(0.0, blood=0)] * 4                                  # 暗転から開く（監査で「よいもの」。黒のまま）
     n = int(0.45 * FPS)
-    frames += [lids(1.35 * ease_out((i + 1) / n), feather=0.12 + 0.25 * (1 - (i + 1) / n)) for i in range(n)]
+    frames += [lids(1.35 * ease_out((i + 1) / n), feather=0.12 + 0.25 * (1 - (i + 1) / n), blood=0) for i in range(n)]
     frames.append(Image.new("RGBA", (640, 360), (0, 0, 0, 0)))
     save_webp_anim(frames, OUT / "shared" / "71_blink_reopen.webp")
     return frames
@@ -761,7 +765,9 @@ def sheet_loop(period=1.4, size=(1280, 720)):
         sb = 0.62 + 0.38 * ease_out(p)
         bw, bh = int(big.width * sb), int(big.height * sb)
         back = big.resize((bw, bh), Image.LANCZOS).crop(((bw - W) // 2, (bh - H) // 2, (bw - W) // 2 + W, (bh - H) // 2 + H))
-        c = np.asarray(back).astype(np.float32) * (0.45 + 0.55 * p)
+        # 奥の布：同じ布の絵を 70% 前後に縮め、明るさ 40% から（暗くても折り目と光の差が見えるよう、陰影を 2.2 倍に強める）
+        c = np.asarray(back).astype(np.float32)
+        c = np.clip(c.mean() + (c - c.mean()) * (2.2 - 1.2 * p), 0, 255) * (0.40 + 0.60 * p)
         # 手前のシート：真ん中から左右に分かれて押しのけられ、少し大きくなりながら画面の外へ
         k = p ** 1.6
         sf = 1 + 0.35 * k
@@ -804,11 +810,11 @@ def sheet_loop(period=1.4, size=(1280, 720)):
         el = (W / 2 - gap / 2 + wave) - xx                       # 左の布の縁からの距離（布の内側が正）
         er = xx - (W / 2 + gap / 2 + wave)
         din = np.maximum(el, er)                                 # 手前の布の内側で正、すき間で負
-        cover = smoothstep(-0.8, 0.8, din)[..., None]            # 縁は 1.5px ほどでなじませる
-        rim = (np.exp(-np.clip(din, 0, None) / 3.0) * (din > -1))[..., None] * min(1, k * 6)
-        moved = moved * shade * (1 - 0.25 * k) * (1 + 0.28 * rim) + 18 * rim
-        cast = (np.exp(-np.clip(-din, 0, None) / 10.0) * (din <= 0))[..., None] * min(1, k * 6)
-        c = c * (1 - 0.55 * cast)
+        cover = smoothstep(-4.0, 4.0, din)[..., None]            # 縁は 8px ほどぼかす（縦の固い線にしない）
+        rim = (np.exp(-np.clip(din - 2.0, 0, None) / 1.0) * smoothstep(-1.0, 1.0, din))[..., None] * min(1, k * 6)   # めくれた縁の照り（2〜3px）
+        moved = moved * shade * (1 - 0.25 * k) * (1 + 0.5 * rim) + 34 * rim
+        cast = (np.exp(-np.clip(-din, 0, None) / 8.0) * (din <= 0))[..., None] * min(1, k * 6)
+        c = c * (1 - 0.35 * cast)
         c = moved * cover + c * (1 - cover)
         # 走っている揺れ
         dy = int(6 * np.sin(2 * np.pi * p * 4))                   # 走る上下動は1歩に1回：1.4秒で4歩（約 2.9 歩/秒。前は 1.4 歩/秒で歩きより遅かった）
@@ -1093,7 +1099,9 @@ def oiwai_flood():
     ink = np.array(TEXT, np.float32) / 255
     far_ink = np.array(QUIETEST, np.float32) / 255
 
-    def stamp(x, y, z, alpha):
+    def stamp(x, y, z, alpha, bc=None, ba=None):
+        bc = buf_c if bc is None else bc
+        ba = buf_a if ba is None else ba
         size = int(13 + 46 * z ** 1.3)
         f = font(size)
         tw = int(f.getlength(phrase)) + 8
@@ -1117,15 +1125,17 @@ def oiwai_flood():
             lit = np.clip(0.35 + 0.9 * light[ys, xs], 0.3, 1.1)[..., None]
             # 手前の文字は #e1dcd6、奥ほど #8d857e へ（明暗で奥行きを分ける。以前は絵の色へ霞ませていて、重なると灰色の模様になった）
             col = (ink * z + far_ink * (1 - z)) * lit
-            col = col * (1 - 0.15 * buf_a[ys, xs][..., None])     # 重なっても白く飛ばさない（ほんの少しだけ沈める）
+            col = col * (1 - 0.15 * ba[ys, xs][..., None])     # 重なっても白く飛ばさない（ほんの少しだけ沈める）
             col = col * (1 + 0.08 * gr[ys, xs][..., None])
-            buf_c[ys, xs] = col * a[..., None] + buf_c[ys, xs] * (1 - a[..., None])
-            buf_a[ys, xs] = a + buf_a[ys, xs] * (1 - a)
+            bc[ys, xs] = col * a[..., None] + bc[ys, xs] * (1 - a[..., None])
+            ba[ys, xs] = a + ba[ys, xs] * (1 - a)
 
     frames, placed, acc, t = [], 0, 0.0, 0
     total = 330
-    while placed < total:
-        rate = 0.12 * np.exp(t / 40)
+    placed_all = []
+    T_STOP = 58                                                  # f58 以降は文字を足さない（最後のコマが雑音にならないように）
+    while placed < total and t < T_STOP:
+        rate = 0.5 * np.exp(t / 18)                             # f58 までに積もりきる速さ（約 220 個）
         acc += rate * 2
         cx, cy = rg.uniform(0, W - 200), rg.uniform(0, H - 40)
         spread = 60 + 160 * min(1, placed / total)
@@ -1143,14 +1153,36 @@ def oiwai_flood():
             acc -= 1
         for x, y, z, al in sorted(batch, key=lambda b: b[2]):  # 奥から順に置く（手前の文字が奥の文字を隠す）
             stamp(x, y, z, al)
+            placed_all.append((x, y, z, al))
         dim = 0.80 * min(1, (t // 6 + 1) / 5)                      # 背景を5段で沈める（黒ではなく、絵の暗部の色へ）
         a = buf_a + dim * (1 - buf_a)
         c = (buf_c + np.array(BLACK, np.float32) / 255 * dim * (1 - buf_a)[..., None]) / np.maximum(a, 1e-4)[..., None]
         frame = Image.fromarray(np.dstack([np.clip(c, 0, 1) * 255, a * 255]).astype(np.uint8), "RGBA")
         frames += [frame, frame]                                 # 1秒に15回だけ変える（同じコマが続くと容量をほとんど食わない）
         t += 2
+    # 最後の 20 コマ：奥の文字を半分の明るさまで沈め、手前の大きい「お祝いですよ」4 個だけを明るいまま残す
+    # （「声に埋め尽くされた」と読める終わり。手前の 4 個は、いちばん手前に置かれた文字を、画面の中で離れた所から選ぶ）
+    keep = []
+    for st in sorted(placed_all, key=lambda b: -b[2]):
+        if 0 <= st[0] < W - 420 and 60 <= st[1] < H - 230 and all(abs(st[0] - k[0]) > 360 or abs(st[1] - k[1]) > 110 for k in keep):
+            keep.append(st)
+        if len(keep) == 4:
+            break
+    fc, fa = np.zeros_like(buf_c), np.zeros_like(buf_a)
+    for x, y, z, al in sorted(keep, key=lambda b: b[2]):
+        stamp(x, y, max(z, 0.9), 1.0, fc, fa)
+    n_end = 20
+    for k in range(n_end):
+        g = 1 - 0.5 * smoothstep(0, 1, (k // 4 + 1) / (n_end // 4))   # 4 コマずつ 5 段で沈める（容量のため）
+        bc_ = buf_c * g * (1 - fa[..., None]) + fc
+        ba_ = buf_a * (1 - fa) + fa
+        a = ba_ + dim * (1 - ba_)
+        c = (bc_ + np.array(BLACK, np.float32) / 255 * dim * (1 - ba_)[..., None]) / np.maximum(a, 1e-4)[..., None]
+        if k % 4 == 0:
+            last = Image.fromarray(np.dstack([np.clip(c, 0, 1) * 255, a * 255]).astype(np.uint8), "RGBA")
+        frames.append(last)
     frames += [frames[-1]] * int(0.5 * FPS)
-    save_webp_anim(frames, OUT / "ep7" / "71_oiwai_flood.webp", lossless=False, quality=80)   # 可逆だと 6MB。暗い地の文字なので非可逆でも崩れにくい
+    save_webp_anim(frames, OUT / "ep7" / "71_oiwai_flood.webp", lossless=False, quality=62)   # 可逆だと 6MB。暗い地の文字なので非可逆でも崩れにくい
     return frames
 
 
@@ -1978,7 +2010,8 @@ def blink_close():
         else:
             v = 0.0
         frames.append(lids(v, feather=0.12 + 0.35 * (1 - min(v, 1))))
-    frames += [lids(0.0)] * int(0.5 * FPS)
+    m = int(0.5 * FPS)                                               # 閉じたあと、赤い透けから暗転の黒へ 0.5 秒（15 コマ）かけて沈む
+    frames += [lids(0.0, blood=1 - (k + 1) / m) for k in range(m)]
     save_webp_anim(frames, OUT / "shared" / "72_blink_close.webp")
     return frames
 

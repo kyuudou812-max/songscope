@@ -211,6 +211,14 @@ def main(src, outdir):
         p = by_sha.get(r.split(".")[0])
         if p and not (out / r).exists():
             shutil.copy(p, out / r)
+    # 元のルームの書き出しフォルダに画像があれば、それも展開先へ（__data.json だけを展開したフォルダでは何も置けない）
+    for r in res:
+        if not (out / r).exists() and (Path(src).parent / r).exists():
+            shutil.copy(Path(src).parent / r, out / r)
+    lack = [r for r in res if not (out / r).exists()]
+    if lack:
+        print(f"注意：resources {len(res)} 件のうち {len(lack)} 件は展開先にない（元のルームの書き出しの画像。"
+              f"シーン・パネルからの参照はなく、スナップショットなどに残る古い参照。元の zip の画像と一緒に入れること）")
     gone = sorted(r for r in refs if r and not (out / r).exists())
     if gone:
         print(f"注意：build に同じ中身がなく、展開先にも置けない参照 {len(gone)} 件（元のルームにだけある絵）")
