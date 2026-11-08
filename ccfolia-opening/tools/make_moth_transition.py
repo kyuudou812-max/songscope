@@ -76,6 +76,11 @@ def wing_sprite():
     return img
 
 
+def _gblur(a, r):
+    from scipy.ndimage import gaussian_filter
+    return gaussian_filter(a, r / 2) if r > 0.3 else a
+
+
 def ease_in(x):
     return np.clip(x, 0, 1) ** 2.2
 
@@ -173,12 +178,19 @@ def frames_moth(sprite):
                  r=rng.uniform(0.6, 1.8), ph=rng.uniform(0, 6.28), born=rng.uniform(0.1, 0.45)) for _ in range(160)]
     out = []
     for f in range(int(DUR * FPS)):
+        # 目の前に迫った羽は、焦点が合わずに大きくぼけた暗い影として見える（流しぼかしで模様を縦に引き伸ばさない）。
+        # 寄りきる前は短いシャッターぶんだけ重ね、寄ったコマはガウスぼかし（1280 幅で最大 ≈64px）をかけ、明るさを 30〜40% まで下げる
+        t = (f + 0.5) / FPS
+        beat = np.clip((t - 0.07) / 0.16, 0, 1)                    # 0.07〜0.23秒：羽を打ち下ろす（閉じる）
+        go = ease_in((t - 0.18) / 0.42)                            # 0.18〜0.6秒：迫りながら左上へ抜ける
+        scale = 1 + 0.6 * beat + 1.4 * go
+        k = float(np.clip((scale - 1.08) / 0.7, 0, 1)) ** 0.7         # ぼけ・暗さの度合い
+        sub = 3 if k < 0.02 else 1
         acc = np.zeros((H, W, 4), np.float32)
-        sub = 6
         for s in range(sub):
-            t = (f + s / sub) / FPS
-            beat = np.clip((t - 0.07) / 0.16, 0, 1)                # 0.07〜0.23秒：羽を打ち下ろす（閉じる）
-            go = ease_in((t - 0.18) / 0.42)                        # 0.18〜0.6秒：迫りながら左上へ抜ける
+            t = (f + (s + 0.5) / sub) / FPS
+            beat = np.clip((t - 0.07) / 0.16, 0, 1)
+            go = ease_in((t - 0.18) / 0.42)
             sx = 1 - 0.8 * np.sin(beat * np.pi / 2) + 0.5 * go     # 閉じて、抜けながら少し開き直す
             scale = 1 + 0.6 * beat + 1.4 * go
             # 抜けていく動きは go=1 で止めない（止めると、大きな羽の端が左上の隅に 0.9 秒張り付いて残っていた）
@@ -186,6 +198,16 @@ def frames_moth(sprite):
             layer = place(sprite, W, H, scale, sx, ang=-30 * go, dx=-1.3 * fly, dy=-1.2 * fly)
             acc += np.asarray(layer, np.float32)
         acc /= sub
+        if k > 0:
+            pm = acc.copy()
+            pm[..., :3] *= pm[..., 3:] / 255                         # 縁が黒ずまないよう、不透明度を掛けてからぼかす
+            r = 32 * k
+            pm = np.stack([_gblur(pm[..., c], r) for c in range(4)], -1)
+            acc = pm
+            acc[..., :3] = acc[..., :3] / np.maximum(acc[..., 3:], 1e-3) * 255
+            # 模様は残さず、暗い影へ（明るさを 40% まで下げ、羽の地の色に寄せる）
+            acc[..., :3] = acc[..., :3] * (1 - 0.6 * k) * (1 - 0.5 * k) + np.array(INK, np.float32) * 0.5 * k
+            acc[..., :3] *= (acc[..., 3:] > 0.5)
         t = f / FPS
         dl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         dd = ImageDraw.Draw(dl)
@@ -196,7 +218,7 @@ def frames_moth(sprite):
             a = max(0.0, 1 - age / 1.1) * (0.5 + 0.5 * np.sin(age * 9 + p["ph"]))
             x, y = p["x"] + p["vx"] * age, p["y"] + p["vy"] * age
             dd.ellipse((x - p["r"], y - p["r"], x + p["r"], y + p["r"]), fill=SCALE_LIGHT + (int(200 * a),))
-        out.append(Image.alpha_composite(Image.fromarray(acc.astype(np.uint8), "RGBA"), dl))
+        out.append(Image.alpha_composite(Image.fromarray(np.clip(acc, 0, 255).astype(np.uint8), "RGBA"), dl))
     out[-1] = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     return out
 
@@ -258,7 +280,7 @@ def sound(minutes=10):
     return out
 
 
-def main(morning=None, moth=None):
+def main(morning=None, moth=None, sound_too=True):
     OUT.mkdir(parents=True, exist_ok=True)
     if moth:
         sprite = moth_sprite(moth)
@@ -270,14 +292,19 @@ def main(morning=None, moth=None):
     tmp = OUT / "frames"
     tmp.mkdir(exist_ok=True)
     for i, im in enumerate(fs):
-        im.save(tmp / f"f{i:04d}.png")
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-framerate", str(FPS), "-i", str(tmp / "f%04d.png"),
-                    "-c:v", "libwebp_anim", "-lossless", "1", "-loop", "1", str(OUT / "52_moth_flap.webp")], check=True)
+        a = np.asarray(im.convert("RGBA")).copy()
+        a[a[..., 3] == 0] = 0                                    # alpha 0 の所は RGB も 0
+        Image.fromarray(a, "RGBA").save(tmp / f"f{i:04d}.png")
+    # alpha 0 の所の RGB を 0 のまま残すため、ffmpeg ではなく fxlib の書き出し（lossless・exact）を使う
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from fxlib import save_webp_anim
+    save_webp_anim(fs, OUT / "52_moth_flap.webp", fps=FPS, lossless=True, loop=1)
 
     snd = sound()
     write_wav(OUT / "dusk.wav", snd)
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "dusk.wav"), "-c:a", "libmp3lame",
-                    "-b:a", "48k", str(OUT / "53_dusk_with_flap.mp3")], check=True)
+    if sound_too:
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(OUT / "dusk.wav"), "-c:a", "libmp3lame",
+                        "-b:a", "48k", str(OUT / "53_dusk_with_flap.mp3")], check=True)
 
     # 確認用：朝の絵（なければ仮）を2秒 → 切り替え → 夕暮れの廊下＋羽ばたき（ココフォリアの重ね方を再現）
     scenes = ROOT / "build" / "ccfolia" / "scenes"
@@ -308,5 +335,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("morning", nargs="?")
     ap.add_argument("--moth", help="ChatGPT の蛾（背景は透明）。あれば、この蛾でドアップと羽ばたきを作る")
+    ap.add_argument("--no-sound", action="store_true", help="音（53_dusk_with_flap.mp3）は書き直さない")
     a = ap.parse_args()
-    main(a.morning, a.moth)
+    main(a.morning, a.moth, not a.no_sound)

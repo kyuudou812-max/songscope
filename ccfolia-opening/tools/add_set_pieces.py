@@ -41,7 +41,8 @@ SCENES = [
     ("第1話 居眠り", "第1話 会議室", S / "ep1_01_conference.jpg", FX / "shared" / "72_blink_close.webp"),
     ("第1話 目を覚ます", "第1話 会議室", S / "ep1_01_conference.jpg", FX / "shared" / "71_blink_reopen.webp"),
     ("第4話 逃走（シート）", "第4話 ブルーシートの現場", S / "ep4_02_bluesheet.jpg", FX / "ep4" / "41_endless_sheet_loop.webp"),
-    ("第4話 大通り（仮）", "第4話 ブルーシートの現場", S / "ep3_01_street.jpg", None),
+    # 大通りの絵が届くまでは、第3話の住宅街を裏返して寄せた代わり（tools/make_avenue_tmp.py。同じ絵の使い回しに見えないように）
+    ("第4話 大通り（仮）", "第4話 ブルーシートの現場", S / "ep4_03_avenue_tmp.jpg", None),
     ("第7話 お祝いですよ", "第7話 水路の合流地点", S / "ep7_04_junction.jpg", FX / "ep7" / "71_oiwai_flood.webp"),
     ("第7話 ハゲタカ", "第7話 高架下と階段", FX / "ep7" / f"76_vulture_bg{VUL}.jpg", FX / "ep7" / f"76_vulture_eyes{VUL}.webp"),
     ("第8話 目覚め", "第8話 家具のない部屋", S / "ep8_01_room.jpg", FX / "shared" / "70_blink_open.webp"),
@@ -79,12 +80,13 @@ for name, base, bg, fg in [
 # (メモ, 画像, x, y, 幅, 高さ, 裏面)。フィールドは x -64〜64・y -36〜36。PC の置き場はフィールドの下、NPC の置き場は右
 PANELS = [(f"第3話 人影{k}", FX / "ep3" / f"31_edge_figure_{k}.webp", x, -34, 8, 24, None)
           for k, x in zip(range(1, 7), (-74, -84, -94, 132, 142, -104))]
+# スマホは 18×35 マス（14×27 だとカテゴリと「◯分前」が 320px で 5px 前後になり読めなかった。監査2の16）
 PANELS += [
     ("第3話 チラシ", FX / "ep3" / "32_flyer.webp", -10, -14, 20, 28, None),
-    ("第5話 スマホのニュース", FX / "ep5" / "56_phone_news.webp", -7, -14, 14, 27, None),
+    ("第5話 スマホのニュース", FX / "ep5" / "56_phone_news.webp", -9, -18, 18, 35, None),
     ("第5話 新聞の訃報（PL がめくる）", FX / "ep5" / "54_obituary.webp", -12, -15, 24, 30, FX / "ep5" / "55b_kamisama_under.webp"),
-    ("第7話 スマホのニュース", FX / "ep7" / "77_phone_news.webp", -7, -14, 14, 27, None),
-    ("第9話 座席のスマホ", FX / "ep9" / "88_seat_phone.webp", -7, -14, 14, 27, None),
+    ("第7話 スマホのニュース", FX / "ep7" / "77_phone_news.webp", -9, -18, 18, 35, None),
+    ("第9話 座席のスマホ", FX / "ep9" / "88_seat_phone.webp", -9, -18, 18, 35, None),
     ("第9話 AF《とある化身の知識》", FX / "ep9" / "87_af_card.webp", -24, -19, 48, 38, None),
     ("第5話 震えた文字", FX / "ep5" / "55_kamisama.webp", -19, -9, 38, 19, None),
     ("第7話 行列（PC の後ろ）", FX / "ep7" / "73_queue_panel.webp", -64, 36, 128, 54, None),
@@ -95,6 +97,25 @@ PANELS += [(f"第{ep}話 報酬{k}", FX / "reward" / f"ep{ep}_reward{k}.webp", -
 PANELS += [(f"第8話 四択{k}", FX / "ep8" / f"83_card_{k}.webp", -19, -26 + (k - 1) * 12, 38, 11,
             FX / "ep8" / f"83_card_{k}_cut.webp") for k in range(1, 5)]
 PANELS += [(f"第{ep}話 前回のあらすじ", FX / "recap" / f"recap_ep{ep}.webp", -19, -12, 38, 24, None) for ep in range(2, 10)]
+
+
+# 元のルームにある（SCENES で作らない）シーンのうち、絵がこのリポジトリで作り直されるもの：名前 → (背景, 前景)。None は変えない。
+# 以前はルームを書き出した時点の古い絵（古い蛾・古い「第N話 終」）を指したままで、展開先にファイルもなかった（監査2の1）
+ROOMDIR = CC / "room"
+
+
+def refresh_for(name):
+    import unicodedata
+    n = unicodedata.normalize("NFKC", name)
+    if n == "待機":
+        return ROOMDIR / "10_wait.jpg", None
+    if n == "休憩":
+        return ROOMDIR / "30_break.jpg", None
+    if n.startswith("終了第") and n[3:4].isdigit():
+        return ROOMDIR / f"40_end_ep{n[3]}.jpg", None
+    if n == "第5話 夕暮れの廊下(羽ばたき)":                          # NFKC で括弧は半角になる
+        return None, CC / "moth" / "52_moth_flap.webp"
+    return None
 
 
 def make_id(name, n=20):
@@ -111,9 +132,9 @@ def main(src, outdir):
     def add(path):
         ext = ".jpeg" if path.suffix == ".jpg" else path.suffix
         name = hashlib.sha256(path.read_bytes()).hexdigest() + ext
-        if name not in res:
+        if not (out / name).exists():                            # 元のルームに同じ画像の参照があっても、展開先には必ず置く（以前は欠けていた）
             shutil.copy(path, out / name)
-            res[name] = {"type": TYPES[path.suffix]}
+        res.setdefault(name, {"type": TYPES[path.suffix]})
         return name
 
     ent["room"]["markers"] = {}                                 # 書き出し時に盤面に残っていた辞書カードを消す（どのシーンでも出続けていた）
@@ -141,6 +162,23 @@ def main(src, outdir):
         sc["order"] = round(b + (nxt - b) * (sib.index(name) + 1) / (len(sib) + 1), 6)
         ent["scenes"][make_id(name)] = sc
 
+    # 元のルームのシーンの絵を、いまの build の絵に差し替える（同じ古い絵を指す名前のないシーンなども一緒に）
+    swap = {}
+    for sc in list(ent["scenes"].values()):
+        r = refresh_for(sc.get("name", ""))
+        if not r:
+            continue
+        for key, path in zip(("backgroundUrl", "foregroundUrl"), r):
+            if path is not None and path.exists():
+                new = add(path)
+                if sc.get(key) and sc[key] != new:
+                    swap[sc[key]] = new
+                sc[key] = new
+    for sc in ent["scenes"].values():
+        for key in ("backgroundUrl", "foregroundUrl"):
+            if sc.get(key) in swap:
+                sc[key] = swap[sc[key]]
+
     top = max((i.get("order", 0) for i in ent["items"].values()), default=0)
     template = next(iter(ent["items"].values()))
     for k, (memo, img, x, y, w, h, cover) in enumerate(PANELS, 1):
@@ -159,6 +197,23 @@ def main(src, outdir):
         for k, nt in enumerate(notes, 1):
             ent["notes"][make_id("note:" + nt["name"])] = {"name": nt["name"], "text": nt["text"], "order": k, "iconUrl": ""}
         print(f"シナリオテキスト {len(notes)} 項目")
+    # 参照しているのに展開先にない画像のうち、build に同じ中身のファイルがあるものは置く
+    by_sha = {}
+    for p in CC.rglob("*"):
+        if p.is_file() and p.suffix in TYPES and "preview" not in p.parts:
+            by_sha.setdefault(hashlib.sha256(p.read_bytes()).hexdigest(), p)
+    refs = {ent["room"].get("backgroundUrl")}
+    for sc in ent["scenes"].values():
+        refs |= {sc.get("backgroundUrl"), sc.get("foregroundUrl")}
+    for it in ent["items"].values():
+        refs |= {it.get("imageUrl"), it.get("coverImageUrl")}
+    for r in sorted(x for x in refs if x):
+        p = by_sha.get(r.split(".")[0])
+        if p and not (out / r).exists():
+            shutil.copy(p, out / r)
+    gone = sorted(r for r in refs if r and not (out / r).exists())
+    if gone:
+        print(f"注意：build に同じ中身がなく、展開先にも置けない参照 {len(gone)} 件（元のルームにだけある絵）")
     (out / "__data.json").write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"シーン {len(SCENES)} 個・スクリーンパネル {len(PANELS)} 枚、画像 {len(list(out.glob('*'))) - 1} 枚を追加")
 

@@ -184,12 +184,22 @@ def vchar(d, x, y, c, f, size, fill):
         d.text((x + (size - w) / 2, y), c, font=f, fill=fill)
 
 
+def _zero_clear(im):
+    if im.mode != "RGBA":
+        return im
+    a = np.asarray(im).copy()
+    a[a[..., 3] == 0] = 0
+    return Image.fromarray(a, "RGBA")
+
+
 def save_webp_anim(frames, path, fps=30, lossless=True, quality=80, loop=1):
     """アニメーション WebP。loop=1 で1回だけ再生（ココフォリアの1回再生の素材）、0 でずっとループ"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     dur = [int(round(1000 * (i + 1) / fps)) - int(round(1000 * i / fps)) for i in range(len(frames))]   # 33/34ms を混ぜて合計を保つ
     kw = dict(lossless=True) if lossless else dict(quality=quality)
+    frames = [_zero_clear(f) for f in frames]                   # alpha 0 の所は RGB も 0（exact で、エンコーダに色を作らせない）
+    kw["exact"] = True
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=dur, loop=loop,
                    minimize_size=True, **kw)
     rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path

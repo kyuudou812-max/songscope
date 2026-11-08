@@ -155,9 +155,10 @@ def gap_shadow(n=72, fps=15):
     region = ((yy > 570) & (xx > 480) & (xx < 800)).astype(np.float32)
     m = gaussian_filter(smoothstep(0.03, 0.10, diff) * region, 4)
     m = np.clip(m / (m.max() + 1e-6) * 1.4, 0, 1)
+    floor = gaussian_filter(((yy > 430)).astype(np.float32), 30)   # 部屋の床（照り返しが下がる所）
     rg = np.random.default_rng(7)
     k = np.fft.rfft(rg.normal(0, 1, n * 4))                  # 周期 n のなめらかな乱数（ループで継ぎ目なし）
-    k[6:] = 0
+    k[5:] = 0                                                # 影の通過は 0.4 秒以上かける（ゆっくりした成分だけ）
     vis = np.fft.irfft(k, n * 4)[::4]
     vis = smoothstep(-0.45, 0.7, vis / np.abs(vis).max())
     frames = []
@@ -169,8 +170,15 @@ def gap_shadow(n=72, fps=15):
         as_ = np.stack([map_coordinates(a[..., c], [yy, xx - sx], order=1, mode="nearest") for c in range(3)], -1)
         # 320px でも「光が影で欠ける」のが読めるよう、door_b の暗くなった分（a−b）を 1.8 倍に強め、出ている間はほぼ不透明に
         bs = np.clip(as_ - np.clip(as_ - bs, 0, 1) * 1.8, 0, 1)
-        al = np.clip(m * 1.3, 0, 1) * np.clip(vis[i] * 1.25, 0, 1) * (0.9 + 0.1 * np.sin(ph * 5))
-        frames.append(rgba(bs, al))
+        v = np.clip(vis[i] * 1.25, 0, 1) * (0.9 + 0.1 * np.sin(ph * 5))
+        # 影がかかる間は、光の舌（y=570〜720）全体を最大 60% まで暗くする（320px・暗いモニタでも読めるように）
+        tongue = np.clip(m * 1.3, 0, 1)
+        lit = a + (bs - a) * v
+        lit = np.minimum(lit, a * (1 - 0.4 * v))
+        # 部屋の床の照り返しも、光が減ったぶん一緒に下げる（背景の明るさの 5% ぶん）
+        col = lit * tongue[..., None] + a * (1 - 0.05 * v) * (1 - tongue[..., None])
+        reg = np.clip(np.maximum(tongue, floor) * 4, 0, 1) if v > 0.02 else np.zeros_like(tongue)
+        frames.append(rgba(col, reg))
     path = OUT / "ep1" / "15_gap_shadow_loop.webp"
     save_webp_anim(frames, path, fps=fps, lossless=False, quality=80, loop=0)
     check(S / "ep1_01_door_a.jpg", path, "15_gap_shadow", fps, tail=0, loops=1)

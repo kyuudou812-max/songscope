@@ -21,7 +21,7 @@
                 letter-spacing: .04em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
   #title .sub { position: absolute; writing-mode: vertical-rl; text-orientation: upright; font-family: "Gothic";
                 font-size: 19px; letter-spacing: .32em; color: #eeece8; transform: translateX(-50%); line-height: 1; }
-  #end { font-family: "Mincho"; font-size: 26px; letter-spacing: .3em; color: #b9b1aa; }
+  #end { font-family: "Mincho"; font-size: 36px; letter-spacing: .25em; color: #b9b1aa; }  /* 320px でも読めるよう、1280 幅で 36px（監査2の12） */
 </style>
 </head>
 <body>
@@ -44,7 +44,7 @@ window.setLayout = layout => {
   [...document.querySelectorAll("#title .col")].forEach((c, k) =>
     Object.assign(c.style, { left: (cx + (1 - k) * COL_PITCH) + "px", top: top + "px" }));
   Object.assign($("#title .sub").style, { left: (cx + COL_PITCH + 52) + "px", top: (top + 6) + "px" });
-  Object.assign($("#end").style, { left: "90px", top: (top + TITLE_H - 30) + "px" });
+  Object.assign($("#end").style, { left: "90px", top: (top + TITLE_H - 44) + "px" });
   $("#slit").style.display = view === "end" ? "none" : "";
   $("#note").style.display = view === "end" ? "none" : "";
   $("#title").style.display = view === "end" ? "" : "none";

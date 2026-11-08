@@ -130,27 +130,36 @@ def preview(bg, frames, audio, name, fps=FPS, tail=1.0):
 # ================================================================ 共通：まぶた
 def lids(open_, w=640, h=360, feather=0.3):
     """まぶたの形。open_=0 で閉じ、1.3 で画面の外まで開く。
-    上まぶたは下より大きく動き、縁はまつ毛でわずかに波打って均一でない。上の縁のすぐ内側に、まつ毛の薄い影の帯。
+    上まぶたは下より大きく動く。縁はゆるい弧（中央が先に降り、先に開く）で、目に近すぎて大きくぼける（半径は画面の高さの約 7%）。
+    縁を細かく波打たせない（以前は雑音で波打たせていて、黒い布を降ろしたように見えた）。
+    閉じかけ（open<0.3）は、まぶたを透けた光で、暗がりがわずかに赤い（血の透け #3a1c14 前後）。
     開ききる前は、目が明るさに慣れていないので、内側にうっすら暖色の白いもや（露出の順応）"""
     if open_ <= 0.01:
         return Image.new("RGBA", (w, h), BLACK + (255,))
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    u = xx / w
-    wob = 0.025 * np.sin(u * 23.0 + 1.3) + 0.018 * np.sin(u * 51.0 + 0.4) + 0.012 * np.sin(u * 97.0)   # まつ毛の不揃い
+    uc = (xx - w / 2) / (w / 2)                                     # -1〜1
     cy = h * (0.50 - 0.04 * min(open_, 1))                          # 開くにつれて、すき間の中心が少し上へ
-    a = w * (1.25 + 0.4 * open_)                                    # 細いすき間でも視野の端から端まで続く（左右の角を黒くしない）
     b_up = max(h * 0.70 * open_, 0.5)                              # 上まぶた（よく動く）
     b_dn = max(h * 0.48 * open_, 0.5)                              # 下まぶた（あまり動かない）
-    b = np.where(yy < cy, b_up, b_dn)
-    r = np.sqrt(((xx - w / 2) / a) ** 2 + ((yy - cy) / b) ** 2) * (1 + wob * (yy < cy))
-    alpha = smoothstep(1 - feather, 1 + feather, r)
-    # まつ毛の線は描かない：まぶたの縁は目に近すぎて大きくぼけ、主観では線として見えない（以前はすき間の内側に二重の縁が出ていた）
-    alpha = np.clip(alpha, 0, 1)
+    # 弧：端ほどすき間が狭いが、細いすき間でも視野の端まで続く（左右の角を黒くしない）
+    up = cy - b_up * (1 - 0.30 * uc * uc)
+    dn = cy + b_dn * (1 - 0.22 * uc * uc)
+    blur = 0.035 * h                                               # 柔らかい縁（帯の幅は ±2σ ≈ 画面の高さの 7%）
+    a_up = smoothstep(-1.0, 1.0, (up - yy) / (feather * b_up + blur))
+    a_dn = smoothstep(-1.0, 1.0, (yy - dn) / (feather * b_dn + blur))
+    alpha = np.clip(np.maximum(a_up, a_dn) + a_up * a_dn, 0, 1)
+    # 閉じかけの血の透け（完全に閉じる直前でまた黒へ戻し、閉じた黒のコマとつながるように）
+    red = smoothstep(0.32, 0.12, open_) * smoothstep(0.0, 0.07, open_)
+    lid = np.array(BLACK, np.float32) * (1 - 0.6 * red) + np.array([58, 28, 20], np.float32) * 0.6 * red
     veil = 0.10 * np.clip(1 - open_ / 0.9, 0, 1) * (1 - alpha)         # 慣れていない明るさ
+    tint = 0.15 * red * (1 - alpha)                                     # すき間にも赤い透けを 15% 重ねる
+    vcol = (np.array([235, 215, 190], np.float32) * veil[..., None] + np.array([58, 28, 20], np.float32) * tint[..., None]) / np.maximum(veil + tint, 1e-4)[..., None]
+    veil = veil + tint
     im = np.zeros((h, w, 4), np.float32)
-    im[..., :3] = (np.array(BLACK, np.float32) * alpha[..., None] + np.array([235, 215, 190], np.float32) * veil[..., None]) / np.maximum(alpha + veil, 1e-4)[..., None]
+    im[..., :3] = (lid * alpha[..., None] + vcol * veil[..., None]) / np.maximum(alpha + veil, 1e-4)[..., None]
     im[..., 3] = np.clip(alpha + veil, 0, 1) * 255
-    return Image.fromarray(im.astype(np.uint8), "RGBA")
+    im[..., :3] *= (im[..., 3:] > 0)
+    return Image.fromarray(np.round(im).astype(np.uint8), "RGBA")
 
 
 def blink_open():
@@ -735,14 +744,18 @@ def sheet_loop(period=1.4, size=(1280, 720)):
     W, H = size
     tex = seamless(sheet_texture().resize(size, Image.LANCZOS))
     n = int(round(period * FPS))
-    big = Image.new("RGB", (W * 3, H * 3))
-    for i in range(3):
-        for j in range(3):
-            big.paste(tex, (i * W, j * H))
+    tex0 = np.asarray(tex)
     frames = []
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     for i in range(n):
         p = i / n
+        # 布全体が、走る向き（左）へ 1 周期で 1 枚ぶん流れる（つないだ布なので p=1 で元に戻り、ループがつながる）。
+        # 以前は布の模様が全コマで同じ所に止まり、かき分けた帯だけが滑って見えた
+        tex = Image.fromarray(np.roll(tex0, -int(round(W * p)), axis=1))
+        big = Image.new("RGB", (W * 3, H * 3))
+        for bi in range(3):
+            for bj in range(3):
+                big.paste(tex, (bi * W, bj * H))
         # 奥のシート：小さく暗いところから、手前の大きさ・明るさまで近づいてくる
         # （縮めたときに黒い縁が出ないよう、裏返してつないだ大きな布から切り出す）
         sb = 0.62 + 0.38 * ease_out(p)
@@ -765,7 +778,9 @@ def sheet_loop(period=1.4, size=(1280, 720)):
         # 布は板のように平行移動せず、手で押された縁ほど大きく動き、遠い所（吊ってある側）はあまり動かない。
         # その差の分だけ布が縮んで寄り、縦のひだができる（縮んだ所ほどひだが深い）
         u = np.linspace(0, W / 2, 256)
-        push = gap / 2 * (0.35 + 0.65 * (u / (W / 2)) ** 1.5)     # 布の点 u が左へ押される量（縁 u=W/2 で gap/2）
+        # 押された所の左右 150px は、手に近いほど強く縮む（たわみ）。傾きが 1 を超えて折り返さないよう、量は 90px まで
+        A = min(90.0, 0.3 * gap / 2)
+        push = (gap / 2 - A) * (0.35 + 0.65 * (u / (W / 2)) ** 1.5) + A * smoothstep(W / 2 - 150, W / 2, u)
         xd = u - push                                            # 画面上の位置（u とともに増える）
         xl = xx - wave
         src_l = np.interp(xl, xd, u, left=-1e4, right=W / 2)      # 画面の x → 布の点（左半分）
@@ -784,7 +799,17 @@ def sheet_loop(period=1.4, size=(1280, 720)):
             from scipy.ndimage import uniform_filter1d
             front = uniform_filter1d(front, max(1, int(40 * k ** 0.7)), axis=1, mode="nearest")
         moved = np.where(mask_l, front[yi, sx_l], np.where(mask_r, front[yi, sx_r], 0))
-        c = np.where(mask_l | mask_r, moved * shade * (1 - 0.25 * k), c)
+        # 布の厚み：縁は 1px の固い線にしない。手前の布の縁の内側に細いハイライト（めくれた縁に光が当たる）、
+        # 奥の布には、手前の布の縁から 8〜12px の柔らかい落ち影
+        el = (W / 2 - gap / 2 + wave) - xx                       # 左の布の縁からの距離（布の内側が正）
+        er = xx - (W / 2 + gap / 2 + wave)
+        din = np.maximum(el, er)                                 # 手前の布の内側で正、すき間で負
+        cover = smoothstep(-0.8, 0.8, din)[..., None]            # 縁は 1.5px ほどでなじませる
+        rim = (np.exp(-np.clip(din, 0, None) / 3.0) * (din > -1))[..., None] * min(1, k * 6)
+        moved = moved * shade * (1 - 0.25 * k) * (1 + 0.28 * rim) + 18 * rim
+        cast = (np.exp(-np.clip(-din, 0, None) / 10.0) * (din <= 0))[..., None] * min(1, k * 6)
+        c = c * (1 - 0.55 * cast)
+        c = moved * cover + c * (1 - cover)
         # 走っている揺れ
         dy = int(6 * np.sin(2 * np.pi * p * 4))                   # 走る上下動は1歩に1回：1.4秒で4歩（約 2.9 歩/秒。前は 1.4 歩/秒で歩きより遅かった）
         img = Image.fromarray(np.clip(c, 0, 255).astype(np.uint8)).transform(   # 少し寄せてから揺らす（上下に黒い帯を出さない）
@@ -952,8 +977,9 @@ def flyer():
     w = sum(f3.getlength(c) for c in hint)
     d.text(((W - w) / 2, 640), hint, font=f3, fill=255)
     # 滲み：ぼかしてから、紙の繊維に沿ってむらのある濃さにする。版が少しずれて二重になる
-    a = np.asarray(ink.filter(ImageFilter.GaussianBlur(1.3)), np.float32) / 255
-    a = np.clip(a * 1.6, 0, 1) * (0.75 + 0.25 * np.random.default_rng(33).random((H, W)))
+    # （書体は STYLE どおりしっぽり明朝。滲みが強いと横画の細さが消えて丸ゴシックに見えたので、0.6px に抑える）
+    a = np.asarray(ink.filter(ImageFilter.GaussianBlur(0.6)), np.float32) / 255
+    a = np.clip(a * 1.2, 0, 1) * (0.75 + 0.25 * np.random.default_rng(33).random((H, W)))
     ghost = np.roll(np.roll(a, 2, 1), 1, 0) * 0.25
     a = np.maximum(a, ghost)
     lum = lum * (1 - a * 0.85)
@@ -1065,6 +1091,7 @@ def oiwai_flood():
     buf_c = np.zeros((H, W, 3), np.float32)                      # 文字の層（プリマルチ）
     buf_a = np.zeros((H, W), np.float32)
     ink = np.array(TEXT, np.float32) / 255
+    far_ink = np.array(QUIETEST, np.float32) / 255
 
     def stamp(x, y, z, alpha):
         size = int(13 + 46 * z ** 1.3)
@@ -1088,27 +1115,34 @@ def oiwai_flood():
             occ = np.clip((z + 0.1 - D[ys, xs]) / 0.08, 0, 1)    # 手前の群衆・柱に隠れる
             a = mk * occ * alpha
             lit = np.clip(0.35 + 0.9 * light[ys, xs], 0.3, 1.1)[..., None]
-            haze = (1 - z) * 0.45                                 # 空気遠近：奥ほど絵の色に寄る
-            col = ink * lit * (1 - haze) + plate[ys, xs] * 1.3 * haze
-            col = col * (1 - 0.45 * buf_a[ys, xs][..., None])     # 重なるほど濁って沈む（白飛びさせない）
+            # 手前の文字は #e1dcd6、奥ほど #8d857e へ（明暗で奥行きを分ける。以前は絵の色へ霞ませていて、重なると灰色の模様になった）
+            col = (ink * z + far_ink * (1 - z)) * lit
+            col = col * (1 - 0.15 * buf_a[ys, xs][..., None])     # 重なっても白く飛ばさない（ほんの少しだけ沈める）
             col = col * (1 + 0.08 * gr[ys, xs][..., None])
             buf_c[ys, xs] = col * a[..., None] + buf_c[ys, xs] * (1 - a[..., None])
             buf_a[ys, xs] = a + buf_a[ys, xs] * (1 - a)
 
     frames, placed, acc, t = [], 0, 0.0, 0
-    total = 420
+    total = 330
     while placed < total:
         rate = 0.12 * np.exp(t / 40)
         acc += rate * 2
         cx, cy = rg.uniform(0, W - 200), rg.uniform(0, H - 40)
         spread = 60 + 160 * min(1, placed / total)
+        batch = []
         while acc >= 1 and placed < total:
             x = float(np.clip(cx + rg.normal(0, spread), -60, W - 120))
             y = float(np.clip(cy + rg.normal(0, spread * 0.5), -10, H - 30))
-            z = float(np.clip(D[int(np.clip(y + 15, 0, H - 1)), int(np.clip(x + 60, 0, W - 1))] + rg.uniform(0.02, 0.25), 0, 1))
-            stamp(x, y, z, rg.uniform(0.5, 0.95))
+            # 後になるほど手前（大きく明るい）の文字が増え、上から押し寄せてくる
+            late = placed / total
+            z = float(np.clip(D[int(np.clip(y + 15, 0, H - 1)), int(np.clip(x + 60, 0, W - 1))] + rg.uniform(0.02, 0.25) + 0.25 * late, 0, 1))
+            if late > 0.6:
+                y = float(np.clip(y * (1.3 - late), -10, H - 30))
+            batch.append((x, y, z, rg.uniform(0.5, 0.95)))
             placed += 1
             acc -= 1
+        for x, y, z, al in sorted(batch, key=lambda b: b[2]):  # 奥から順に置く（手前の文字が奥の文字を隠す）
+            stamp(x, y, z, al)
         dim = 0.80 * min(1, (t // 6 + 1) / 5)                      # 背景を5段で沈める（黒ではなく、絵の暗部の色へ）
         a = buf_a + dim * (1 - buf_a)
         c = (buf_c + np.array(BLACK, np.float32) / 255 * dim * (1 - buf_a)[..., None]) / np.maximum(a, 1e-4)[..., None]
@@ -1444,6 +1478,11 @@ class PushCamera:
             sx, sy = c[0] + qx / s, c[1] + qy / s
             d = map_coordinates(self.depth, [sy, sx], order=1, mode="nearest")
             s = S ** (1 + 1.2 * np.clip(d - self.ds, 0, 1))         # 手前ほど速く大きくなる（ドリー）
+        # 縮小する前に 0.6px ぼかす：寄りの途中で、客席の細かい模様が点の帯（エイリアス）にならないように
+        from scipy.ndimage import gaussian_filter
+        if getattr(self, "_blur_src", None) is not img:
+            self._blur_src, self._blur = img, gaussian_filter(img, (0.6, 0.6, 0))
+        img = self._blur
         return np.dstack([map_coordinates(img[..., ch], [sy, sx], order=1, mode="nearest") for ch in range(3)])
 
     def gate_quad(self, t):
@@ -1713,8 +1752,36 @@ def vtext(d, x, y, s, f, fill, pitch=None, max_rows=None):
     return x
 
 
+def halftone_portrait(w, h, seed=0):
+    """古い新聞の、暗く粗い網点の肖像（頭と肩の形がかろうじて分かる程度。目鼻は描かない）"""
+    from scipy.ndimage import gaussian_filter
+    rg = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    cx, cy = w * 0.52, h * 0.42
+    lum = np.full((h, w), 0.74, np.float32) - 0.14 * (yy / h)                 # 暗い背景（室内）
+    hair = np.exp(-(((xx - cx) / (w * 0.21)) ** 2 + ((yy - cy + h * 0.02) / (h * 0.36)) ** 2) * 1.6)
+    shoulder = 1 / (1 + np.exp(-(yy - (h * 0.80 + 0.012 * (xx - cx) ** 2 / (w * 0.01))) / 6))
+    face = np.exp(-(((xx - cx - w * 0.01) / (w * 0.095)) ** 2 + ((yy - cy - h * 0.04) / (h * 0.20)) ** 2) * 1.4)
+    lum -= 0.46 * np.clip(hair + shoulder, 0, 1)                            # 長い髪と黒い服
+    lum += 0.40 * face                                                      # 顔はぼんやり明るいだけ
+    lum += gaussian_filter(rg.normal(0, 0.12, (h, w)), 3)                   # 写りの悪さ（むら）
+    lum = gaussian_filter(lum, 1.6)
+    # 網点：45 度、ピッチ 3.2px。暗いほど点が大きい
+    pitch = 3.2
+    u = (xx + yy) / np.sqrt(2) / pitch
+    v = (xx - yy) / np.sqrt(2) / pitch
+    dist = np.hypot(u - np.round(u), v - np.round(v))                      # 0〜0.71
+    r = np.sqrt(np.clip(1 - lum, 0, 1) / np.pi) * 1.05
+    ink = smoothstep(r + 0.08, r - 0.08, dist)
+    ink = np.clip(ink * (0.85 + 0.15 * rg.random((h, w))), 0, 1)
+    ink = gaussian_filter(ink, 0.5)                                         # 刷りのにじみ
+    out = tone(196 * (1 - ink) + 40 * ink)                              # 紙と同じ赤茶の色味
+    out = np.dstack([out, np.full((h, w), 255, np.uint8)])
+    return Image.fromarray(out.astype(np.uint8), "RGBA")
+
+
 def newspaper():
-    """第五話：スクラップブックの、剥がれずに残った新聞記事（L1831〜）。縦書きの訃報の切り抜き。写真の欄は空白"""
+    """第五話：スクラップブックの、剥がれずに残った新聞記事（L1831〜）。縦書きの訃報の切り抜き。写真の欄には、暗く粗い網点の肖像"""
     from PIL import ImageFilter
     o = TXT["ep5_obit"]
     W, H = 560, 720
@@ -1730,8 +1797,11 @@ def newspaper():
     x -= 40
     vtext(d, x, 60, o["sub"], fs, ink)
     d.line([(x - 14, 30), (x - 14, H - 40)], fill=ink, width=1)
-    # 写真の欄（空白。本文に写真はないので、灰色の四角に「写真」とも書かない）
-    d.rectangle([64, 40, x - 34, 220], outline=(90, 78, 72, 255), width=1)
+    # 写真の欄：女優の訃報なので顔写真が入る。ただし顔ははっきりさせない（OP のネタバレを避け、本文にない事実を足さない）。
+    # 暗く写りの悪い肖像を、新聞の粗い網点で刷ったもの（以前は空の枠で、320px でも作りかけに見えた）
+    box = (64, 40, int(x - 34), 220)
+    img.alpha_composite(halftone_portrait(box[2] - box[0], box[3] - box[1], seed=54), (box[0], box[1]))
+    d.rectangle(box, outline=(90, 78, 72, 255), width=1)
     x = x - 46
     last = vtext(d, x, 250, o["body"], fb, ink, pitch=15, max_rows=29)
     assert last > 50, last
@@ -1742,8 +1812,8 @@ def newspaper():
     ImageDraw.Draw(mask).polygon([(rg.uniform(4, 12), rg.uniform(4, 12)), (W - rg.uniform(4, 12), rg.uniform(4, 12)),
                                   (W - rg.uniform(4, 12), H - rg.uniform(4, 12)), (rg.uniform(4, 12), H - rg.uniform(4, 12))], fill=255)
     img.putalpha(mask.filter(ImageFilter.GaussianBlur(0.6)))
-    img = img.rotate(-2.0, resample=Image.BICUBIC, expand=True)
-    img.save(OUT / "ep5" / "54_obituary.webp", lossless=True)
+    img = clean_alpha(img.rotate(-2.0, resample=Image.BICUBIC, expand=True))
+    img.save(OUT / "ep5" / "54_obituary.webp", lossless=True, exact=True)
     return img
 
 
