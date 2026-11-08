@@ -181,7 +181,9 @@ def frames_moth(sprite):
             go = ease_in((t - 0.18) / 0.42)                        # 0.18〜0.6秒：迫りながら左上へ抜ける
             sx = 1 - 0.8 * np.sin(beat * np.pi / 2) + 0.5 * go     # 閉じて、抜けながら少し開き直す
             scale = 1 + 0.6 * beat + 1.4 * go
-            layer = place(sprite, W, H, scale, sx, ang=-30 * go, dx=-1.3 * go, dy=-1.2 * go)
+            # 抜けていく動きは go=1 で止めない（止めると、大きな羽の端が左上の隅に 0.9 秒張り付いて残っていた）
+            fly = max(0.0, (t - 0.18) / 0.42) ** 2.2
+            layer = place(sprite, W, H, scale, sx, ang=-30 * go, dx=-1.3 * fly, dy=-1.2 * fly)
             acc += np.asarray(layer, np.float32)
         acc /= sub
         t = f / FPS

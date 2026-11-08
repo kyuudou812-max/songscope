@@ -150,7 +150,9 @@ def gap_shadow(n=72, fps=15):
     H, W = a.shape[:2]
     diff = gaussian_filter(np.abs(a - b).mean(-1), 3)
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    region = ((yy > 570) & (yy < 660) & (xx > 480) & (xx < 800)).astype(np.float32)
+    # 隙間の線だけでなく、手前の床に伸びる光の舌（720 まで）も含める：向こうで光が遮られれば、床に落ちる光も同時に暗くなる
+    # （以前は 660 で切っていて、隙間が影でふさがっても床の下半分の光が明るいまま残っていた）
+    region = ((yy > 570) & (xx > 480) & (xx < 800)).astype(np.float32)
     m = gaussian_filter(smoothstep(0.03, 0.10, diff) * region, 4)
     m = np.clip(m / (m.max() + 1e-6) * 1.4, 0, 1)
     rg = np.random.default_rng(7)

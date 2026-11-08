@@ -763,8 +763,22 @@ def sheet_loop(period=1.4, size=(1280, 720)):
         # 左右の布：縁に向かって暗くなる（めくれて光が当たらない）
         edge = np.minimum(np.abs(xx - (W / 2 - gap / 2 + wave)), np.abs(xx - (W / 2 + gap / 2 + wave)))
         shade = (1 - 0.45 * min(1, k * 6) * (1 - np.clip(edge / 140, 0, 1)))[..., None]   # 分け始めは影なし（ループの継ぎ目をなくす）
-        sx_l = np.clip(xx + gap / 2, 0, W - 1).astype(int)       # 左の布は左へずれる
-        sx_r = np.clip(xx - gap / 2, 0, W - 1).astype(int)
+        # 布は板のように平行移動せず、手で押された縁ほど大きく動き、遠い所（吊ってある側）はあまり動かない。
+        # その差の分だけ布が縮んで寄り、縦のひだができる（縮んだ所ほどひだが深い）
+        u = np.linspace(0, W / 2, 256)
+        push = gap / 2 * (0.35 + 0.65 * (u / (W / 2)) ** 1.5)     # 布の点 u が左へ押される量（縁 u=W/2 で gap/2）
+        xd = u - push                                            # 画面上の位置（u とともに増える）
+        xl = xx - wave
+        src_l = np.interp(xl, xd, u, left=-1e4, right=W / 2)      # 画面の x → 布の点（左半分）
+        src_r = W - np.interp(W - xl, xd, u, left=-1e4, right=W / 2)
+        comp = np.interp(xl, xd, np.gradient(xd, u))             # 1 より小さいほど縮んでいる
+        comp_r = np.interp(W - xl, xd, np.gradient(xd, u))
+        cmp = np.where(xl < W / 2, comp, comp_r)
+        src = np.where(xl < W / 2, src_l, src_r)
+        fold = 1 - 0.4 * np.clip(1 - cmp, 0, 1) * (0.5 + 0.5 * np.sin(src / 9.0))   # 縦のひだ
+        shade = shade * fold[..., None]
+        sx_l = np.clip(src_l, 0, W - 1).astype(int)
+        sx_r = np.clip(src_r, 0, W - 1).astype(int)
         yi = yy.astype(int)
         mask_l, mask_r = left[..., None], right[..., None]
         if k > 0.02:                                             # 押しのけられる布には横のモーションブラー（速いほど長く）
@@ -773,7 +787,7 @@ def sheet_loop(period=1.4, size=(1280, 720)):
         moved = np.where(mask_l, front[yi, sx_l], np.where(mask_r, front[yi, sx_r], 0))
         c = np.where(mask_l | mask_r, moved * shade * (1 - 0.25 * k), c)
         # 走っている揺れ
-        dy = int(6 * np.sin(2 * np.pi * p * 2))
+        dy = int(6 * np.sin(2 * np.pi * p * 4))                   # 走る上下動は1歩に1回：1.4秒で4歩（約 2.9 歩/秒。前は 1.4 歩/秒で歩きより遅かった）
         img = Image.fromarray(np.clip(c, 0, 255).astype(np.uint8)).transform(   # 少し寄せてから揺らす（上下に黒い帯を出さない）
             size, Image.AFFINE, (0.98, 0, W * 0.01, 0, 0.98, H * 0.01 + dy * 0.98), Image.BILINEAR)
         frames.append(img.convert("RGBA"))
@@ -1283,15 +1297,24 @@ def film_frame(src, i, rg, size=(960, 720)):
     """1コマ分の古いフィルム（960×720 の RGB と、そのコマの明るさ）：揺れ・ちらつき・縦の傷・塵・粒子・周辺の暗さ"""
     from PIL import ImageFilter
     W, H = size
-    dx, dy = rg.normal(0, 1.2), rg.normal(0, 2.0)                   # フィルムの送りの揺れ
+    # フィルムの送りの揺れ（ゲートウィーブ）：毎コマ独立にがたがた跳ねず、ゆっくりうねる揺れに小さな跳ねが乗る。
+    # 縦（送りの方向、つめとパーフォレーションの遊び）の方が横より大きい
+    dx = 0.9 * np.sin(i * 0.31 + 1.1) + 0.5 * np.sin(i * 0.83) + rg.normal(0, 0.25)
+    dy = 1.4 * np.sin(i * 0.23 + 0.4) + 0.8 * np.sin(i * 0.71 + 2.0) + rg.normal(0, 0.4)
     im = src.transform(size, Image.AFFINE, (1, 0, dx, 0, 1, dy), Image.BILINEAR)
     lum = np.asarray(im.convert("L"), np.float32)
     gain = 0.92 + 0.1 * rg.random()
     lum = lum * gain                                               # 明るさのちらつき
     lum += rg.normal(0, 9, (H, W))                                 # 粒子
-    for _ in range(rg.integers(0, 3)):                             # 縦の傷（明るい細い線）
-        x = rg.integers(0, W)
-        lum[:, x:x + 2] += rg.uniform(30, 70)
+    # 縦の傷（明るい細い線）：傷はフィルムの長さ方向に続いているので、同じ位置に何十コマも居続け、少しだけ横に揺れる
+    # （毎コマ違う位置に出ると、傷ではなく雨のちらつきに見える）
+    for j in range(2):
+        seg = (i + j * 23) // 40
+        srg = np.random.default_rng(9300 + seg * 2 + j)
+        if srg.random() < 0.6:
+            x = int(srg.integers(40, W - 40) + 3 * np.sin(i * 0.4 + j))
+            if rg.random() < 0.85:                                     # ときどき途切れる
+                lum[:, x:x + 2] += srg.uniform(30, 70)
     for _ in range(rg.integers(2, 7)):                             # 塵（黒い点やけば）
         x, y, r = rg.integers(0, W), rg.integers(0, H), rg.integers(2, 6)
         lum[max(0, y - r):y + r, max(0, x - r):x + r] *= 0.2
@@ -1423,7 +1446,8 @@ class PushCamera:
         bg = self.warp(self.lit if hall is None else hall, t) if hall is not False else self._bg
         rgba = np.asarray(quad_warp(film, self.gate_quad(t), PUSH_SIZE), np.float32) / 255
         fa = rgba[..., 3:] * on
-        col = bg * (1 - fa) + np.clip(rgba[..., :3] * 1.45 + 0.03, 0, 1) * fa
+        # 暗いホールでは、映写された画がいちばん明るいもの（以前の 1.45 倍だと 95% 点でも 59/255 で、暗いモニタでは客席と見分けにくかった）
+        col = bg * (1 - fa) + np.clip(rgba[..., :3] * 1.85 + 0.03, 0, 1) * fa
         col = col * (1 + 0.05 * self.grain[i % 4][..., None])       # 粒子は4枚を回す（毎コマ全面を変えない）
         return Image.fromarray((np.clip(col, 0, 1) * 255).astype(np.uint8), "RGB").convert("RGBA")
 
@@ -1449,7 +1473,7 @@ def old_film():
     for i in range(0, n_hold, 3):                                   # 映し続ける間は3コマずつ同じ画（同じコマが続くと容量はほぼ0）
         loop += [cam.frame(1.0, film_frame(a, i, rg)[0], i=i // 3, hall=False)] * 3
     sfx = "_draft" if draft else ""
-    save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", fps=F, lossless=False, quality=56, loop=1)
+    save_webp_anim(loop, OUT / "ep9" / f"92_film_loop{sfx}.webp", fps=F, lossless=False, quality=46, loop=1)   # 映写の画を明るくした分、品質を下げて 5MB 未満に
     cut = []
     for i in range(int(1.2 * F)):                                   # ちらつきが強くなる
         f, g = film_frame(a, i, rg)
@@ -1915,19 +1939,25 @@ def lobby_flicker(L=10.0):
     for k in range(n):                                               # シャンデリアが落ちると、左右も少し引きずられる（同じ回路）
         dims[0][k] = max(dims[0][k], dims[1][k] * 0.4)
         dims[2][k] = max(dims[2][k], dims[1][k] * 0.4)
-    warm = np.array([255, 196, 140], np.float32)
+    # 白熱電球はフィラメントの熱で光が遅れる：一瞬で消えず数十ミリ秒かけて沈み、点き直しも立ち上がりに1〜2コマかかる。
+    # ループの継ぎ目でも熱が続くよう、2周つないで後ろの1周を使う
+    from fxlib import filament_color, filament_lag
+    dims = [filament_lag(np.concatenate([d, d]), FPS)[n:] for d in dims]
     cache, frames = {}, []
     for k in range(n):
-        key = tuple(round(d[k] * 10) / 10 for d in dims)
+        key = tuple(round(d[k] * 20) / 20 for d in dims)
         if key not in cache:
             dark = np.zeros((H, W), np.float32)
             glow = np.zeros((H, W), np.float32)
+            gcol = np.zeros((H, W, 3), np.float32)
             for dv, lit, gl in zip(key, lit_maps, glow_maps):
                 dark = 1 - (1 - dark) * (1 - dv * (0.25 + 0.7 * np.sqrt(lit)))   # 消えた灯りが照らしていた所ほど暗い
-                glow = np.maximum(glow, (1 - dv) * gl * 0.45)            # 点いている灯りのにじみ
+                g = (1 - dv) * gl * 0.45                                 # 点いている灯りのにじみ
+                gcol = np.where((g > glow)[..., None], filament_color(1 - dv), gcol)   # 落ちかけの灯りは赤く（色温度が下がる）
+                glow = np.maximum(glow, g)
             dark = dark * (1 - glow)
             a = dark + glow
-            col = (np.array(BLACK, np.float32) * dark[..., None] + warm * glow[..., None]) / np.maximum(a, 1e-4)[..., None]
+            col = (np.array(BLACK, np.float32) * dark[..., None] + gcol * glow[..., None]) / np.maximum(a, 1e-4)[..., None]
             im = np.dstack([np.clip(col, 0, 255), np.clip(a, 0, 1) * 255]).astype(np.uint8)
             cache[key] = Image.fromarray(im, "RGBA")
         frames.append(cache[key])

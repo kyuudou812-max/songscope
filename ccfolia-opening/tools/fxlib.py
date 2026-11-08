@@ -348,3 +348,26 @@ def quad_warp(src, quad, size):
         B += [u, v]
     coef = np.linalg.solve(np.array(A, float), np.array(B, float))
     return src.convert("RGBA").transform(size, Image.PERSPECTIVE, tuple(coef), Image.BICUBIC)
+
+
+# ---------------------------------------------------------------- 灯りの物理（QUALITY-AUDIT.local.md）
+def filament_lag(dim, fps=30, tau_heat=0.035, tau_cool=0.07):
+    """白熱電球の明るさの遅れ。dim（0＝点灯、1＝消灯）の段の並びを、フィラメントの熱の慣性に通す。
+    電気が切れても光は一瞬では消えず（冷えるのに数十ミリ秒）、点き直しも少し遅れて立ち上がる。
+    小さな燭台・シャンデリア球（15〜40W）で、冷える時定数 50〜80ms、温まる時定数 30〜40ms ほど"""
+    dim = np.asarray(dim, np.float64)
+    out = np.empty_like(dim)
+    y = dim[0]
+    for i, x in enumerate(dim):
+        tau = tau_cool if x > y else tau_heat
+        y += (x - y) * (1 - np.exp(-1 / (fps * tau)))
+        out[i] = y
+    return out
+
+
+def filament_color(level, warm=(255, 196, 140)):
+    """白熱電球の色温度は明るさとともに下がる（暗くなるほど赤い）。level＝0（消灯）〜1（点灯）の光の色"""
+    level = float(np.clip(level, 0, 1))
+    deep = np.array([255, 110, 40], np.float32)                     # 1000K 前後の、消えかけのフィラメントの色
+    return deep + (np.array(warm, np.float32) - deep) * level ** 0.5
+
