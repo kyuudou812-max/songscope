@@ -51,14 +51,19 @@ WIN_D = (WIN_R - WIN_L) / np.linalg.norm(WIN_R - WIN_L)
 WIN_IN = np.array([WIN_D[1], -WIN_D[0]])   # 部屋の内向き（カメラ側）
 WIN_TOP = 2.50                             # 窓の上枠の高さ（両端で 2.53/2.50m）
 LOOP = 9.2                                 # ベランダのループ（突風 4.6 秒 × 2）
-LOOP_HANDOFF = 1.7                         # ループの中で、絵の女から物理の女へ移る時刻
+LOOP_HANDOFF = 0.0                         # ループの頭から人体メッシュの女（絵の女への受け渡しはしない）
 GUST_T = 4.6
 
 # 時刻（秒、0 = 絵の女から物理の女へ受け渡すコマ）
+PRE = 1.7                                  # ループの頭から、手を振り終えて歩き出すまで（t は歩き出しを 0 とする）
 T_ARM = (0.10, 0.45)                       # 振っていた手を下ろす
 T_WALK = (0.25, 1.95)                      # 後ろ向きに歩いて手すりまで下がる
-T_CROUCH, T_JUMP, T_SIT = 1.95, 2.10, 2.40 # かがむ → 跳んで手すりに腰かける
-T_REL = 2.62                               # 腕を上げて反り、ここから先は物理だけ（重力で後ろへ倒れる）
+T_STOP = 1.95                              # 手すりに腰が当たって止まる
+T_SIT = 2.10                               # 腰を手すりに当てたまま反りはじめる（腕は部屋の側へ）
+T_REL = 2.40                               # ここから先は物理だけ（重力と反る勢いで、手すりを支点に後ろへ回る）
+SWITCH_DEG = 95                             # ここまで回ったら手すりを離れて落ちる（それ以上回ると頭が部屋の側へ戻ってしまう）
+OMEGA0 = 7.0                               # 反る勢いから引き継ぐ、後ろへ回る角速度（rad/s）
+G_END = 1.3                                # 歩く間に体を大きくする倍率（growth の説明）
 T_END = T_REL + 2.0
 
 SEG = {  # 名前: (親, 関節, 中心, 質量 kg, 当たりの形, 寸法)  立ち姿（カメラの方を向く。x=画面の右、y=奥、z=上、足もとが原点）
@@ -181,7 +186,7 @@ def rail_point_on_path():
 
 
 # ---------------------------------------------------------------- 姿勢（運動学：受け渡し〜手すりに腰かけるまで）
-def fk(root_pos, root_R, local):
+def fk(root_pos, root_R, local, g=1.0):
     """root_pos: 骨盤の中心の世界位置、root_R: 骨盤の向き、local: {部品: 親に対する回転}。返すのは {部品: 4×4（立ち姿の座標 → 世界）}"""
     T = {}
     for name in ORDER:
@@ -190,7 +195,7 @@ def fk(root_pos, root_R, local):
         j = np.array(joint) * SCALE
         if parent is None:
             M = np.eye(4)
-            M[:3, :3] = root_R @ R
+            M[:3, :3] = g * root_R @ R
             M[:3, 3] = root_pos - M[:3, :3] @ (np.array(ctr) * SCALE)
         else:
             L = np.eye(4)
@@ -267,67 +272,66 @@ def blend_pose(a, b, k):
     return out
 
 
+def growth(t):
+    """体の大きさの倍率（監査：窓から手すりまでの縮みを 2 割程度に）。絵の女の足もと (340,458) と手すりの線をそのまま使うと、
+    遠近だけで 35% 縮む（絵そのものの奥行きの食い違い）。歩く間に体を 1.0 → G_END 倍へゆっくり大きくして、見た目の縮みを 16% に抑える。
+    手すり（1.10m）に対して腰（股関節 0.78m × 1.3 ≒ 1.0m）がほぼ手すりの高さになり、腰を当てて後ろへ倒れられる"""
+    return lerp(1.0, G_END, sstep(T_WALK[0], T_WALK[1] + 0.1, t))
+
+
 def kinematic(t, P=None):
-    """受け渡し t=0 〜 手を離す T_REL までの姿勢。返すのは {部品: 4×4}"""
+    """ループの頭 t=-PRE 〜 手を離す T_REL までの姿勢。t<0 は手を振る（絵の女と同じ姿勢、肘から先を振る）。返すのは {部品: 4×4}"""
     rail_pt, u = rail_point_on_path()
-    yaw0 = 0.0
-    face_end = -RAIL_N                                                     # 手すりに背を向ける：顔は手すりの面の内向き
-    yaw1 = np.rad2deg(np.arctan2(face_end[0], -face_end[1])) * 0.75        # 視線の向き（-y）からの振れ。最後の 1/4 は物理にまかせる
-    rest = {}
-    # 腕：手を振った形 → 体の横へ下ろす → 腰かけてから上げる
-    wave, down = arm_wave_pose(P), {"uarm_r": aim((0, 0, -1), (-0.14, 0.02, -0.99)), "uarm_l": aim((0, 0, -1), (0.14, 0.02, -0.99)),
-                                   "farm_r": rx(-10), "farm_l": rx(-10)}
-    arms = blend_pose(wave, down, sstep(*T_ARM, t))
-    if t > T_SIT - 0.05:
-        arms = blend_pose(arms, arms_up_pose(), sstep(T_SIT - 0.05, T_REL, t))
-    pose = dict(rest)
-    pose.update(arms)
-    walk_len = np.linalg.norm(rail_pt - FEET0) - 0.24
+    face_end = -RAIL_N                                                     # 手すりに背を向ける
+    yaw1 = np.rad2deg(np.arctan2(face_end[0], -face_end[1])) * 0.75
+    P = P or fitp()
+    if t < 0:                                                              # 手を振る：前腕を、カメラへ向かう軸のまわりに左右へ（最後の 0.15 秒は止まる）
+        ph = 2 * np.pi * 1.4 * (t + PRE)
+        w = 14 * np.sin(ph) * (1 - sstep(-0.35, -0.15, t))
+        Q = dict(P, fa=list(np.array(Matrix.Rotation(np.deg2rad(w), 3, "Y")) @ np.array(P["fa"])))
+        arms = arm_wave_pose(Q)
+        t_ = 0.0
+    else:
+        t_ = t
+        wave, down = arm_wave_pose(P), {"uarm_r": aim((0, 0, -1), (-0.14, 0.02, -0.99)), "uarm_l": aim((0, 0, -1), (0.14, 0.02, -0.99)),
+                                       "farm_r": rx(-10), "farm_l": rx(-10)}
+        arms = blend_pose(wave, down, sstep(*T_ARM, t))
+        if t > T_SIT - 0.1:                                                # 倒れはじめ：腕は前（部屋の側）へ伸びる
+            reach = {"uarm_r": aim((0, 0, -1), (-0.35, -0.35, 0.87)), "uarm_l": aim((0, 0, -1), (0.35, -0.35, 0.87)),   # 頭の上・やや前へ伸ばす（回ったあとは手すりの外へ）
+                     "farm_r": rx(-15), "farm_l": rx(-15)}
+            arms = blend_pose(arms, reach, sstep(T_SIT - 0.1, T_REL, t))
+    t = t_
+    pose = dict(arms)
+    walk_len = np.linalg.norm(rail_pt - FEET0) - 0.13 * G_END              # 尻が手すりに当たる所まで（当たりの箱が手すりにめり込まない距離）
     k = sstep(*T_WALK, t)
     dist = walk_len * k
     feet = FEET0 + u * dist
-    yaw = lerp(yaw0, yaw1, sstep(T_WALK[0], T_SIT, t))
-    # 歩く：進んだ距離に足の運びを結びつける（1歩 0.60m、ももの振れ ±22°）。後ろへ振り出す脚の膝が曲がる
-    step = 0.60
+    yaw = lerp(0.0, yaw1, sstep(T_WALK[0], T_SIT, t))
+    g = growth(t)
+    step = 0.60 * g
     ph = np.pi * dist / step
-    amp = 22.0 * min(1.0, dist / 0.25) * min(1.0, (walk_len - dist) / 0.2 + 0.0) if t < T_CROUCH else 0.0
+    amp = 22.0 * min(1.0, dist / 0.25) * min(1.0, (walk_len - dist) / 0.2) if t < T_STOP else 0.0
     hip_r, hip_l = amp * np.sin(ph), -amp * np.sin(ph)
     kn_r = 38 * max(0.0, np.cos(ph)) ** 1.5 * (amp / 22)
     kn_l = 38 * max(0.0, -np.cos(ph)) ** 1.5 * (amp / 22)
-    lean = 6 * (amp / 22)                                                   # 後ろ歩きは上体をわずかに前へ
-    # かがむ → 跳ぶ → 腰かける
-    c = sstep(T_CROUCH, T_JUMP, t)
-    j = sstep(T_JUMP, T_SIT, t)
-    hip_flex = -40 * c * (1 - j) - 85 * j
-    knee = 55 * c * (1 - j) + 88 * j
-    torso = lean + 18 * c * (1 - j) - 8 * j
-    if t > T_SIT - 0.05:
-        torso -= 55 * ease_in(T_SIT - 0.05, T_REL, t)                     # 反りは加速しながら（手を離す瞬間に速さを持たせ、物理へ引き継ぐ）
-    pose["thigh_r"] = rx(-hip_r + hip_flex)
-    pose["thigh_l"] = rx(-hip_l + hip_flex)
-    pose["shin_r"] = rx(kn_r + knee)
-    pose["shin_l"] = rx(kn_l + knee)
+    lean = 6 * (amp / 22)
+    # 手すりに腰を当てて、つま先立ちで反りはじめる（加速しながら。手を離す瞬間の勢いを物理へ引き継ぐ）
+    torso = lean - 50 * ease_in(T_SIT, T_REL, t)
+    pose["thigh_r"] = rx(-hip_r - 10 * ease_in(T_SIT, T_REL, t))
+    pose["thigh_l"] = rx(-hip_l - 6 * ease_in(T_SIT, T_REL, t))
+    pose["shin_r"] = rx(kn_r + 12 * ease_in(T_SIT, T_REL, t))
+    pose["shin_l"] = rx(kn_l + 6 * ease_in(T_SIT, T_REL, t))
     pose["chest"] = rx(torso * 0.6)
-    pose["head"] = rx(-28 * ease_in(T_SIT, T_REL, t) + 4 * (amp / 22))
-    pose["hair"] = rx(-10 * sstep(T_SIT, T_REL, t))
-    pelvis_tilt = rx(torso * 0.4 - 10 * j)
-    R = rz(yaw) @ pelvis_tilt
-    p_ground = np.array([feet[0], feet[1], 0.86 * SCALE])
-    T = fk(p_ground, R, pose)
-    lift = -lowest(T) + 0.004                                               # 足は床に着く（浮かない・沈まない）
-    p_ground[2] += lift
-    if t <= T_JUMP:
-        return fk(p_ground, R, pose)
-    # 跳んでいる間：骨盤は放物線で手すりの上へ（地面の拘束は外す）
-    sit = np.array([*(rail_pt + RAIL_N * 0.06), RAIL_H + 0.155])
-    T0 = kinematic(T_JUMP)
-    start = T0["pelvis"] @ np.array([*(np.array(SEG["pelvis"][2]) * SCALE), 1])
-    jj = (min(t, T_SIT) - T_JUMP) / (T_SIT - T_JUMP)
-    pos = start[:3] + (sit - start[:3]) * sstep(0, 1, jj)
-    pos[2] = start[2] + (sit[2] - start[2]) * jj + 4 * 0.06 * jj * (1 - jj)
-    if t > T_SIT:
-        pos = sit
-    return fk(pos, R, pose)
+    pose["head"] = rx(-25 * ease_in(T_SIT, T_REL, t) + 4 * (amp / 22))
+    pose["hair"] = rx(0)
+    R = rz(yaw) @ rx(torso * 0.4)
+    p_ground = np.array([feet[0], feet[1], 0.86])
+    T = fk(p_ground, R, pose, g)
+    p_ground[2] += -lowest(T) + 0.004                                      # 足は床に着く（浮かない・沈まない）
+    e = ease_in(T_SIT, T_REL, t)                                           # 最後に床を蹴って、腰を手すりの角へ乗せる（後ろ向きの勢いのまま物理へ）
+    p_ground[:2] += u * 0.04 * e
+    p_ground[2] += 0.06 * e
+    return fk(p_ground, R, pose, g)
 
 
 # ---------------------------------------------------------------- 場面（手すり・床）
@@ -388,7 +392,7 @@ def build_set(kind):
     mats = {}
     for name, ob in parts.items():
         if kind == "holdout":
-            key = "panel" if name == "panel" else "hold"
+            key = "hold"                                                     # すりガラスの板も全部隠す（ガラスの内側に点を出さない）
         else:
             key = "debug_" + ("panel" if name == "panel" else "slab" if name == "slab" else "rail")
         if key not in mats:
@@ -489,7 +493,7 @@ def setup_render(sc, samples=16, transparent=True):
     sc.cycles.max_bounces = 0
     sc.cycles.transparent_max_bounces = 8
     sc.cycles.pixel_filter_type = "BLACKMAN_HARRIS"
-    sc.cycles.filter_width = 1.6
+    sc.cycles.filter_width = 1.0                                           # 縁は 1px のアンチエイリアスだけ（暗い輪を出さない）
     sc.render.resolution_x, sc.render.resolution_y = W, H
     sc.render.resolution_percentage = 100
     sc.render.film_transparent = transparent
@@ -565,65 +569,118 @@ def hair_roots():
     hc = np.array(_J["head_c"])
     pts, lens = [], []
     for k in range(HAIR_N):
-        th = np.deg2rad(rg.uniform(-118, 118))                          # 0 = 真後ろ
-        el = np.deg2rad(rg.uniform(-5, 55))
+        th = np.deg2rad(rg.normal(0, 55)) if k % 3 else np.deg2rad(rg.uniform(-120, 120))   # 0 = 真後ろ（後ろに多く、量のある長い髪）
+        el = np.deg2rad(rg.uniform(-25, 60))
         d = np.array([np.sin(th) * np.cos(el), np.cos(th) * np.cos(el), np.sin(el)])
         pts.append(hc + d * np.array([0.085, 0.10, 0.11]) + [0, 0.0, 0.01])
         lens.append((0.44 if abs(th) < 1.2 else 0.34) * rg.uniform(0.85, 1.08))
     return np.array(pts), np.array(lens)
 
 
-def hair_sim(poses):
-    """髪：束ごとに節をつないだひも（ベルレ積分・長さの拘束・空気の抵抗・頭と胴との当たり）。1/120 秒ごと。
-    落ちる間は空気の抵抗で上へなびく。返すのは (コマ, 束, 節, 3)"""
-    roots, lens = hair_roots()
-    seg = lens / (HAIR_P - 1)
+def strand_sim(poses, roots, lens, seg_name, colliders, init_dir, n_pts):
+    """ひも（髪の束・ワンピースの裾の筋）を、節をつないだベルレ積分で動かす：長さの拘束・曲げのこわさ・空気の抵抗・体との当たり。
+    roots は seg_name の部品の立ち姿の座標。colliders(T) は [(中心, 半径)]。1/120 秒ごと。落ちる間は空気の抵抗で上へなびく。返すのは (コマ, 本, 節, 3)"""
+    seg = lens / (n_pts - 1)
     dt = 1 / SIM_FPS / 8
     g = np.array([0, 0, -9.81])
+    nst = len(roots)
 
     def anchors(T):
-        return (np.c_[roots, np.ones(len(roots))] @ T["head"].T)[:, :3]
+        return (np.c_[roots, np.ones(nst)] @ T[seg_name].T)[:, :3]
 
     T0 = poses[0]
     a0 = anchors(T0)
-    back = T0["chest"][:3, :3] @ np.array([0, 1, 0])
     out = []
     pre = 240                                                          # はじめの姿勢のまま 2 秒なじませてから使う
     poses = [poses[0]] * pre + list(poses)
-    x = np.zeros((HAIR_N, HAIR_P, 3))
-    for j in range(HAIR_P):                                            # はじめは背中側へ垂らす
-        x[:, j] = a0 + (back * 0.04 + np.array([0, 0, -1.0])) * (seg[:, None] * j)
+    x = np.zeros((nst, n_pts, 3))
+    d0 = init_dir(T0, a0)
+    gscale = np.linalg.norm(T0[seg_name][:3, 0])
+    for j in range(n_pts):
+        x[:, j] = a0 + d0 * (seg[:, None] * j * gscale)
     xp = x.copy()
     for T in poses:
         a = anchors(T)
-        hc = (T["head"] @ np.array([*_J["head_c"], 1]))[:3]
-        cc = (T["chest"] @ np.array([*SEG["chest"][2], 1]))[:3]
+        gs = np.linalg.norm(T[seg_name][:3, 0])
+        sg = seg * gs
+        cols = colliders(T)
         for _ in range(8):
             v = (x - xp) * 0.998
             sp = np.linalg.norm(v, axis=-1, keepdims=True)
-            v = v * np.minimum(1, 0.03 / np.maximum(sp, 1e-9))         # 1 段 3cm（約 14m/s）まで
+            v = v * np.minimum(1, 0.03 / np.maximum(sp, 1e-9))
             xp = x.copy()
-            x = x + v + g * dt * dt - v * 0.004                        # 空気の抵抗（速いほど強く引き戻す＝落ちる間は上へなびく）
+            x = x + v + g * dt * dt - v * 0.004                        # 空気の抵抗（落ちる間は上へなびく）
             x[:, 0] = a
             for _ in range(6):
                 d = x[:, 1:] - x[:, :-1]
                 L = np.linalg.norm(d, axis=-1, keepdims=True) + 1e-9
-                corr = (L - seg[:, None, None]) / L * d * 0.5
+                corr = (L - sg[:, None, None]) / L * d * 0.5
                 x[:, 1:] -= corr
                 x[:, :-1] += corr
                 x[:, 0] = a
-                d = x[:, 2:] - x[:, :-2]                                # 曲げのこわさ（ひとつ飛ばしの長さを保つ。髪の束がとげのように折れない）
+                d = x[:, 2:] - x[:, :-2]                                # 曲げのこわさ（とげのように折れない）
                 L = np.linalg.norm(d, axis=-1, keepdims=True) + 1e-9
-                corr = (L - 1.9 * seg[:, None, None]) / L * d * 0.15
-                x[:, 2:] -= np.where(L < 1.9 * seg[:, None, None], corr, 0)
-                x[:, :-2] += np.where(L < 1.9 * seg[:, None, None], corr, 0)
+                corr = (L - 1.9 * sg[:, None, None]) / L * d * 0.15
+                x[:, 2:] -= np.where(L < 1.9 * sg[:, None, None], corr, 0)
+                x[:, :-2] += np.where(L < 1.9 * sg[:, None, None], corr, 0)
                 x[:, 0] = a
-            for c, r in ((hc, 0.09), (cc, 0.11)):                      # 頭と胴の中へは入らない（根元の2節は除く）
-                d = x[:, 2:] - c
+            for c, r in cols:                                           # 体の中へは入らない（根元の節は除く）
+                d = x[:, 1:] - c
                 L = np.linalg.norm(d, axis=-1, keepdims=True) + 1e-9
-                x[:, 2:] = np.where(L < r, c + d / L * r, x[:, 2:])
+                x[:, 1:] = np.where(L < r, c + d / L * r, x[:, 1:])
         out.append(x.copy())
     return np.array(out[pre:])
+
+
+def _pt(T, n, p):
+    return (T[n] @ np.array([*p, 1]))[:3]
+
+
+def hair_sim(poses):
+    """髪：肩下まで（_1 の女に合わせた量）。頭と胴に当たる"""
+    roots, lens = hair_roots()
+
+    def cols(T):
+        gs = np.linalg.norm(T["head"][:3, 0])
+        return [(_pt(T, "head", _J["head_c"]), 0.09 * gs), (_pt(T, "chest", SEG["chest"][2]), 0.11 * gs)]
+
+    def init(T, a0):
+        back = T["chest"][:3, :3] @ np.array([0, 1, 0])
+        return back / np.linalg.norm(back) * 0.04 + np.array([0, 0, -1.0])
+    return strand_sim(poses, roots, lens, "head", cols, init, HAIR_P)
+
+
+SKIRT_N, SKIRT_P = 60, 9
+
+
+def skirt_roots():
+    """ワンピースの裾の筋：腰回り（骨盤の座標、高さ 0.95m）から膝（0.45m）まで"""
+    ang = np.linspace(0, 2 * np.pi, SKIRT_N, endpoint=False)
+    z = 0.95
+    r = np.array([0.130, 0.100])
+    pts = np.stack([np.cos(ang) * r[0], np.sin(ang) * r[1], np.full(SKIRT_N, z)], 1)
+    return pts, np.full(SKIRT_N, 0.50)
+
+
+def skirt_sim(poses):
+    roots, lens = skirt_roots()
+
+    def cols(T):
+        gs = np.linalg.norm(T["pelvis"][:3, 0])
+        out = [(_pt(T, "pelvis", SEG["pelvis"][2]), 0.15 * gs)]
+        for sd in "rl":
+            for k in np.linspace(0, 1, 4):
+                out.append((_pt(T, f"thigh_{sd}", np.array(_J[f"hip_{sd}"]) * (1 - k) + np.array(_J[f"knee_{sd}"]) * k), (0.085 - 0.03 * k) * gs))
+            out.append((_pt(T, f"shin_{sd}", np.array(_J[f"knee_{sd}"]) * 0.6 + np.array(_J[f"ankle_{sd}"]) * 0.4), 0.05 * gs))
+        return out
+
+    def init(T, a0):
+        c = _pt(T, "pelvis", SEG["pelvis"][2])
+        d = a0 - c
+        d[:, 2] = 0
+        d = d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-9)
+        return d * 0.18 + np.array([0, 0, -1.0])
+    return strand_sim(poses, roots, lens, "pelvis", cols, init, SKIRT_P)
 
 
 def build_body(sc):
@@ -649,7 +706,21 @@ def build_body(sc):
     hm.materials.append(mat)
     oh = bpy.data.objects.new("hair", hm)
     sc.collection.objects.link(oh)
-    return {"body": ob, "hair": oh}
+    sm = bpy.data.meshes.new("skirt")                                    # ワンピースの裾：筋どうしを面でつないだ筒
+    sm.from_pydata(np.zeros((SKIRT_N * SKIRT_P, 3)).tolist(), [], skirt_faces())
+    sm.materials.append(mat)
+    osk = bpy.data.objects.new("skirt", sm)
+    sc.collection.objects.link(osk)
+    return {"body": ob, "hair": oh, "skirt": osk}
+
+
+def skirt_faces():
+    f = []
+    for k in range(SKIRT_N):
+        k2 = (k + 1) % SKIRT_N
+        for j in range(SKIRT_P - 1):
+            f.append([k * SKIRT_P + j, k2 * SKIRT_P + j, k2 * SKIRT_P + j + 1, k * SKIRT_P + j + 1])
+    return f
 
 
 def ribbon(hp, eye):
@@ -658,11 +729,11 @@ def ribbon(hp, eye):
     vd = hp - eye
     side = np.cross(t, vd)
     side /= np.linalg.norm(side, axis=-1, keepdims=True) + 1e-9
-    w = np.linspace(0.026, 0.010, HAIR_P)[None, :, None] * fitp().get("hwid", 7.0) / 8.5
+    w = np.linspace(0.034, 0.016, HAIR_P)[None, :, None] * fitp().get("hwid", 7.0) / 8.5
     return np.stack([hp - side * w, hp + side * w], 2).reshape(-1, 3)
 
 
-def pose_body(objs, T, hp=None, eye=(0, 0, CAM_H)):
+def pose_body(objs, T, hp=None, eye=(0, 0, CAM_H), sp=None):
     v = mh_body.skin(BODY, T, None)
     me = objs["body"].data
     me.vertices.foreach_set("co", v.ravel())
@@ -674,9 +745,81 @@ def pose_body(objs, T, hp=None, eye=(0, 0, CAM_H)):
         oh.hide_render = False
         oh.data.vertices.foreach_set("co", ribbon(hp, np.array(eye)).ravel())
         oh.data.update()
+    osk = objs.get("skirt")
+    if osk is not None:
+        osk.hide_render = sp is None
+        if sp is not None:
+            osk.data.vertices.foreach_set("co", sp.reshape(-1, 3).ravel())
+            osk.data.update()
 
 
 # ---------------------------------------------------------------- 2. 物理（手すりに腰かけたところから）
+def pivot_fall():
+    """手すりを越える所（監査の直し）：こわばった体が、手すりの笠木（腰の当たる所）を軸に後ろへ回る（剛体の振り子の運動方程式を積分。
+    重力のトルクと、反る勢いから引き継いだ角速度 OMEGA0）。160° まで回ったら（逆さで体は手すりの外）、その角速度と速さのまま重力で落ちる（放物運動）。
+    返すのは 1/120 秒ごとの {部品: 4×4} の列（T_REL から）"""
+    T0 = kinematic(T_REL)
+    pts = {n: (T0[n] @ np.array([*SEG[n][2], 1]))[:3] for n in ORDER}
+    mass = {n: SEG[n][3] for n in ORDER}
+    M = sum(mass.values())
+    com0 = sum(mass[n] * pts[n] for n in ORDER) / M
+    pel = pts["pelvis"]
+    d = pel[:2] - RAIL_P0
+    s_ = d @ RAIL_D
+    piv = np.array([*(RAIL_P0 + RAIL_D * s_), RAIL_H])
+    N3 = np.array([*RAIL_N, 0.0])
+    axis = np.cross([0, 0, 1.0], N3)
+    axis /= np.linalg.norm(axis)
+    I = 1.15 * sum(mass[n] * np.sum(np.cross(pts[n] - piv, axis) ** 2) for n in ORDER)
+    rot = lambda th: np.array(Matrix.Rotation(th, 3, Vector(axis)))
+    th, om, dt = 0.0, OMEGA0, 1 / SIM_FPS / 20
+    out = []
+    n = int(round((T_END - T_REL) * SIM_FPS)) + 2
+    phase, t_free, com_r, v_r, th_r = "pivot", 0.0, None, None, None
+    for k in range(n):
+        if phase == "pivot":
+            R = rot(th)
+            Mx = np.eye(4)
+            Mx[:3, :3] = R
+            Mx[:3, 3] = piv - R @ piv
+        else:
+            tt = t_free
+            c = com_r + v_r * tt + 0.5 * np.array([0, 0, -9.81]) * tt * tt
+            R = rot(th_r + om * 0.35 * tt)                                  # 外へ出たあとは、空気と手足の広がりで回りがにぶる
+            Mx = np.eye(4)
+            Mx[:3, :3] = R
+            Mx[:3, 3] = c - R @ com0
+        out.append({nm: Mx @ T0[nm] for nm in ORDER})
+        for _ in range(20):
+            if phase == "pivot":
+                c = rot(th) @ (com0 - piv)
+                tau = M * 9.81 * (c @ N3)                                  # 重心が軸より外なら、後ろへ回る向き
+                om += tau / I * dt
+                th += om * dt
+                if th > np.deg2rad(SWITCH_DEG):
+                    phase = "free"
+                    R = rot(th)
+                    c_ = R @ (com0 - piv)
+                    com_r = piv + c_
+                    v_r = np.cross(axis * om, c_)
+                    vn = max(float(v_r @ N3), 0.0) + 1.1                   # 腰が笠木の上を外へすべり落ちる（手すりの内側へは戻らない）
+                    v_r = np.array([0, 0, v_r[2]]) + N3 * vn
+                    th_r = th
+            else:
+                t_free += dt
+    print("手すりを越える：I", round(I, 1), "160° まで", round(sum(1 for _ in out) and 0, 1))
+    return out
+
+
+def unscaled(M, p):
+    """立ち姿の座標の点 p を中心にした、大きさを外した 4×4（剛体は大きさを持たせず、寸法のほうを G_END 倍にする）"""
+    R = M[:3, :3] / np.linalg.norm(M[:3, :3], axis=0)
+    out = np.eye(4)
+    out[:3, :3] = R
+    out[:3, 3] = M[:3, :3] @ np.asarray(p, float) + M[:3, 3]
+    return out
+
+
 def simulate():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     sc = bpy.context.scene
@@ -697,7 +840,7 @@ def simulate():
         bpy.context.view_layer.objects.active = ob
         bpy.ops.rigidbody.object_add()
         ob.rigid_body.type = "PASSIVE"
-        ob.rigid_body.friction = 0.6
+        ob.rigid_body.friction = 0.25 if ob is rail else 0.6              # 手すりの丸い笠木の上は、体がすべって越える
         ob.rigid_body.collision_shape = "BOX"
         ob.rigid_body.collision_margin = 0.002
     T = kinematic(T_REL)
@@ -710,16 +853,13 @@ def simulate():
         bpy.ops.mesh.primitive_cube_add(size=1)
         ob = bpy.context.active_object
         ob.name = "rb_" + name
-        ob.scale = np.array(dims) * SCALE
+        ob.scale = np.array(dims) * G_END
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-        c = np.array(ctr) * SCALE
-        M = T[name].copy()
-        M[:3, 3] = M[:3, :3] @ c + M[:3, 3]
-        ob.matrix_world = Matrix(M.tolist())
+        ob.matrix_world = Matrix(unscaled(T[name], ctr).tolist())
         bpy.ops.rigidbody.object_add()
         rb = ob.rigid_body
         rb.type = "ACTIVE"
-        rb.mass = mass
+        rb.mass = mass * G_END ** 2
         rb.collision_shape = shape
         rb.collision_margin = 0.003
         rb.friction = 0.5
@@ -729,21 +869,19 @@ def simulate():
         bodies[name] = ob
     # 関節（立ち姿からの可動域を、腰かけた姿勢からの差に直して与える）。すべて親の向きにそろえた空の物体で
     lim = {  # 部品: (x の範囲, y の範囲, z の範囲)  度、手を離す瞬間の姿勢からの差
-        "chest": ((-35, 55), (-20, 20), (-25, 25)),
+        "chest": ((-25, 20), (-12, 12), (-15, 15)),
         "head": ((-35, 45), (-25, 25), (-40, 40)),
         "hair": ((-70, 50), (-25, 25), (-15, 15)),
         "uarm_r": ((-80, 80), (-70, 70), (-60, 60)), "uarm_l": ((-80, 80), (-70, 70), (-60, 60)),
         "farm_r": ((-130, 12), (0, 0), (-10, 10)), "farm_l": ((-130, 12), (0, 0), (-10, 10)),
-        "thigh_r": ((-40, 95), (-15, 35), (-30, 30)), "thigh_l": ((-40, 95), (-35, 15), (-30, 30)),
-        "shin_r": ((-88, 55), (0, 0), (0, 0)), "shin_l": ((-88, 55), (0, 0), (0, 0)),
+        "thigh_r": ((-25, 30), (-10, 20), (-15, 15)), "thigh_l": ((-25, 30), (-20, 10), (-15, 15)),   # 落ちる人は体をこわばらせる：脚は体と一緒に回る
+        "shin_r": ((-5, 45), (0, 0), (0, 0)), "shin_l": ((-5, 45), (0, 0), (0, 0)),
     }
     for name in ORDER:
         parent = SEG[name][0]
         if parent is None:
             continue
-        j = np.array(SEG[name][1]) * SCALE
-        Mj = T[parent].copy()
-        Mj[:3, 3] = T[parent][:3, :3] @ j + T[parent][:3, 3]
+        Mj = unscaled(T[parent], SEG[name][1])
         e = bpy.data.objects.new("j_" + name, None)
         sc.collection.objects.link(e)
         e.matrix_world = Matrix(Mj.tolist())
@@ -775,11 +913,8 @@ def simulate():
         c.disable_collisions = True
     # 手を離す直前の動きを渡す：最初の3コマだけ「動かされる物体」として 2/120 秒前 → 1/120 秒前 → 今の姿勢を通す（Bullet がその速さを引き継ぐ。2コマでは引き継がれない）
     for name, ob in bodies.items():
-        c = np.array(SEG[name][2]) * SCALE
         for fr, TT in ((1, Tpp), (2, Tp), (3, T)):
-            M = TT[name].copy()
-            M[:3, 3] = M[:3, :3] @ c + M[:3, 3]
-            ob.matrix_world = Matrix(M.tolist())
+            ob.matrix_world = Matrix(unscaled(TT[name], SEG[name][2]).tolist())
             ob.keyframe_insert("location", frame=fr)
             ob.keyframe_insert("rotation_euler", frame=fr)
             ob.rigid_body.kinematic = True
@@ -799,8 +934,8 @@ def simulate():
             Mm = np.array(M)
             R = Mm[:3, :3] / np.linalg.norm(Mm[:3, :3], axis=0)
             T2[name] = np.eye(4)
-            T2[name][:3, :3] = R
-            T2[name][:3, 3] = Mm[:3, 3] - R @ c
+            T2[name][:3, :3] = R * G_END
+            T2[name][:3, 3] = Mm[:3, 3] - R * G_END @ c
         track.append(T2)
     return track
 
@@ -826,7 +961,7 @@ def cloth_bake():
         for v in me.vertices:
             u, w = v.co.x + 0.5, v.co.y + 0.5                              # u: 横 0..1、w: 下 0..上 1
             s_ = s0 + u * CLOTH_W
-            pleat = 0.045 * np.sin(u * CLOTH_NX * np.pi / 2)              # 吊ったひだ
+            pleat = 0.03 * np.sin(u * CLOTH_NX * np.pi / 2)               # 吊ったひだ
             p = WIN_L + WIN_D * s_ + WIN_IN * (0.10 + pleat)
             v.co = (p[0], p[1], WIN_TOP - 0.05 - (1 - w) * CLOTH_H)
         vg = ob.vertex_groups.new(name="rail")
@@ -837,7 +972,7 @@ def cloth_bake():
         st.mass = 0.05 * CLOTH_W * CLOTH_H / len(me.vertices) * 10
         st.air_damping = 1.0
         st.tension_stiffness = st.compression_stiffness = 8
-        st.bending_stiffness = 0.05
+        st.bending_stiffness = 0.4                                         # 裾が絡まって束にならない程度のこし
         st.vertex_group_mass = "rail"
         cl.collision_settings.use_self_collision = False
         cl.point_cache.frame_start, cl.point_cache.frame_end = 1, n
@@ -855,7 +990,7 @@ def cloth_bake():
         t = (f - 1) / FPS
         ph = ((t - 1.45) % GUST_T) / GUST_T
         g = np.sin(ph / 0.25 * np.pi / 2) ** 2 if ph < 0.25 else np.exp(-(ph - 0.25) * 5.0)
-        wind.field.strength = 48 * (0.5 + 0.5 * g)
+        wind.field.strength = 95 * (0.35 + 0.65 * g)                       # 突風で裾ほど大きく部屋の側へ（30〜60cm）、抜けると垂れて開く
         wind.field.keyframe_insert("strength", frame=f)
     dg = bpy.context.evaluated_depsgraph_get()
     frames = []
@@ -891,8 +1026,8 @@ def cloth_frame(C, i):
 # ---------------------------------------------------------------- 3. 書き出し
 def all_poses(track):
     """1/120 秒おきの、受け渡しから終わりまでの姿勢の列"""
-    n_k = int(round(T_REL * SIM_FPS))
-    poses = [kinematic(i / SIM_FPS) for i in range(n_k)] + track
+    n_k = int(round((PRE + T_REL) * SIM_FPS))
+    poses = [kinematic(i / SIM_FPS - PRE) for i in range(n_k)] + track
     return poses
 
 
@@ -921,8 +1056,9 @@ def render_views(poses):
     C = dict(np.load(OUTD / "cloth.npz"))
     curt = build_curtains(sc, C)
     m_body, m_hold, m_lace, m_lacehold = make_mat("body"), make_mat("hold"), make_mat("lace"), make_mat("lacehold")
-    print("髪のシミュレーション")
+    print("髪とワンピースの裾のシミュレーション")
     hair = hair_sim(poses)
+    skirt = skirt_sim(poses)
     cam_main = camera("main")
     # 横からの確認：手すりに沿って横から（手すりの面が画面に垂直）。広く引いて、床の縁の下まで
     rail_pt, _ = rail_point_on_path()
@@ -932,7 +1068,7 @@ def render_views(poses):
     # エンドB：2つ下の階（-6m）から、落ちる線を正面に見る
     endb_loc = np.array([*(rail_pt - RAIL_N * 4.5), -5.6])
     yaw_b = np.rad2deg(np.arctan2(RAIL_N[1], RAIL_N[0])) - 90
-    cam_endb = camera("endb", loc=tuple(endb_loc), rot=(90, 0, yaw_b), f_px=900, shift_y=0)
+    cam_endb = camera("endb", loc=tuple(endb_loc), rot=(90, 0, yaw_b), f_px=560, shift_y=0)   # 窓の高さ 400px ＝ 約 3.2m（体は 9 コマほどで通る）
     n_out = (len(poses) - SUB) // SUB
     meta = {"fps": FPS, "frames": n_out, "t_release": T_REL, "t_sit": T_SIT, "t_walk": list(T_WALK), "loop": LOOP,
             "loop_handoff": LOOP_HANDOFF, "fit": fitp(), "calib": {
@@ -958,14 +1094,18 @@ def render_views(poses):
         curt.data.update()
         acc = np.zeros((H, W), np.float32)
         for dk in (-1, 0, 1):
-            pose_body(body, poses[k + dk], hair[k + dk])
+            pose_body(body, poses[k + dk], hair[k + dk], sp=skirt[k + dk])
             acc += render_rgba(sc, tmp)[..., 3]
         acc /= 3
         Image.fromarray(np.clip(acc * 255 + 0.5, 0, 255).astype(np.uint8)).save(OUTD / "main" / f"{i:04d}.png")
         cover.append(float(acc.sum()))
         print("main", i, n_out, round(cover[-1]))
-    rel = int(T_REL * FPS)
+    rel = int(round((PRE + T_REL) * FPS))
     meta["release_frame"] = rel
+    ank = [max(_pt(poses[SUB * i + SUB // 2], f"shin_{sd}", _J[f"ankle_{sd}"])[2] for sd in "rl") for i in range(n_out)]
+    meta["ankle_z"] = ank
+    meta["apex_frame"] = int(rel + np.argmax(ank[rel:]))                    # 脚がいちばん高い所（合成で 2〜3 コマ止める）
+    meta["pre"] = PRE
     finalize_main(meta)
     gone = meta["gone_frame"]
     # カーテン（女の影は holdout：女が手前にいる所ではカーテンを描かない）。ループの全コマ。もうひとつは女なし（「何度も」用）
@@ -982,9 +1122,19 @@ def render_views(poses):
     sc.world.node_tree.nodes.get("Background").inputs[1].default_value = 0.35
     for ob in hold.values():
         ob.hide_render = True                                               # 手すりはカーテンより奥なので、カーテンの絵には要らない
+    # 床：影だけを受ける（窓からの逆光で、カーテンの裾と女の影が床に手前へ伸びる）
+    bpy.ops.mesh.primitive_plane_add(size=1)
+    catcher = bpy.context.active_object
+    catcher.scale = (12, 12, 1)
+    c0 = (WIN_L + WIN_R) / 2 + WIN_IN * 6.0
+    catcher.location = (c0[0], c0[1], 0.0)
+    catcher.rotation_euler = (0, 0, np.arctan2(WIN_D[1], WIN_D[0]))
+    catcher.is_shadow_catcher = True
+    sun.rotation_euler = Vector((0, 0, -1)).rotation_difference(Vector((*(WIN_IN * 0.45), -0.9))).to_euler()
     set_mat(curt, m_lace)
     set_mat(body["body"], m_hold)
     set_mat(body["hair"], m_hold)
+    set_mat(body["skirt"], m_hold)
     for kind in ("curtain", "curtain_only"):
         for li in range(L):
             cv = cloth_frame(C, li)
@@ -993,10 +1143,11 @@ def render_views(poses):
             i = li - h0
             if kind == "curtain" and 0 <= i < n_out and i <= gone + 1:
                 body["body"].hide_render = False
-                pose_body(body, poses[SUB * i + SUB // 2], hair[SUB * i + SUB // 2])
+                pose_body(body, poses[SUB * i + SUB // 2], hair[SUB * i + SUB // 2], sp=skirt[SUB * i + SUB // 2])
             else:
                 body["body"].hide_render = True
                 body["hair"].hide_render = True
+                body["skirt"].hide_render = True
             sc.render.filepath = str(OUTD / kind / f"{li:04d}.png")
             bpy.ops.render.render(write_still=True)
             print(kind, li, L)
@@ -1004,9 +1155,11 @@ def render_views(poses):
     for ob in hold.values():
         ob.hide_render = False
     sun.hide_render = True
+    catcher.hide_render = True
     sc.world.node_tree.nodes.get("Background").inputs[1].default_value = 1.0
     set_mat(body["body"], m_body)
     set_mat(body["hair"], m_body)
+    set_mat(body["skirt"], m_body)
     curt.hide_render = True
     sc.cycles.samples = 12
     sc.cycles.max_bounces = 0
@@ -1020,7 +1173,7 @@ def render_views(poses):
         ob.data.materials.append(make_mat("debug_panel" if nm == "rail_panel" else "debug_slab" if nm == "slab" else "debug_rail"))
     sc.render.resolution_x, sc.render.resolution_y = 960, 720
     for i in range(0, n_out, 1):
-        pose_body(body, poses[SUB * i + SUB // 2], hair[SUB * i + SUB // 2])
+        pose_body(body, poses[SUB * i + SUB // 2], hair[SUB * i + SUB // 2], sp=skirt[SUB * i + SUB // 2])
         rgba = render_rgba(sc, tmp)
         Image.fromarray((rgba[..., :3] * 255).astype(np.uint8)).save(OUTD / "side" / f"{i:04d}.png")
     # エンドB（手すり・床は消す。体だけ）
@@ -1033,7 +1186,7 @@ def render_views(poses):
     for i in range(rel, n_out):
         acc = np.zeros((400, 640), np.float32)
         for dk in (-1, 0, 1):
-            pose_body(body, poses[SUB * i + SUB // 2 + dk], hair[SUB * i + SUB // 2 + dk])
+            pose_body(body, poses[SUB * i + SUB // 2 + dk], hair[SUB * i + SUB // 2 + dk], sp=skirt[SUB * i + SUB // 2 + dk])
             acc += render_rgba(sc, tmp)[..., 3]
         acc /= 3
         if acc.sum() > 1:
@@ -1048,7 +1201,7 @@ def set_shape(P):
     BODY["verts"] = shape_verts(P)
 
 
-def raster(T, hp=None, P=None):
+def raster(T, hp=None, P=None, sp=None):
     """メッシュ（と髪）を背景のカメラで投影して塗った 1280×720 のマスク（numpy だけ。合わせ込み用の速い版）"""
     from PIL import Image, ImageDraw
     P = P or {"s": 1, "tx": 0, "ty": 0}
@@ -1060,6 +1213,11 @@ def raster(T, hp=None, P=None):
     d = ImageDraw.Draw(im)
     for q in BODY["faces"]:
         d.polygon([(x[i], y[i]) for i in q], fill=255)
+    if sp is not None:
+        pp = sp.reshape(-1, 3)
+        qx, qy = sim2(CX + F_PX * pp[:, 0] / pp[:, 1], HORIZON - F_PX * (pp[:, 2] - CAM_H) / pp[:, 1])
+        for q in skirt_faces():
+            d.polygon([(qx[i], qy[i]) for i in q], fill=255)
     if hp is not None:
         for st in hp:
             px, py = sim2(CX + F_PX * st[:, 0] / st[:, 1], HORIZON - F_PX * (st[:, 2] - CAM_H) / st[:, 1])
@@ -1086,12 +1244,13 @@ def iou(a, b):
 def fit():
     """受け渡しのコマの形を、_1 の影に合わせる（腕の向き。座標をひとつずつ動かして重なりが増える方へ）"""
     tgt = target_mask()
-    hp0 = hair_sim([kinematic(0.0)])[-1]
+    hp0 = hair_sim([kinematic(-0.2)])[-1]
+    sp0 = skirt_sim([kinematic(-0.2)])[-1]
     P = fitp()
 
     def score(P):
         set_shape(P)
-        return iou(raster(kinematic(0.0, P), hp0, P), tgt)
+        return iou(raster(kinematic(-0.2, P), hp0, P, sp0), tgt)
     best = score(P)
     print("合わせる前の IoU", round(best, 4))
     for step in (0.1, 0.05, 0.025, 0.012):
@@ -1120,7 +1279,11 @@ def fit():
         print("step", step, "IoU", round(best, 4))
     FIT_P.write_text(json.dumps(P))
     set_shape(P)
-    m = raster(kinematic(0.0, P), hp0, P)
+    m = raster(kinematic(-0.2, P), hp0, P, sp0)
+    from scipy.ndimage import distance_transform_edt as edt, binary_erosion
+    bm, bt = m & ~binary_erosion(m), tgt & ~binary_erosion(tgt)
+    dd = np.r_[edt(~bt)[bm], edt(~bm)[bt]]
+    print("輪郭の差：中央値", round(float(np.median(dd)), 2), "px、95%", round(float(np.percentile(dd, 95)), 2), "px、最大", round(float(dd.max()), 1))
     from PIL import Image
     b = np.zeros((H, W, 3), np.uint8) + 40
     b[tgt & ~m] = (40, 220, 40)
@@ -1165,7 +1328,7 @@ def main():
         return
     if not (OUTD / "cloth.npz").exists() or "cloth" in sys.argv[1:]:
         cloth_bake()
-    track = simulate()
+    track = pivot_fall()
     np.save(OUTD / "track.npy", np.array([[t[n] for n in ORDER] for t in track]))
     poses = all_poses(track)
     render_views(poses)

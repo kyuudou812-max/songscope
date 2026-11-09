@@ -278,6 +278,7 @@ def nandomo():
             strokes.append((0.3 + k * 1.5 + r * 0.09, [c], int(40 + 8 * k + rg.normal(0, 3)), TEXT, 255, rg.normal(0, 1.5),
                             1280 - 100 - k * 70 + rg.normal(0, 2) + r * 1.5 * k, 50 + r * (46 + 6 * k) + rg.normal(0, 3)))
     fw_rail = balcony_woman()[0].box[3] - 10                    # 女の足もとまで
+    cover = np.zeros((18, 32), int)                              # 40px の升目ごとの文字の重なりの数
     t = 3.2
     cur = [-1, 0, 0]
     while t < dur - 0.3:
@@ -290,12 +291,21 @@ def nandomo():
             cur[:] = [slot, rg.uniform(0, 1280), rg.uniform(0, 720)]
         x = cur[1] + rg.normal(0, 50 + 40 * prog)
         y = cur[2] + rg.normal(0, 50) - sz * n * 0.6
-        in_win = x0 - 30 - sz * 1.6 < x < x1 + 30 and y - 20 < fw_rail + 10 and y + sz * 1.05 * n + sz > y0
-        if in_win and rg.random() > 0.04 + 0.06 * prog:          # 窓の上は控えめ（落ちる女を最後まで見せる。毎コマ動くところに文字が重なると容量も膨らむ）
+        big = sz >= 40
+        if big:                                                          # 大きい文字は右の壁とドアの側（x≥640）へ。窓にはかけない
+            x = rg.uniform(640, 1280 - sz * 1.2)
+        hgt = sz * 1.05 * n + sz
+        if x < 610 and y < 470 and y + hgt > 0:                          # 窓（x<600）の上には置かない（落ちる女を隠さない）
             t += 0.002
             continue
-        col = [TEXT, QUIET, QUIETEST][int(rg.choice(3, p=[0.45, 0.35, 0.2]))]
-        a = int(rg.uniform(120, 255))
+        gx0, gx1 = int(max(0, x) // 40), int(min(1279, x + sz * 1.6) // 40)
+        gy0, gy1 = int(max(0, y) // 40), int(min(719, y + hgt) // 40)
+        if cover[gy0:gy1 + 1, gx0:gx1 + 1].max(initial=0) >= 3:          # 重なりは 3 層まで
+            t += 0.002
+            continue
+        cover[gy0:gy1 + 1, gx0:gx1 + 1] += 1
+        col = TEXT if big else QUIETEST                                  # 手前（大きい）は #e1dcd6、奥（小さい）は #8d857e
+        a = int(rg.uniform(170, 255)) if big else int(rg.uniform(120, 200))
         strokes.append((t, txt, sz, col, a, rg.normal(0, 3 + 5 * prog), x, y))
         t += 0.16 * np.exp(-prog * 3.2) + 0.01
     strokes.sort(key=lambda s: s[0])
@@ -319,13 +329,14 @@ def nandomo():
     sim = SimFall(fw)
     light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
     t_rel = sim.meta["t_release"]
-    events = [(0.25, 0.95, 0, 0)]
-    ts, gap, off = 3.4, 1.5, sim.meta["t_walk"][1] - 0.35
+    events = [(0.0, 0.0, 0, 0)]
+    pre = sim.meta.get("pre", 0.0)
+    ts, gap, off = 3.4, 1.5, pre + sim.meta["t_walk"][1] - 0.35
     while ts < dur - 0.4:
         events.append((ts, ts, off, 0))
         ts += gap
         gap = max(0.28, gap * 0.76)
-        off = min(t_rel - 0.12, off + 0.14)
+        off = min(pre + t_rel - 0.12, off + 0.14)
     print("落ちる回数", len(events))
     e, outside = nocurtain_bg()                                         # ベランダと同じ：カーテンのない部屋 ＋ Blender のカーテン
     light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
@@ -2782,26 +2793,29 @@ def drop_layer(fw, t, events, shutter=1 / 50, n=6):
 # 腕を上げて反ったところから重力で後ろへ倒れ、脚が手すりを越えて、ベランダの床の縁の向こうへ落ちる。
 # 影のアルファ（30fps・1/120 秒おきの3回平均のブレ・手すりと床の holdout 込み）を build/cache/fall_sim/ から読む
 FALL_SIM = ROOT / "build" / "cache" / "fall_sim"
-HANDOFF_FADE = 3                                                       # 絵の女 → 物理の女へ、重ねて移すコマ数
+HANDOFF_FADE = 0                                                       # 絵の女との受け渡しはしない（最初のコマから人体メッシュの女）
 
 
 class SimFall:
-    """物理の落下の影。frame(i) は 1280×720 のアルファ 0..1（受け渡しのコマで、絵の女と大きさ・位置がそろうよう、最初の 0.6 秒だけ寄せる）"""
+    """人体メッシュの女の影（ループの頭の手を振る所から、手すりを越えて消えるまで）。frame(i) は 1280×720 のアルファ 0..1。
+    絵の女との受け渡しはしない（最初のコマから同じメッシュの女。_1 の影に輪郭を合わせてある）。
+    脚がいちばん高い所（apex_frame）で 2 コマ止める（320px でも脚の形が読めるように）"""
+    HOLD = 2
 
-    def __init__(self, fw):
-        from scipy.ndimage import gaussian_filter
+    def __init__(self, fw=None):
         meta_p = FALL_SIM / "meta.json"
         if not meta_p.exists():
             subprocess.run([sys.executable, str(ROOT / "tools" / "fall_sim_blender.py")], check=True)
         self.meta = json.loads(meta_p.read_text())
-        self.n = self.meta["frames"]
-        self.gone = self.meta["gone_frame"]                              # このコマで見えなくなる
+        self.apex = self.meta.get("apex_frame", 10 ** 6)
+        self.n = self.meta["frames"] + self.HOLD
+        self.gone = self.meta["gone_frame"] + (self.HOLD if self.meta["gone_frame"] > self.apex else 0)   # このコマで見えなくなる
         self.release = self.meta["release_frame"]
-        self.gf = gaussian_filter
         self.cache = {}
-        # 受け渡し：fall_sim_blender の fit で _1 の影に合わせた画面上の寄せ（足もと (340,458) を中心に 大きさ s・縦 sy・ずれ tx,ty）
-        self.fit = self.meta.get("fit", {})
-        print("受け渡しの合わせ", {k: self.fit.get(k) for k in ("s", "sy", "tx", "ty")})
+
+    def src(self, i):
+        """表示のコマ i → 書き出したコマ（脚の頂点で止めるぶんずらす）"""
+        return i if i <= self.apex else max(self.apex, i - self.HOLD)
 
     def _load(self, i):
         if i not in self.cache:
@@ -2809,21 +2823,9 @@ class SimFall:
         return self.cache[i]
 
     def frame(self, i):
-        from scipy.ndimage import affine_transform
         if i < 0 or i >= self.n:
             return None
-        a = self._load(i)
-        k = 1 - smoothstep(0, 0.6 * FPS, i)                              # 最初の 0.6 秒だけ、絵の女の大きさ・位置へ寄せる（以後はカメラの合わせのまま）
-        f = self.fit
-        if k > 0 and f:
-            sx = 1 + (f.get("s", 1) - 1) * k
-            sy = 1 + (f.get("s", 1) * f.get("sy", 1) - 1) * k
-            tx, ty = f.get("tx", 0) * k, f.get("ty", 0) * k
-            fx, fy = 340.0, 458.0
-            M = np.diag([1 / sy, 1 / sx])                                # 出力 (y, x) → 入力
-            off = np.array([fy - (fy + ty) / sy, fx - (fx + tx) / sx])
-            a = affine_transform(a, M, offset=off, order=1)
-        return self.gf(a, 0.45)                                          # 縁のやわらかさを絵の女（ぼかし 1.1 のマット）に近づける
+        return self._load(self.src(i))
 
 
 BALCONY_NC = ROOT / "assets" / "ep8_balcony_nocurtain.png"           # カーテンを外した同じ部屋（Blender のカーテンを重ねる背景）
@@ -2902,7 +2904,7 @@ def sim_layer(fw, sim, t, events, light):
     if not a.any():
         return None
     inner = fw.gf(a, 2.2)
-    wrap = np.clip(np.clip(a - inner, 0, 1) * 2.2, 0, 0.75)[..., None]
+    wrap = np.clip(np.clip(a - inner, 0, 1) * 1.6, 0, 0.5)[..., None]   # 縁に窓の光を少しだけ回す（暗い輪は出さない）
     col = fw.black * (1 - wrap) + light * wrap
     col = col + fw.rg.normal(0, fw.grain, a.shape)[..., None]
     a = np.where(a < 1 / 255, 0, a)
@@ -2979,7 +2981,7 @@ def finish_woman(fw, e, draft):
     return fw, e, outside, draft
 
 
-BALCONY_HANDOFF = 1.7                                                   # ベランダのループで、絵の女（手を振る）から物理の女へ移る時刻（秒）
+BALCONY_HANDOFF = 0.0                                                   # 物理の女の書き出しは、ループの頭（手を振る所）から始まる
 
 
 def balcony_loop():
@@ -3000,16 +3002,44 @@ def balcony_loop():
     gone = BALCONY_HANDOFF + sim.gone / FPS
     print("ベランダ：消える時刻", round(gone, 2), "秒（", int(round(gone * fps)), "コマ目）")
     mos = BalconyMosaic(e, outside)
-    depth = plate_depth(BALCONY_NC)
-    push0, push1, fade0 = gone + 0.5, 8.6, 8.6
+    push0 = gone + 0.5
+    sill = 446                                                          # 部屋の床と窓の敷居の境（この行より下が、窓を映す部屋の床）
 
-    def comp(base, tt, i, t_w):
-        """背景 → 女とカーテンの前後：絵の女（受け渡しまで）は窓より手前なのでカーテンの上、物理の女はカーテンの holdout 込みなので下"""
-        w = sim_layer(fw, sim, t_w, ev, light)
-        c = curt.get(i)
-        if t_w < BALCONY_HANDOFF:
-            return over(over(base, c), w)
-        return over(over(base, w), c)
+    def reflection(a):
+        """床の照りに映る女（足もとの行を軸に上下を返し、下へ行くほど薄く。明るさを 35% 落とす）"""
+        rows = np.where(a.max(1) > 0.5)[0]
+        if len(rows) == 0:
+            return None
+        yf = int(rows.max())
+        if yf < sill - 2:                                               # 敷居を越えてベランダへ出たら、部屋の床には映らない
+            return None
+        h = yf - int(rows.min())
+        r = np.zeros_like(a)
+        n = min(720 - yf - 1, h)
+        r[yf + 1:yf + 1 + n] = a[yf - 1:yf - 1 - n:-1] if yf - 1 - n >= 0 else a[yf - 1::-1][:n]
+        fall = np.exp(-np.maximum(np.arange(720) - yf, 0) / (0.45 * max(h, 1)))[:, None]
+        r = gaussian_filter(r * fall, (2.5, 1.2)) * 0.35
+        r[:sill] = 0
+        return r
+
+    def comp(base, i):
+        w = sim_layer(fw, sim, i / FPS, ev, light)
+        if w is not None:
+            r = reflection(w[1])
+            if r is not None:
+                base = base * (1 - r[..., None])
+        return over(over(base, w), curt.get(i))                         # 女の影はカーテンの holdout 込み（カーテンが手前の所は隠れている）
+
+    def zoom(img, k):
+        """窓へ寄る（ゆがめずに、原寸の絵から切り出して拡大する。ブロックのゆがみを出さない）"""
+        if k <= 1e-3:
+            return img
+        z = 1 + 0.22 * k
+        cx, cy = 330, 300 + 70 * k
+        w, h = 1280 / z, 720 / z
+        x0, y0 = np.clip(cx - w / 2, 0, 1280 - w), np.clip(cy - h / 2, 0, 720 - h)
+        im = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
+        return np.asarray(im.transform((1280, 720), Image.EXTENT, (x0, y0, x0 + w, y0 + h), Image.BICUBIC), np.float32)
 
     frames = []
     for i in range(n_fr):
@@ -3018,19 +3048,16 @@ def balcony_loop():
             mos.step()
         mr, ma = mos.cur
         base = over(e.astype(np.float32), (mr, ma))
-        img = comp(base, tt, i, tt)
-        if tt >= push0:
-            k = smoothstep(push0, push1 + 0.6, tt)
-            img = parallax_frame(img, depth, k, push=0.22, drift=(0.0, 0.0), near_gain=0.8,
-                                 center=(330, 300 + 70 * k))
-            if tt >= fade0:                                            # 溶けて引きの画（立っている女）へ戻る＝ループの継ぎ目
-                q = smoothstep(fade0, L, tt)
-                wide = comp(base, tt, i, 0.0)
-                img = img * (1 - q) + wide * q
+        img = comp(base, i)
+        # 消えたあと窓へ寄り、終わりまでに元の構図へ戻る。最後の 1 コマは暗転（次の周の女が、手を振る最初の姿で現れる）
+        k = smoothstep(push0, push0 + 1.8, tt) * (1 - smoothstep(L - 1.5, L - 1 / fps, tt))
+        img = zoom(img, k)
+        if i == n_fr - 1:
+            img = np.zeros_like(img) + np.array(BLACK, np.float32)
         frames.append(Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA"))
     sfx = "_draft" if draft else ""
     small = [f.resize((960, 540), Image.LANCZOS) for f in frames]          # 全面が動くので 960×540 で書き出して 5MB に収める
-    save_webp_anim(small, OUT / "ep8" / f"86_balcony_loop{sfx}.webp", lossless=False, quality=55, loop=0)
+    save_webp_anim(small, OUT / "ep8" / f"86_balcony_loop{sfx}.webp", lossless=False, quality=72, loop=0)
     Image.fromarray(e).save(OUT / "ep8" / f"86_balcony_bg{sfx}.jpg", quality=88)
     return frames, OUT / "ep8" / f"86_balcony_bg{sfx}.jpg"
 
@@ -3038,7 +3065,8 @@ def balcony_loop():
 def balcony_gone():
     """ベランダのループで女が見えなくなる時刻（秒）。物理のシミュレーションの結果から"""
     meta = json.loads((FALL_SIM / "meta.json").read_text())
-    return BALCONY_HANDOFF + meta["gone_frame"] / FPS
+    g = meta["gone_frame"] + (SimFall.HOLD if meta["gone_frame"] > meta.get("apex_frame", 10 ** 6) else 0)
+    return BALCONY_HANDOFF + g / FPS
 
 
 
@@ -3230,28 +3258,28 @@ def endb_fall():
     pre, post = int(0.4 * FPS), int(0.6 * FPS)
     gw = x1 - x0
     frames = [Image.new("RGBA", (1280, 720), (0, 0, 0, 0))] * pre
-    # 物理の体の形（ブレ込み）はそのまま使い、窓の中を通る速さだけ、約 6m 落ちたあとの速さ（約 11m/s）に合わせる：
-    # ガラスの高さ 262px をおよそ 1.6m とみて、体が上から入って下へ抜けるまで約 0.2 秒
-    sprites = []
+    # 2つ下の階から見た物理の落下（窓の高さ ≒ 3.2m、体は約 9 コマで通る。髪とワンピースの裾は空気で上へなびく）をそのまま窓に写す
     for i in idx:
-        a = np.asarray(Image.open(FALL_SIM / "endb" / f"{i:04d}.png"), np.float32)
-        ys, xs = np.where(a > 8)
-        if len(ys) == 0 or ys.min() == 0 or ys.max() >= a.shape[0] - 1:
-            continue                                                    # 体が切れていないコマだけ
-        sprites.append(Image.fromarray(a[ys.min():ys.max() + 1, xs.min():xs.max() + 1].astype(np.uint8)))
-    hpx = 262 / 1.6 * 1.53                                              # 身長 1.53m のガラス上の大きさ
-    n_f = 7
-    for k in range(n_f):
-        sp = sprites[min(len(sprites) - 1, k * len(sprites) // n_f)]
-        sc = hpx / max(sp.height, sp.width) * 1.1
-        sp = sp.resize((max(1, int(sp.width * sc)), max(1, int(sp.height * sc))), Image.LANCZOS)
-        y = int(-sp.height + (y1 + sp.height + 20) * (k + 0.5) / n_f)
-        lay = Image.new("L", (1280, 720), 0)
-        lay.paste(sp, (int(215 - sp.width / 2), y))
-        al = np.asarray(lay, np.float32) * glass
+        im = Image.open(FALL_SIM / "endb" / f"{i:04d}.png").crop((200, 0, 440, 400))   # 落ちる線のまわりを切り出して、窓いっぱいに拡大（体の幅 50px 前後）
+        im = im.resize((gw, int(im.height * gw / im.width)), Image.LANCZOS)
+        a = np.asarray(im, np.float32)
+        lay = np.zeros((720, 1280), np.float32)
+        top = y0 - 220
+        r0 = max(0, -top)
+        hh = min(a.shape[0] - r0, y1 + 6 - max(top, 0))
+        lay[max(top, 0):max(top, 0) + hh, x0:x1] = a[r0:r0 + hh]
+        al = lay * glass
+        if al.max() < 8:
+            continue
         col = np.zeros((720, 1280, 3), np.uint8)
         col[al > 0] = (22, 15, 11)                                      # 逆光の影（ほぼ黒）
         frames.append(clean_alpha(Image.fromarray(np.dstack([col, np.clip(al, 0, 255).astype(np.uint8)]), "RGBA")))
+    mid = frames[pre:]
+    if len(mid) > 10:                                                   # 窓を通る 10 コマ（約 0.33 秒）だけ。いちばん濃く写るコマを真ん中に
+        k = int(np.argmax([np.asarray(f)[..., 3].sum() for f in mid]))
+        k0 = int(np.clip(k - 5, 0, len(mid) - 10))
+        frames = frames[:pre] + mid[k0:k0 + 10]
+    print("エンドB：窓を通るコマ数", len(frames) - pre)
     frames += [Image.new("RGBA", (1280, 720), (0, 0, 0, 0))] * post
     sfx = "_draft" if draft else ""
     path = OUT / "ep9" / f"89_endb_fall{sfx}.webp"
