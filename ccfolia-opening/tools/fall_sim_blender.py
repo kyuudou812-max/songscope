@@ -299,8 +299,8 @@ def kinematic(t, P=None):
                                        "farm_r": rx(-10), "farm_l": rx(-10)}
         arms = blend_pose(wave, down, sstep(*T_ARM, t))
         if t > T_SIT - 0.1:                                                # 倒れはじめ：腕は前（部屋の側）へ伸びる
-            reach = {"uarm_r": aim((0, 0, -1), (-0.40, -0.85, -0.35)), "uarm_l": aim((0, 0, -1), (0.40, -0.85, -0.35)),   # つかもうとして部屋の側へ伸ばす（反った体に対して前下へ＝部屋の側へ水平に近く）
-                     "farm_r": rx(-15), "farm_l": rx(-15)}
+            reach = {"uarm_r": aim((0, 0, -1), (-0.35, -0.70, -0.62)), "uarm_l": aim((0, 0, -1), (0.35, -0.70, -0.62)),   # つかもうとして：肩の高さで部屋の側（手前）へ、肘を曲げる
+                     "farm_r": rx(-55), "farm_l": rx(-55)}
             arms = blend_pose(arms, reach, sstep(T_SIT - 0.1, T_REL, t))
     t = t_
     pose = dict(arms)
@@ -394,7 +394,7 @@ def build_set(kind):
     mats = {}
     for name, ob in parts.items():
         if kind == "holdout":
-            key = "hold"                                                     # すりガラスの板も全部隠す（ガラスの内側に点を出さない）
+            key = "panel" if name == "panel" else "hold"                     # すりガラスの板の向こうは 35% だけ透けて見える
         else:
             key = "debug_" + ("panel" if name == "panel" else "slab" if name == "slab" else "rail")
         if key not in mats:
@@ -417,7 +417,7 @@ def make_mat(key):
         h = nt.nodes.new("ShaderNodeHoldout")
         tr = nt.nodes.new("ShaderNodeBsdfTransparent")
         mx = nt.nodes.new("ShaderNodeMixShader")
-        mx.inputs[0].default_value = 0.55
+        mx.inputs[0].default_value = 0.65
         nt.links.new(tr.outputs[0], mx.inputs[1])
         nt.links.new(h.outputs[0], mx.inputs[2])
         nt.links.new(mx.outputs[0], out.inputs[0])
@@ -1088,7 +1088,7 @@ def render_views(poses):
     h0 = int(round(LOOP_HANDOFF * FPS))
     # 女の影（レースの向こうでは半分ほど隠れる）
     sc.camera = cam_main
-    set_mat(curt, m_lacehold)
+    curt.hide_render = True                                                 # 女の影にはカーテンを入れない（カーテンは上から重ねるので、レースの透けはそこで出る）
     sc.render.use_border = True
     sc.render.use_crop_to_border = False
     sc.render.border_min_x, sc.render.border_max_x = 20 / W, 700 / W
@@ -1138,6 +1138,7 @@ def render_views(poses):
     catcher.rotation_euler = (0, 0, np.arctan2(WIN_D[1], WIN_D[0]))
     catcher.is_shadow_catcher = True
     sun.rotation_euler = Vector((0, 0, -1)).rotation_difference(Vector((*(WIN_IN * 0.45), -0.9))).to_euler()
+    curt.hide_render = False
     set_mat(curt, m_lace)
     set_mat(body["body"], m_hold)
     set_mat(body["hair"], m_hold)
@@ -1309,7 +1310,6 @@ def finalize_main(meta):
     for i in range(n):
         p = OUTD / "main" / f"{i:04d}.png"
         a = np.clip(np.asarray(Image.open(p), np.float32) - base, 0, 255)
-        a = np.clip((a - 0.28 * 255) / 0.72, 0, 255)                     # レースの部分 holdout が全体に残すかすかなアルファ（約 0.27）を除く
         a[a < 2] = 0
         Image.fromarray(a.astype(np.uint8)).save(p)
         cover.append(float(a.sum() / 255))

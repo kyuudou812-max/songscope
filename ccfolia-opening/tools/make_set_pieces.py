@@ -3253,9 +3253,12 @@ def endb_fall():
     from scipy.ndimage import gaussian_filter, uniform_filter1d
     rest = np.asarray(Image.open(SCENES / "ep6_01_restaurant.jpg").convert("L").resize((1280, 720)), np.float32)
     x0, y0, x1, y1 = ENDB_GLASS
+    from scipy.ndimage import binary_opening
     win = np.zeros((720, 1280), np.float32)
-    win[y0:y1, x0:x1] = 1
-    win = gaussian_filter(win, 3)                                        # 窓の中（女は斑点で切らない）
+    win[y0:min(y1, 262), x0:x1] = 1                                      # 窓の下枠（y≈263）より下（植え込み）には出さない
+    dark = rest < 95
+    frame_m = binary_opening(dark, structure=np.ones((70, 1), bool)) | binary_opening(dark, structure=np.ones((1, 90), bool))   # 窓の縦枠・横枠（長い暗い線）
+    win = gaussian_filter(win * (1 - frame_m), 1.0)                     # 女は窓枠の後ろを通る（斑点では切らない）
     tree = np.zeros((720, 1280), np.float32)
     tree[y0:y1, x0:x1] = 1 - smoothstep(115, 150, rest[y0:y1, x0:x1])   # 窓に映る木の影・窓枠：女の手前に 25% で薄く重ねる
     pre, post = int(0.4 * FPS), int(0.6 * FPS)
