@@ -3250,36 +3250,43 @@ def endb_fall():
         subprocess.run([sys.executable, str(ROOT / "tools" / "fall_sim_blender.py")], check=True)
     meta = json.loads(meta_p.read_text())
     idx = meta["endb_frames"]
+    from scipy.ndimage import gaussian_filter, uniform_filter1d
     rest = np.asarray(Image.open(SCENES / "ep6_01_restaurant.jpg").convert("L").resize((1280, 720)), np.float32)
     x0, y0, x1, y1 = ENDB_GLASS
-    glass = np.zeros((720, 1280), np.float32)
-    glass[y0:y1, x0:x1] = smoothstep(115, 150, rest[y0:y1, x0:x1])      # 明るいガラスだけ（窓枠・植木・人の頭は残す）
-    glass = np.asarray(Image.fromarray((glass * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.5)), np.float32) / 255
+    win = np.zeros((720, 1280), np.float32)
+    win[y0:y1, x0:x1] = 1
+    win = gaussian_filter(win, 3)                                        # 窓の中（女は斑点で切らない）
+    tree = np.zeros((720, 1280), np.float32)
+    tree[y0:y1, x0:x1] = 1 - smoothstep(115, 150, rest[y0:y1, x0:x1])   # 窓に映る木の影・窓枠：女の手前に 25% で薄く重ねる
     pre, post = int(0.4 * FPS), int(0.6 * FPS)
-    gw = x1 - x0
     frames = [Image.new("RGBA", (1280, 720), (0, 0, 0, 0))] * pre
-    # 2つ下の階から見た物理の落下（窓の高さ ≒ 3.2m、体は約 9 コマで通る。髪とワンピースの裾は空気で上へなびく）をそのまま窓に写す
+    # 2つ下の階から見た物理の落下の形（逆さで、髪と裾が上へなびく）を、10 コマで窓の上から下へ通す。
+    # 5・6 コマ目は流しぼかしなしで形を見せ、ほかは縦だけ 25px の流しぼかし
+    sprites = []
     for i in idx:
-        im = Image.open(FALL_SIM / "endb" / f"{i:04d}.png").crop((200, 0, 440, 400))   # 落ちる線のまわりを切り出して、窓いっぱいに拡大（体の幅 50px 前後）
-        im = im.resize((gw, int(im.height * gw / im.width)), Image.LANCZOS)
+        a = np.asarray(Image.open(FALL_SIM / "endb" / f"{i:04d}.png"), np.float32)
+        ys, xs = np.where(a > 8)
+        if len(ys) and ys.min() > 0 and ys.max() < a.shape[0] - 1:
+            sprites.append(a[ys.min():ys.max() + 1, xs.min():xs.max() + 1])
+    n_f = 10
+    hpx = 175
+    for k in range(n_f):
+        sp = sprites[min(len(sprites) - 1, int(k * len(sprites) / n_f))]
+        sc_ = hpx / sp.shape[0]
+        im = Image.fromarray(sp.astype(np.uint8)).resize((max(1, int(sp.shape[1] * sc_)), hpx), Image.LANCZOS)
         a = np.asarray(im, np.float32)
-        lay = np.zeros((720, 1280), np.float32)
-        top = y0 - 220
-        r0 = max(0, -top)
-        hh = min(a.shape[0] - r0, y1 + 6 - max(top, 0))
-        lay[max(top, 0):max(top, 0) + hh, x0:x1] = a[r0:r0 + hh]
-        al = lay * glass
-        if al.max() < 8:
-            continue
+        if k not in (4, 5):
+            a = np.pad(a, ((14, 14), (0, 0)))
+            a = uniform_filter1d(a, 25, axis=0)
+        lay = np.zeros((720 + 400, 1280), np.float32)
+        yy = int(y0 - a.shape[0] + (y1 - y0 + a.shape[0]) * (k + 0.5) / n_f) + 200
+        xx = int((x0 + x1) / 2 - a.shape[1] / 2)
+        lay[yy:yy + a.shape[0], xx:xx + a.shape[1]] = a
+        al = lay[200:920] * win * (1 - 0.25 * tree)
         col = np.zeros((720, 1280, 3), np.uint8)
         col[al > 0] = (22, 15, 11)                                      # 逆光の影（ほぼ黒）
         frames.append(clean_alpha(Image.fromarray(np.dstack([col, np.clip(al, 0, 255).astype(np.uint8)]), "RGBA")))
-    mid = frames[pre:]
-    if len(mid) > 10:                                                   # 窓を通る 10 コマ（約 0.33 秒）だけ。いちばん濃く写るコマを真ん中に
-        k = int(np.argmax([np.asarray(f)[..., 3].sum() for f in mid]))
-        k0 = int(np.clip(k - 5, 0, len(mid) - 10))
-        frames = frames[:pre] + mid[k0:k0 + 10]
-    print("エンドB：窓を通るコマ数", len(frames) - pre)
+    print("エンドB：窓を通るコマ数", n_f)
     frames += [Image.new("RGBA", (1280, 720), (0, 0, 0, 0))] * post
     sfx = "_draft" if draft else ""
     path = OUT / "ep9" / f"89_endb_fall{sfx}.webp"
