@@ -579,7 +579,7 @@ def hair_roots():
     return np.array(pts), np.array(lens)
 
 
-def strand_sim(poses, roots, lens, seg_name, colliders, init_dir, n_pts, plane_from=None):
+def strand_sim(poses, roots, lens, seg_name, colliders, init_dir, n_pts, plane_from=None, cling=None):
     """ひも（髪の束・ワンピースの裾の筋）を、節をつないだベルレ積分で動かす：長さの拘束・曲げのこわさ・空気の抵抗・体との当たり。
     roots は seg_name の部品の立ち姿の座標。colliders(T) は [(中心, 半径)]。1/120 秒ごと。落ちる間は空気の抵抗で上へなびく。返すのは (コマ, 本, 節, 3)"""
     seg = lens / (n_pts - 1)
@@ -633,6 +633,8 @@ def strand_sim(poses, roots, lens, seg_name, colliders, init_dir, n_pts, plane_f
                 d = x[:, 1:] - c
                 L = np.linalg.norm(d, axis=-1, keepdims=True) + 1e-9
                 x[:, 1:] = np.where(L < r, c + d / L * r, x[:, 1:])
+            if wall and cling is not None:                             # 越えはじめたら、裾は脚に沿う（広がらない）
+                x[:, 1:] = cling(T, x[:, 1:])
             if wall:                                                    # 手すりを越えはじめたら、笠木より下の部屋の側（ガラスの手前）へは垂れない：すりガラスの板の外側に沿う
                 od = (x - o0) @ N3
                 bad = (od < 0.03) & (x[..., 2] < RAIL_H + 0.02)
@@ -689,7 +691,22 @@ def skirt_sim(poses):
         d[:, 2] = 0
         d = d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-9)
         return d * 0.18 + np.array([0, 0, -1.0])
-    return strand_sim(poses, roots, lens, "pelvis", cols, init, SKIRT_P, REL_IDX if len(poses) > REL_IDX else None)
+    def cling(T, pts):
+        gs = np.linalg.norm(T["pelvis"][:3, 0])
+        best, bd = pts.copy(), np.full(pts.shape[:-1], 1e9)
+        for sd in "rl":
+            a = _pt(T, f"thigh_{sd}", _J[f"hip_{sd}"])
+            for b in (_pt(T, f"thigh_{sd}", _J[f"knee_{sd}"]), ):
+                ab = b - a
+                u = np.clip(((pts - a) @ ab) / (ab @ ab), 0, 1.15)
+                q = a + u[..., None] * ab
+                d = np.linalg.norm(pts - q, axis=-1)
+                r = 0.115 * gs
+                cand = np.where((d > r)[..., None], q + (pts - q) / (d[..., None] + 1e-9) * r, pts)
+                best = np.where((d < bd)[..., None], cand, best)
+                bd = np.minimum(d, bd)
+        return best
+    return strand_sim(poses, roots, lens, "pelvis", cols, init, SKIRT_P, REL_IDX if len(poses) > REL_IDX else None, cling)
 
 
 def build_body(sc):
@@ -792,7 +809,7 @@ def pivot_fall():
     av = ank - piv
     ths = np.linspace(0, 2 * np.pi, 2000)
     th_apex = ths[int(np.argmax([(rot(t) @ av)[2] for t in ths]))]          # 脚が真上（頂点）になる角度
-    th_leg = th_apex + np.deg2rad(75)                                     # 頂点を越えて外へ倒れた所で、体ごと落ちる
+    th_leg = th_apex + np.deg2rad(50)                                     # 頂点を越えて外へ倒れた所で、体ごと落ちる
     out = []
     n = int(round((T_END - T_REL) * SIM_FPS)) + 2
     t_drop = None
@@ -804,7 +821,7 @@ def pivot_fall():
             if t_drop is None:
                 t_drop = t
             td = t - t_drop
-            drop = np.array([0, 0, -0.5 * 9.81 * td * td - 1.5 * td]) + N3 * 1.2 * td
+            drop = np.array([0, 0, -0.5 * 9.81 * td * td - 3.5 * td]) + N3 * 1.2 * td   # 振り下ろした脚の勢いのまま、加速して落ちる
         T = {}
         for nm in ORDER:
             R = rot(min(th, th_up if nm in upper else th_leg))

@@ -2835,12 +2835,17 @@ class SimFall:
             yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
             line = 297 + 0.0733 * (xx - 130)                             # 手すりの笠木の上端の線（背景で測った）
             self._below = np.clip((yy - (line + 7)) / 2, 0, 1)          # 笠木より下＝すりガラスの板
-            self._above = np.clip(((line + 8) - yy) / 2, 0, 1)          # 笠木とその上
+            self._above = np.clip(((line + 10) - yy) / 2, 0, 1)         # 笠木とその上（細い線が残らないよう 2px 広め）
+            self._near = np.clip((yy - (line - 10)) / 2, 0, 1)          # 笠木のすぐ上 10px
             self._rail = True
         a = np.clip(a * (1 + (self.GLASS - 1) * self._below), 0, 1)
-        k = i - self.apex
-        if k >= 3:                                                       # 脚が越えきったあとに笠木の上へ残るのは、めくれた裾のとげだけ
-            a = a * (1 - self._above * (0.5 if k == 3 else 1.0))
+        # 脚が笠木の向こうへ回りきったあと、笠木の上に残るのは裾の端だけ：半透明にはせず、黒のまま 1 コマで笠木の陰へ（線より 10px 上まで）縮め、次のコマで消す
+        if not hasattr(self, "_f1"):                                     # 笠木より 10px 以上うえに、もう体が出ていない最初のコマ
+            far = self._above * (1 - self._near)
+            self._f1 = next((j for j in range(self.apex + 1, self.meta["frames"]) if (self._load(j) * far).sum() < 30), 10 ** 6)
+        if i >= self._f1:
+            keep = self._near if i == self._f1 else 0.0
+            a = a * (1 - self._above * (1 - keep))
         return a
 
 
@@ -3274,6 +3279,7 @@ def endb_fall():
     win[y0:min(y1, 262), x0:x1] = 1                                      # 窓の下枠（y≈263）より下（植え込み）には出さない
     dark = rest < 95
     frame_m = binary_opening(dark, structure=np.ones((70, 1), bool)) | binary_opening(dark, structure=np.ones((1, 90), bool))   # 窓の縦枠・横枠（長い暗い線）
+    win[0:67, 238:342] = 0                                               # 窓の上のロールスクリーンの後ろも通る
     win = gaussian_filter(win * (1 - frame_m), 1.0)                     # 女は窓枠の後ろを通る（斑点では切らない）
     tree = np.zeros((720, 1280), np.float32)
     tree[y0:y1, x0:x1] = 1 - smoothstep(115, 150, rest[y0:y1, x0:x1])   # 窓に映る木の影・窓枠：女の手前に 25% で薄く重ねる
@@ -3286,7 +3292,7 @@ def endb_fall():
     import fall_sim_blender as FS
     pose = dict(FS.arms_up_pose())
     pose.update({"thigh_r": FS.rx(-28), "shin_r": FS.rx(45), "thigh_l": FS.rx(8), "shin_l": FS.rx(18), "chest": FS.rx(-8), "head": FS.rx(-10)})
-    Tw = FS.fk(np.array([0.0, 3.2, FS.CAM_H]), FS.ry(163), pose, 1.0)
+    Tw = FS.fk(np.array([0.0, 3.2, FS.CAM_H]), FS.ry(172), pose, 1.0)
     up = np.array([0.0, 0.0, 1.0])
     roots, lens = FS.hair_roots()
     hr = (np.c_[roots, np.ones(len(roots))] @ Tw["head"].T)[:, :3]
@@ -3299,7 +3305,7 @@ def endb_fall():
     pc = FS._pt(Tw, "pelvis", FS.SEG["pelvis"][2])
     rad = sp0 - pc
     rad /= np.linalg.norm(rad, axis=1, keepdims=True)
-    sd = up * 0.75 + rad * 0.75                                           # 裾は上へめくれて広がる
+    sd = up * 0.95 + rad * 0.28                                           # 裾は上へめくれて、脚の側へ寄る
     sp = np.stack([sp0 + sd * (sl[:, None] * k / (FS.SKIRT_P - 1)) for k in range(FS.SKIRT_P)], 1)
     mk = FS.raster(Tw, hp, None, sp)
     ys, xs = np.where(mk)
@@ -3312,9 +3318,10 @@ def endb_fall():
         sc_ = hpx / sp.shape[0]
         im = Image.fromarray(sp.astype(np.uint8)).resize((max(1, int(sp.shape[1] * sc_)), hpx), Image.LANCZOS)
         a = np.asarray(im, np.float32)
-        if k not in (4, 5):
-            a = np.pad(a, ((14, 14), (0, 0)))
-            a = uniform_filter1d(a, 25, axis=0)
+        if k not in (4, 5):                                             # 縦だけの流しぼかし（5・6 コマ目の前後は短く、頭と髪の形を残す）
+            bl = 11 if k in (3, 6, 7) else 21
+            a = np.pad(a, ((bl // 2 + 2, bl // 2 + 2), (0, 0)))
+            a = uniform_filter1d(a, bl, axis=0)
         lay = np.zeros((720 + 400, 1280), np.float32)
         yy = int(y0 - a.shape[0] + (y1 - y0 + a.shape[0]) * (k + 0.5) / n_f) + 200
         xx = int(285 - a.shape[1] / 2)                                  # 縦枠のあいだの広いガラスの中を通す
