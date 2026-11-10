@@ -329,14 +329,15 @@ def nandomo():
     sim = SimFall(fw)
     light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
     t_rel = sim.meta["t_release"]
-    events = [(0.0, 0.0, 0, 0)]
+    # 女はいつも一人：前の回が消えたコマで、次の回が（もう手すりへ向かう途中から）始まる。回を追うごとに始まる所が後ろへずれ、1 回が短くなる
     pre = sim.meta.get("pre", 0.0)
-    ts, gap, off = 3.4, 1.5, pre + sim.meta["t_walk"][1] - 0.35
-    while ts < dur - 0.4:
+    gone_t = (sim.gone + 1) / FPS
+    events, ts = [], 0.0
+    for off in (0.0, pre + 1.2, pre + 1.6, pre + 1.9, pre + t_rel - 0.25, pre + t_rel - 0.12, pre + t_rel - 0.12, pre + t_rel - 0.12):
+        if ts >= dur - 0.2:
+            break
         events.append((ts, ts, off, 0))
-        ts += gap
-        gap = max(0.28, gap * 0.76)
-        off = min(pre + t_rel - 0.12, off + 0.14)
+        ts += gone_t - off + 2 / FPS
     print("落ちる回数", len(events))
     e, outside = nocurtain_bg()                                         # ベランダと同じ：カーテンのない部屋 ＋ Blender のカーテン
     light = gaussian_filter(e.astype(np.float32), (9, 9, 0))
@@ -353,7 +354,7 @@ def nandomo():
         if i % 2 == 0 or wcache is None:                                    # 絵（カーテン・女）は1秒15コマ（容量のため。落ちる所は縦のブレでつながる）
             if i % 6 == 0:
                 mos.step()
-            img = over(over(over(e.astype(np.float32), mos.cur), sim_layer(fw, sim, tt, events, light)), curt.get(i))
+            img = over(over(over(e.astype(np.float32), mos.cur), sim_layer(fw, sim, tt, events, light, single=True)), curt.get(i))
             wcache = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).convert("RGBA")
         fr = Image.alpha_composite(wcache, layer)                           # 明るい絵のまま（暗くしない）。暗くなるのは最後の真っ黒だけ
         if tt > dur - 0.5:
@@ -2889,13 +2890,16 @@ class CurtainLayer:
         return rgb, a
 
 
-def sim_layer(fw, sim, t, events, light):
+def sim_layer(fw, sim, t, events, light, single=False):
     """events: (立ち始め, 受け渡し, 物理の何秒目から, 横のずれ) の並び。
     物理の何秒目から＝0 なら：手を振る（絵の女）→ 手が止まる → 受け渡し（数コマ重ねる）→ 物理の影。
     0 より大きければ（「何度も」の後半）：立ち始めの時刻に、物理の途中（手すりの前に立っている所など）からいきなり始まる。
     返すのは全画面の (色, アルファ) か None。影の色は逆光の黒、縁には窓の光を回し、絵と同じ粒子を乗せる"""
     a = np.zeros((720, 1280), np.float32)
     bx0, by0, bx1, by1 = fw.box
+    if single:                                                          # 「何度も」：女はいつも一人。次の回が始まるコマで、前の回の層を切って 1 コマで入れ替える
+        started = [ev for ev in events if ev[0] <= t]
+        events = started[-1:]
     for ts, th, off, dx in events:
         if t < ts:
             continue
@@ -3290,24 +3294,34 @@ def endb_fall():
     # 女の影：ベランダと同じ人体メッシュ・髪・裾を、逆さ（頭が下、腕は頭より下へ伸び、髪は上へなびき、裾はめくれて広がる）の姿勢で 1 枚描く
     sys.path.insert(0, str(ROOT / "tools"))
     import fall_sim_blender as FS
-    pose = dict(FS.arms_up_pose())
-    pose.update({"thigh_r": FS.rx(-28), "shin_r": FS.rx(45), "thigh_l": FS.rx(8), "shin_l": FS.rx(18), "chest": FS.rx(-8), "head": FS.rx(-10)})
+    pose = {"uarm_r": FS.aim((0, 0, -1), (-0.60, 0.05, 0.80)), "uarm_l": FS.aim((0, 0, -1), (0.60, 0.05, 0.80)),   # 両腕は頭の左右へ開いて下（落ちる先）へ伸びる
+            "farm_r": FS.rx(-10), "farm_l": FS.rx(-10),
+            "thigh_r": FS.rx(-28), "shin_r": FS.rx(45), "thigh_l": FS.rx(8), "shin_l": FS.rx(18), "chest": FS.rx(-8), "head": FS.rx(0)}
     Tw = FS.fk(np.array([0.0, 3.2, FS.CAM_H]), FS.ry(172), pose, 1.0)
-    up = np.array([0.0, 0.0, 1.0])
-    roots, lens = FS.hair_roots()
-    hr = (np.c_[roots, np.ones(len(roots))] @ Tw["head"].T)[:, :3]
-    hc = FS._pt(Tw, "head", FS._J["head_c"])
-    rg = np.random.default_rng(89)
-    hd = up + (hr - hc) * 2.0 + rg.normal(0, 0.12, hr.shape)                # 髪は空気で上へなびく
-    hp = np.stack([hr + hd * (lens[:, None] * 1.25 * k / (FS.HAIR_P - 1)) for k in range(FS.HAIR_P)], 1)
-    sr, sl = FS.skirt_roots()
-    sp0 = (np.c_[sr, np.ones(len(sr))] @ Tw["pelvis"].T)[:, :3]
-    pc = FS._pt(Tw, "pelvis", FS.SEG["pelvis"][2])
-    rad = sp0 - pc
-    rad /= np.linalg.norm(rad, axis=1, keepdims=True)
-    sd = up * 0.95 + rad * 0.28                                           # 裾は上へめくれて、脚の側へ寄る
-    sp = np.stack([sp0 + sd * (sl[:, None] * k / (FS.SKIRT_P - 1)) for k in range(FS.SKIRT_P)], 1)
-    mk = FS.raster(Tw, hp, None, sp)
+    pj = lambda q: np.stack([FS.CX + FS.F_PX * q[..., 0] / q[..., 1], FS.HORIZON - FS.F_PX * (q[..., 2] - FS.CAM_H) / q[..., 1]], -1)
+    mk = Image.fromarray((FS.raster(Tw) * 255).astype(np.uint8))
+    dr = ImageDraw.Draw(mk)
+    # 頭：両腕のあいだに、肩幅の 4 割ほどの丸
+    hc = pj(FS._pt(Tw, "head", FS._J["head_c"]))
+    sh = np.linalg.norm(pj(FS._pt(Tw, "chest", FS._J["shoulder_r"])) - pj(FS._pt(Tw, "chest", FS._J["shoulder_l"])))
+    r_h = 0.2 * sh * 1.45
+    dr.ellipse([hc[0] - r_h, hc[1] - r_h * 1.15, hc[0] + r_h, hc[1] + r_h * 1.15], fill=255)
+    # 髪：頭から上（胴の側）へ、短い房を 3 本なびかせる
+    nk = pj(FS._pt(Tw, "chest", FS._J["neck"]))
+    ax = (nk - hc) / np.linalg.norm(nk - hc)
+    px = np.array([-ax[1], ax[0]])
+    for k_, (side, ln) in enumerate(((-1.0, 2.6), (1.0, 2.9), (-0.25, 3.3))):
+        p0 = hc + px * side * r_h * 0.85
+        pts = [tuple(p0 + ax * r_h * ln * u + px * side * r_h * (0.9 * u + 0.25 * np.sin(u * 3.0 + k_))) for u in np.linspace(0, 1, 9)]
+        dr.line(pts, fill=255, width=max(2, int(r_h * 0.55)), joint="curve")
+    # ワンピース：腰から脚の付け根の先へ向かって広がる台形（縁はまっすぐ）
+    pc3 = FS._pt(Tw, "pelvis", FS.SEG["pelvis"][2])
+    down = Tw["pelvis"][:3, :3] @ np.array([0, 0, -1.0])               # 体の軸の、脚の向き（逆さなので画面では上）
+    side3 = Tw["pelvis"][:3, :3] @ np.array([1.0, 0, 0])
+    top3 = pc3 - down * 0.14
+    quad = [top3 - side3 * 0.135, top3 + side3 * 0.135, top3 + down * 0.44 + side3 * 0.215, top3 + down * 0.44 - side3 * 0.215]
+    dr.polygon([tuple(pj(q)) for q in quad], fill=255)
+    mk = np.asarray(mk) > 127
     ys, xs = np.where(mk)
     woman = (mk[ys.min():ys.max() + 1, xs.min():xs.max() + 1] * 255).astype(np.float32)
     sprites = [woman]
