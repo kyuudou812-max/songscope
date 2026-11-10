@@ -2799,8 +2799,11 @@ HANDOFF_FADE = 0                                                       # 絵の�
 class SimFall:
     """人体メッシュの女の影（ループの頭の手を振る所から、手すりを越えて消えるまで）。frame(i) は 1280×720 のアルファ 0..1。
     絵の女との受け渡しはしない（最初のコマから同じメッシュの女。_1 の影に輪郭を合わせてある）。
-    脚がいちばん高い所（apex_frame）で 2 コマ止める（320px でも脚の形が読めるように）"""
-    HOLD = 2
+    頂点では止めない（越えたら加速して落ちる）。合成側の型：
+      ・すりガラスの板の向こう（笠木の線より下）は濃さを 50% に上げ、笠木の上の体と一本につながって落ちて見えるようにする
+      ・脚が笠木を越えきったあと（頂点の 3〜4 コマ後から）は、笠木の線より上に残る裾のとげを落とす"""
+    HOLD = 0
+    GLASS = 0.50 / 0.35                                                  # 書き出しはガラス越し 35%。合成で 50% に
 
     def __init__(self, fw=None):
         meta_p = FALL_SIM / "meta.json"
@@ -2825,7 +2828,20 @@ class SimFall:
     def frame(self, i):
         if i < 0 or i >= self.n:
             return None
-        return self._load(self.src(i))
+        a = self._load(self.src(i))
+        if i < self.release:
+            return a
+        if not hasattr(self, "_rail"):
+            yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
+            line = 297 + 0.0733 * (xx - 130)                             # 手すりの笠木の上端の線（背景で測った）
+            self._below = np.clip((yy - (line + 7)) / 2, 0, 1)          # 笠木より下＝すりガラスの板
+            self._above = np.clip(((line + 8) - yy) / 2, 0, 1)          # 笠木とその上
+            self._rail = True
+        a = np.clip(a * (1 + (self.GLASS - 1) * self._below), 0, 1)
+        k = i - self.apex
+        if k >= 3:                                                       # 脚が越えきったあとに笠木の上へ残るのは、めくれた裾のとげだけ
+            a = a * (1 - self._above * (0.5 if k == 3 else 1.0))
+        return a
 
 
 BALCONY_NC = ROOT / "assets" / "ep8_balcony_nocurtain.png"           # カーテンを外した同じ部屋（Blender のカーテンを重ねる背景）
@@ -3265,12 +3281,30 @@ def endb_fall():
     frames = [Image.new("RGBA", (1280, 720), (0, 0, 0, 0))] * pre
     # 2つ下の階から見た物理の落下の形（逆さで、髪と裾が上へなびく）を、10 コマで窓の上から下へ通す。
     # 5・6 コマ目は流しぼかしなしで形を見せ、ほかは縦だけ 25px の流しぼかし
-    sprites = []
-    for i in idx:
-        a = np.asarray(Image.open(FALL_SIM / "endb" / f"{i:04d}.png"), np.float32)
-        ys, xs = np.where(a > 8)
-        if len(ys) and ys.min() > 0 and ys.max() < a.shape[0] - 1:
-            sprites.append(a[ys.min():ys.max() + 1, xs.min():xs.max() + 1])
+    # 女の影：ベランダと同じ人体メッシュ・髪・裾を、逆さ（頭が下、腕は頭より下へ伸び、髪は上へなびき、裾はめくれて広がる）の姿勢で 1 枚描く
+    sys.path.insert(0, str(ROOT / "tools"))
+    import fall_sim_blender as FS
+    pose = dict(FS.arms_up_pose())
+    pose.update({"thigh_r": FS.rx(-28), "shin_r": FS.rx(45), "thigh_l": FS.rx(8), "shin_l": FS.rx(18), "chest": FS.rx(-8), "head": FS.rx(-10)})
+    Tw = FS.fk(np.array([0.0, 3.2, FS.CAM_H]), FS.ry(163), pose, 1.0)
+    up = np.array([0.0, 0.0, 1.0])
+    roots, lens = FS.hair_roots()
+    hr = (np.c_[roots, np.ones(len(roots))] @ Tw["head"].T)[:, :3]
+    hc = FS._pt(Tw, "head", FS._J["head_c"])
+    rg = np.random.default_rng(89)
+    hd = up + (hr - hc) * 2.0 + rg.normal(0, 0.12, hr.shape)                # 髪は空気で上へなびく
+    hp = np.stack([hr + hd * (lens[:, None] * 1.25 * k / (FS.HAIR_P - 1)) for k in range(FS.HAIR_P)], 1)
+    sr, sl = FS.skirt_roots()
+    sp0 = (np.c_[sr, np.ones(len(sr))] @ Tw["pelvis"].T)[:, :3]
+    pc = FS._pt(Tw, "pelvis", FS.SEG["pelvis"][2])
+    rad = sp0 - pc
+    rad /= np.linalg.norm(rad, axis=1, keepdims=True)
+    sd = up * 0.75 + rad * 0.75                                           # 裾は上へめくれて広がる
+    sp = np.stack([sp0 + sd * (sl[:, None] * k / (FS.SKIRT_P - 1)) for k in range(FS.SKIRT_P)], 1)
+    mk = FS.raster(Tw, hp, None, sp)
+    ys, xs = np.where(mk)
+    woman = (mk[ys.min():ys.max() + 1, xs.min():xs.max() + 1] * 255).astype(np.float32)
+    sprites = [woman]
     n_f = 10
     hpx = 175
     for k in range(n_f):
@@ -3283,7 +3317,7 @@ def endb_fall():
             a = uniform_filter1d(a, 25, axis=0)
         lay = np.zeros((720 + 400, 1280), np.float32)
         yy = int(y0 - a.shape[0] + (y1 - y0 + a.shape[0]) * (k + 0.5) / n_f) + 200
-        xx = int((x0 + x1) / 2 - a.shape[1] / 2)
+        xx = int(285 - a.shape[1] / 2)                                  # 縦枠のあいだの広いガラスの中を通す
         lay[yy:yy + a.shape[0], xx:xx + a.shape[1]] = a
         al = lay[200:920] * win * (1 - 0.25 * tree)
         col = np.zeros((720, 1280, 3), np.uint8)
