@@ -333,7 +333,8 @@ def nandomo():
     pre = sim.meta.get("pre", 0.0)
     gone_t = (sim.gone + 1) / FPS
     events, ts = [], 0.0
-    for off in (0.0, pre + 1.2, pre + 1.6, pre + 1.9, pre + t_rel - 0.25, pre + t_rel - 0.12, pre + t_rel - 0.12, pre + t_rel - 0.12):
+    # まったく同じ静かな動きを繰り返す（回ごとの差はつけない）。詰めるのは、倒れる前の間（手を振る・静止）だけ
+    for off in (1.4, t_rel - 0.8, t_rel - 0.3, t_rel - 0.1, t_rel - 0.1, t_rel - 0.1):
         if ts >= dur - 0.2:
             break
         events.append((ts, ts, off, 0))
