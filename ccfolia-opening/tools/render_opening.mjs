@@ -1,0 +1,58 @@
+// opening/index.html を Chromium で開き、1コマずつ PNG に書き出す。
+//
+// 使い方:
+//   node tools/render_opening.mjs --ep 1 --layer all            → build/frames_all_ep1/
+//   node tools/render_opening.mjs --ep 1 --layer title --from 8 --to 15
+//   node tools/render_opening.mjs --ep 1 --layout build/bgcand/layout1.json --out cand1   （背景の候補を試す）
+// layer=all 以外は透明背景で書き出す（ココフォリア用の層）。
+import { createRequire } from "node:module";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+let playwright;
+try { playwright = require("playwright"); } catch { playwright = require("/opt/node22/lib/node_modules/playwright"); }
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const args = Object.fromEntries(process.argv.slice(2).reduce((acc, v, i, a) =>
+  v.startsWith("--") ? [...acc, [v.slice(2), a[i + 1]]] : acc, []));
+const ep = args.ep ?? "1";
+const layer = args.layer ?? "all";
+const from = Number(args.from ?? 0);
+const timing = JSON.parse(readFileSync(join(ROOT, "opening", "timing.json"), "utf8"));
+const fps = Number(args.fps ?? timing.fps);
+const layout = JSON.parse(readFileSync(join(ROOT, args.layout ?? join("opening", "layout.json")), "utf8"));
+const out = join(ROOT, "build", args.out ?? `frames_${layer}_ep${ep}`);
+
+// 全部入りのプレビューは、その話の背景（ドアの開き具合を焼き込んだもの）があればそれを使う
+const epBg = join(ROOT, "build", "ccfolia", `ep${ep}`, `01_bg_corridor_ep${ep}.jpg`);
+if (layer === "all" && existsSync(epBg)) layout.bg = `../build/ccfolia/ep${ep}/01_bg_corridor_ep${ep}.jpg`;
+const episodes = JSON.parse(readFileSync(join(ROOT, "episodes.local.json"), "utf8"));
+const escalation = JSON.parse(readFileSync(join(ROOT, "opening", "escalation.json"), "utf8")).episodes[ep];
+const flicker = JSON.parse(readFileSync(join(ROOT, "opening", "flicker.json"), "utf8")).episodes[ep].frames;
+// 長さ：辞書カードを打ち終わってから2秒は止めて見せる（最短は timing.duration）
+const e0 = episodes[ep];
+const cardChars = [e0.no, `■ ${e0.word}（${e0.kana}）`, e0.pos, e0.def].reduce((n, s) => n + [...s].length, 0);
+const duration = Math.max(timing.duration, Math.ceil((timing.card + cardChars * timing.typeStep + 2.0) * fps) / fps);
+const to = Number(args.to ?? duration);
+rmSync(out, { recursive: true, force: true });
+mkdirSync(out, { recursive: true });
+
+const browser = await playwright.chromium.launch({ args: ["--allow-file-access-from-files"] });
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
+await page.goto(pathToFileURL(join(ROOT, "opening", "index.html")).href + `?layer=${layer}`);
+await page.evaluate(async ([e, tm, lo, es, fl]) => { await document.fonts.ready; window.setTiming(tm); window.setEscalation(es); window.setFlicker(fl);
+                                                  window.setLayout(lo); window.setEpisode(e); },
+                    [episodes[ep], timing, layout, escalation, flicker]);
+await page.waitForLoadState("networkidle");
+await page.evaluate(() => document.querySelector("#bg").decode());
+
+const first = Math.round(from * fps), last = Math.round(to * fps);
+for (let f = first; f < last; f++) {
+  await page.evaluate(([t, f]) => window.setTime(t, f), [f / fps, f]);
+  await page.screenshot({ path: join(out, `f${String(f - first).padStart(4, "0")}.png`),
+                          omitBackground: layer !== "all" });
+}
+await browser.close();
+console.log(`${last - first} frames (${duration.toFixed(3)}s) → ${out}`);

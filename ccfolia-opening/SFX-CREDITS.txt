@@ -1,0 +1,58 @@
+効果音の出典
+
+Kenney「Impact Sounds」「RPG Audio」「Casino Sounds」「Music Jingles」（CC0） https://kenney.nl
+
+AudioAugust（Johannes "Hanni" Schneider / Inexor, CC BY 4.0） https://github.com/inexorgame/audioaugust
+
+CC0 Public Domain Sounds（まとめ: lavenderdotpet。Ben Burnes の素材パックほか、CC0） https://github.com/lavenderdotpet/CC0-Public-Domain-Sounds
+
+レストランの録音: Alcappuccino（CC0） https://freesound.org/people/Alcappuccino/sounds/263528/ （SuperTuxKart の素材より）
+
+ESC-50（K. J. Piczak, CC BY-NC 3.0） https://github.com/karolpiczak/ESC-50 より、次の録音を加工して使用:
+- clip derived from sw_brushing_teeth.wav (http://www.freesound.org/people/jppi_Stu/sounds/17092/) by jppi_Stu [CC-BY]
+- clip derived from 20060524.fly.flac (http://www.freesound.org/people/dobroide/sounds/19501/) by dobroide [CC-BY]
+- clip derived from toettoet02_.wav (http://www.freesound.org/people/WIM/sounds/26177/) by WIM [CC-BY]
+- clip derived from rain.aif (http://www.freesound.org/people/palem/sounds/29561/) by palem [CC0]
+- clip derived from Wet Footsteps in Small Shower Cabin.wav (http://www.freesound.org/people/RutgerMuller/sounds/51147/) by RutgerMuller [CC0]
+- clip derived from water in cup.wav (http://www.freesound.org/people/timtube/sounds/61221/) by timtube [CC-BY-NC]
+- clip derived from brushing teeth with noise in background.wav (http://www.freesound.org/people/bwav/sounds/68628/) by bwav [CC0]
+- clip derived from water_pouring_ceramicbowl.wav (http://www.freesound.org/people/axiyee/sounds/79220/) by axiyee [CC-Sampling+]
+- clip derived from Knock on door.mp3 (http://www.freesound.org/people/payattention/sounds/81001/) by payattention [CC0]
+- clip derived from glass.wav (http://www.freesound.org/people/cmusounddesign/sounds/84536/) by cmusounddesign [CC-BY]
+- clip derived from Water_Drops.wav (http://www.freesound.org/people/kMoon/sounds/90797/) by kMoon [CC-BY]
+- clip derived from WoodSaw2.wav (http://www.freesound.org/people/Pingel/sounds/9887/) by Pingel [CC0]
+- clip derived from Water sea shore.mp3 (http://www.freesound.org/people/Slapbass/sounds/124662/) by Slapbass [CC-BY]
+- clip derived from beach sea ocean waves crush breakwater 2.wav (http://www.freesound.org/people/bulbastre/sounds/132157/) by bulbastre [CC-BY]
+- clip derived from WOOD_SAW_LONG_001.wav (http://www.freesound.org/people/JoelAudio/sounds/135860/) by JoelAudio [CC-BY]
+- clip derived from Angelus Bell.aif (http://www.freesound.org/people/Peaveycroquette/sounds/78381/) by Peaveycroquette [CC-BY]
+- clip derived from Silencyo_RAIN_NIGHT_Village_Drips_Courtyard.aif (http://www.freesound.org/people/silencyo/sounds/81731/) by silencyo [CC0]
+- clip derived from rain.wav (http://www.freesound.org/people/sagetyrtle/sounds/87781/) by sagetyrtle [CC0]
+- clip derived from Bumble bee long.wav (http://www.freesound.org/people/CGEffex/sounds/99955/) by CGEffex [CC-BY]
+- clip derived from Polite Clapping with no Yelling (http://www.freesound.org/people/dianadesim/sounds/130330/) by dianadesim [CC0]
+- clip derived from Wind With Rigging.flac (http://www.freesound.org/people/Benboncan/sounds/134699/) by Benboncan [CC-BY]
+- clip derived from P-47 Flyby (http://www.freesound.org/people/Fight2FlyPhoto/sounds/143560/) by Fight2FlyPhoto [CC-BY]
+- clip derived from hoover.mp3 (http://www.freesound.org/people/winsx87/sounds/152020/) by winsx87 [CC0]
+- clip derived from Water drop (http://www.freesound.org/people/Elfman-Rox/sounds/156907/) by Elfman-Rox [CC0]
+- clip derived from beach_short02.flac (http://www.freesound.org/people/Aiyumi/sounds/187710/) by Aiyumi [CC-BY]
+- clip derived from Pt. Lonsdale Wind #3 (http://www.freesound.org/people/kangaroovindaloo/sounds/246513/) by kangaroovindaloo [CC-BY]
+- clip derived from Fly LOOP-01.wav (http://www.freesound.org/people/toyoto/sounds/130891/) by toyoto [CC-BY]
+- clip derived from rain.MP3 (http://www.freesound.org/people/Mafon2/sounds/160999/) by Mafon2 [CC0]
+- clip derived from Heavy rain.wav (http://www.freesound.org/people/reelworldstudio/sounds/161127/) by reelworldstudio [CC0]
+- clip derived from Light rain (http://www.freesound.org/people/Zepp2010/sounds/163264/) by Zepp2010 [CC0]
+- clip derived from Wind, strong. through rocks 2.wav (http://www.freesound.org/people/Leandros.Ntounis/sounds/163608/) by Leandros.Ntounis [CC-BY]
+- clip derived from Wind, strong. through rocks 1.wav (http://www.freesound.org/people/Leandros.Ntounis/sounds/163609/) by Leandros.Ntounis [CC-BY]
+- clip derived from 110703_17 car horn.WAV (http://www.freesound.org/people/toiletrolltube/sounds/175845/) by toiletrolltube [CC0]
+- clip derived from Tick Tock Clock - Close Mic.wav (http://www.freesound.org/people/Toby_Crane/sounds/181035/) by Toby_Crane [CC-BY]
+- clip derived from engine_idle_loop.wav (http://www.freesound.org/people/ReadeOnly/sounds/186935/) by ReadeOnly [CC0]
+- clip derived from engine2_down.wav (http://www.freesound.org/people/ReadeOnly/sounds/186938/) by ReadeOnly [CC0]
+- clip derived from engine3_idle_loop.wav (http://www.freesound.org/people/ReadeOnly/sounds/186940/) by ReadeOnly [CC0]
+- clip derived from Sea tide Waves At Robin Hoods Bay 24/07/2013 (http://www.freesound.org/people/m.newlove/sounds/195497/) by m.newlove [CC-BY]
+- clip derived from Pouring_into_grass.mp3 (http://www.freesound.org/people/Taira%20Komori/sounds/212734/) by Taira Komori [CC-BY]
+- clip derived from Pouring beer into a glass (http://www.freesound.org/people/edhutschek/sounds/215634/) by edhutschek [CC0]
+- clip derived from Crickets_04.wav (http://www.freesound.org/people/RSilveira_88/sounds/216213/) by RSilveira_88 [CC-BY]
+- clip derived from the night Baltic001_14022014.wav (http://www.freesound.org/people/miastodzwiekow/sounds/219379/) by miastodzwiekow [CC-BY]
+- clip derived from Brushing Teeth (http://www.freesound.org/people/nebulousflynn/sounds/220939/) by nebulousflynn [CC-BY]
+- clip derived from Vacuum cleaner (http://www.freesound.org/people/MrAuralization/sounds/231551/) by MrAuralization [CC0]
+- clip derived from Footsteps - Wood (http://www.freesound.org/people/Fewes/sounds/234263/) by Fewes [CC-BY]
+- clip derived from Base weich.WAV (http://www.freesound.org/people/cpttatosa/sounds/261433/) by cpttatosa [CC0]
+- clip derived from Footsteps Wooden Stairs Squeaking 1.wav (http://www.freesound.org/people/RutgerMuller/sounds/51149/) by RutgerMuller [CC0]
